@@ -36,6 +36,34 @@ permissions:
   contents: read
 
 jobs:
+  unit:
+    name: unit (typecheck + build + tests)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci || npm install
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
   format-check:
     name: format-check (usage API shape)
     runs-on: ubuntu-latest
