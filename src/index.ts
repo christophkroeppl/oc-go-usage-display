@@ -128,9 +128,25 @@ function resolveCredentials(): Credentials {
   const fileConfig = readFileConfig();
   const workspaceId = toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
   const authCookie = toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
-  if (workspaceId && authCookie) return { kind: "cookie", workspaceId, authCookie };
+  if (workspaceId && authCookie) {
+    // Reject header-injection / cookie-jar confusion payloads. The cookie
+    // value is never logged; malformed values fall through to "none".
+    if (isMalformedAuthCookie(authCookie)) return { kind: "none" };
+    return { kind: "cookie", workspaceId, authCookie };
+  }
 
   return { kind: "none" };
+}
+
+function isMalformedAuthCookie(cookie: string): boolean {
+  return /[\r\n;,]/.test(cookie);
+}
+
+export function hasMalformedAuthCookie(): boolean {
+  const raw =
+    toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? readFileConfig().authCookie;
+  if (!raw) return false;
+  return isMalformedAuthCookie(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +156,7 @@ function resolveCredentials(): Credentials {
 let memoryCache: { at: number; snapshot: UsageSnapshot } | null = null;
 
 function isFresh(at: number, now: number): boolean {
-  return now - at < CACHE_TTL_MS;
+  return at <= now && now - at < CACHE_TTL_MS;
 }
 
 function readDiskCache(now: number): UsageSnapshot | null {
@@ -393,11 +409,10 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
 async function getUsageSnapshot(): Promise<UsageSnapshot> {
   const now = Date.now();
   // Mock bypasses cache for determinism: a stale disk/memory entry must
-  // never shadow the deterministic mock snapshot during tests.
+  // never shadow the deterministic mock snapshot during tests. The mock
+  // never reads or writes the cache.
   if (process.env.OPENCODE_GO_MOCK === "1") {
-    const snapshot = mockSnapshot();
-    memoryCache = { at: now, snapshot };
-    return snapshot;
+    return mockSnapshot();
   }
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
   const diskCached = readDiskCache(now);
@@ -408,11 +423,12 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
 
   const credentials = resolveCredentials();
   if (credentials.kind === "mock") {
-    const snapshot = mockSnapshot();
-    memoryCache = { at: now, snapshot };
-    return snapshot;
+    return mockSnapshot();
   }
   if (credentials.kind === "none") {
+    if (hasMalformedAuthCookie()) {
+      return unavailableSnapshot("not configured (malformed auth cookie)");
+    }
     return unavailableSnapshot("not configured (set OPENCODE_GO_API_KEY)");
   }
 
