@@ -96,7 +96,9 @@ export function formatCompactLine(snapshot: UsageSnapshot): string {
 // Credentials (boundary: env + optional JSON file; never logged)
 // ---------------------------------------------------------------------------
 
-function readFileConfig(): { workspaceId: string | null; authCookie: string | null } {
+type FileConfig = { workspaceId: string | null; authCookie: string | null };
+
+function readFileConfig(): FileConfig {
   let raw: string;
   try {
     raw = fs.readFileSync(FILE_CONFIG_PATH, "utf8");
@@ -116,7 +118,7 @@ function readFileConfig(): { workspaceId: string | null; authCookie: string | nu
   };
 }
 
-function resolveCredentials(): Credentials {
+function resolveCredentials(fileConfig: FileConfig = readFileConfig()): Credentials {
   if (process.env.OPENCODE_GO_MOCK === "1") return { kind: "mock" };
 
   const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY);
@@ -125,7 +127,6 @@ function resolveCredentials(): Credentials {
   const authJsonKey = readAuthJsonApiKey();
   if (authJsonKey) return { kind: "apiKey", apiKey: authJsonKey };
 
-  const fileConfig = readFileConfig();
   const workspaceId = toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
   const authCookie = toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
   if (workspaceId && authCookie) {
@@ -139,12 +140,14 @@ function resolveCredentials(): Credentials {
 }
 
 function isMalformedAuthCookie(cookie: string): boolean {
-  return /[\r\n;,]/.test(cookie);
+  // Reject CR/LF (header injection), separators that confuse cookie jars,
+  // plus tab, NUL, and double-quote (never valid in a cookie value).
+  return /[\r\n;,\t\0"]/.test(cookie);
 }
 
-export function hasMalformedAuthCookie(): boolean {
+export function hasMalformedAuthCookie(fileConfig: FileConfig = readFileConfig()): boolean {
   const raw =
-    toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? readFileConfig().authCookie;
+    toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
   if (!raw) return false;
   return isMalformedAuthCookie(raw);
 }
@@ -421,12 +424,18 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
     return diskCached;
   }
 
-  const credentials = resolveCredentials();
+  const fileConfig = readFileConfig();
+  const credentials = resolveCredentials(fileConfig);
   if (credentials.kind === "mock") {
     return mockSnapshot();
   }
   if (credentials.kind === "none") {
-    if (hasMalformedAuthCookie()) {
+    // A malformed-cookie reason is only meaningful when a workspaceId is
+    // present (the user actually attempted cookie auth); a fully
+    // unconfigured setup reports the generic reason.
+    const workspaceId =
+      toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
+    if (workspaceId && hasMalformedAuthCookie(fileConfig)) {
       return unavailableSnapshot("not configured (malformed auth cookie)");
     }
     return unavailableSnapshot("not configured (set OPENCODE_GO_API_KEY)");
