@@ -500,7 +500,9 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     });
   }
 
-  const unregisterToggleCommand = api.command.register(() => [
+  // `api.command` is a deprecated legacy shim that hosts may omit; guard so
+  // the plugin still initializes and disposes safely without it.
+  const unregisterToggleCommand = api.command?.register(() => [
     {
       title: "Go usage: toggle sidebar",
       value: "oc-go-usage-display.toggle-sidebar",
@@ -513,7 +515,7 @@ const goUsageTui: TuiPlugin = async (api, options) => {
       category: "Go",
       onSelect: () => toggleStatuslineCollapsed(),
     },
-  ]);
+  ]) ?? (() => {});
 
   const unsubscribeSession = api.event.on("session.updated", () => {
     void refreshUsage();
