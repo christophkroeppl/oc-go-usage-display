@@ -345,15 +345,28 @@ const goUsageTui: TuiPlugin = async (api, options) => {
             </text>
           }
         >
-          {(snapshot) => (
-            <For each={buildUsageRows(snapshot())}>
-              {(row) => (
+          {(snapshot) => {
+            const snap = snapshot();
+            // Rejected keys (and other unavailable snapshots) must surface a
+            // row instead of a bare header with zero rows. Statusline stays
+            // hidden for unavailable (isSnapshotEmpty -> null).
+            if (snap.source === "unavailable") {
+              return (
                 <text fg={props.theme.current.textMuted} wrapMode="none">
-                  {row.label} {row.value}
+                  Go n/a ({snap.apiError ?? "unavailable"})
                 </text>
-              )}
-            </For>
-          )}
+              );
+            }
+            return (
+              <For each={buildUsageRows(snap)}>
+                {(row) => (
+                  <text fg={props.theme.current.textMuted} wrapMode="none">
+                    {row.label} {row.value}
+                  </text>
+                )}
+              </For>
+            );
+          }}
         </Show>
       </box>
     );
