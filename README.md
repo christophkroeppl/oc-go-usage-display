@@ -99,6 +99,10 @@ Secrets are never touched: env vars, `auth.json`, and
 `oc-go-usage-display.json` stay in place — delete them by hand if desired.
 Restart opencode afterwards.
 
+Entries are managed as JSON; existing comments in
+`opencode.jsonc`/`tui.json` may be normalized to plain JSON on write.
+No-op removals skip the write so comments are preserved when nothing changes.
+
 Manual file list (global scope):
 
 - `~/.config/opencode/plugins/oc-go-usage-display.ts`
