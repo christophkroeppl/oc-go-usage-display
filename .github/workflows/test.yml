@@ -51,9 +51,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: |
-          set -euo pipefail
-          npm ci || npm install
+        run: npm ci
 
       - name: Typecheck
         run: npm run check

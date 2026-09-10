@@ -45,7 +45,7 @@ try {
   }
 
   if (serverLink.state === "symlink") {
-    if (path.resolve(configDir, "plugins", serverLink.detail) !== expectedServer) {
+    if (path.resolve(configDir, "plugins", serverLink.detail ?? "") !== expectedServer) {
       problems.push(`server symlink points at ${serverLink.detail}, expected ${expectedServer}`);
     }
   } else if (serverLink.state === "file") {
