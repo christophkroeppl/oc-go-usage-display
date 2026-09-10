@@ -36,6 +36,7 @@ import * as path from "node:path";
 import {
   CONFIG_DIR,
   extractSnapshotFromApiPayload,
+  extractWindow,
   formatResetDuration,
   isRecord,
   mockSnapshot,
@@ -161,6 +162,13 @@ function readDiskCache(now: number): UsageSnapshot | null {
   if (!isRecord(parsed.snapshot)) return null;
   const snapshot = parsed.snapshot;
   if (!("rolling" in snapshot && "weekly" in snapshot && "monthly" in snapshot)) return null;
+  // Validate cached windows instead of blindly trusting the shape; a corrupt
+  // entry is dropped so the next fetch repopulates the cache.
+  for (const key of ["rolling", "weekly", "monthly"] as const) {
+    const cachedWindow = snapshot[key];
+    if (cachedWindow === null) continue;
+    if (extractWindow(cachedWindow) === null) return null;
+  }
   return snapshot as UsageSnapshot;
 }
 
