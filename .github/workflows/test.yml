@@ -5,6 +5,8 @@
 # Secrets: OPENCODE_GO_API_KEY (repo secret, never logged).
 #   - When present: format-check hits the live usage endpoint and validates
 #     the JSON shape; tui-screenshot runs the best-effort headless check.
+#     A response with no usable windows (no Go subscription) exits neutral
+#     (notice + exit 0, not a failure).
 #   - When absent: steps skip with a neutral notice and exit 0 (do not fail).
 #
 # Startup-safety rule: the secrets context must NOT appear in any
@@ -82,10 +84,15 @@ jobs:
                 console.error('FAIL: usage payload has no object container (expected usage/data/go/root)');
                 process.exit(1);
               }
+              let usable = 0;
               for (const key of ['rolling', 'weekly', 'monthly']) {
                 const window = container[key];
-                if (typeof window !== 'object' || window === null || Array.isArray(window)) {
-                  console.error('FAIL: shape mismatch — missing window: ' + key);
+                // Absent windows (no subscription) are skipped here; when
+                // none of the three windows is usable the check exits neutral
+                // below instead of failing.
+                if (window === undefined || window === null) continue;
+                if (typeof window !== 'object' || Array.isArray(window)) {
+                  console.error('FAIL: shape mismatch — ' + key + ' is not an object');
                   process.exit(1);
                 }
                 const percent = window.percent
@@ -98,8 +105,13 @@ jobs:
                   console.error('FAIL: shape mismatch — ' + key + '.status is not a string');
                   process.exit(1);
                 }
+                usable += 1;
               }
-              console.log('PASS: usage shape OK (rolling/weekly/monthly with percent/status)');
+              if (usable === 0) {
+                console.log('::notice::usage API returned no usable windows (no Go subscription) — skipping shape check (neutral, not a failure).');
+                process.exit(0);
+              }
+              console.log('PASS: usage shape OK (' + usable + '/3 windows with percent/status)');
             });
           "
 

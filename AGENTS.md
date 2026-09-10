@@ -50,7 +50,7 @@ Release commit format:
 Two workflows:
 
 - `test.yml` (`test`): runs on `push` + `pull_request` + weekly schedule (Mondays 06:00 UTC).
-  - `format-check`: validates the live usage JSON shape (`rolling` / `weekly` / `monthly` with numeric `percent` + optional string `status`). Skips neutral (exit 0) when `OPENCODE_GO_API_KEY` is absent.
+  - `format-check`: validates the live usage JSON shape (`rolling` / `weekly` / `monthly` with numeric `percent` + optional string `status`). Skips neutral (exit 0) when `OPENCODE_GO_API_KEY` is absent or when the API returns no usable windows (no subscription); still fails on malformed JSON or a missing percent within a present window.
   - `tui-screenshot`: best-effort headless check — installs deps, builds (`npm run check` + `npm run build`), installs the plugin in an isolated config, compares `show --json` output to a direct API fetch. Pixel/TUI steps are `continue-on-error` with redacted output; the authoritative signal is health check + percent match.
 - `publish.yml` test gate (`test` job inside `publish.yml`): rebuilds + retests the exact ref being released (`npm ci`, `npm run check`, `npm run build`, `npm test --if-present`).
 
