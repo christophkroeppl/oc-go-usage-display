@@ -46,7 +46,7 @@ try {
 
   if (serverLink.state === "symlink") {
     if (path.resolve(configDir, "plugins", serverLink.detail ?? "") !== expectedServer) {
-      problems.push(`server symlink points at ${serverLink.detail}, expected ${expectedServer}`);
+      problems.push(`server symlink points at ${serverLink.detail ?? ""}, expected ${expectedServer}`);
     }
   } else if (serverLink.state === "file") {
     if (copyMatchesRepo(path.join(configDir, "plugins", SERVER_FILE_NAME), expectedServer)) {
