@@ -353,7 +353,7 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
       redirect: "follow",
       headers: {
         Cookie: `auth=${authCookie}`,
-        "User-Agent": "oc-go-usage-display-plugin/1.0",
+        "User-Agent": "oc-go-usage-display-plugin",
         Accept: "text/html,application/xhtml+xml",
       },
     });
