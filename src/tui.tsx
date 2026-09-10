@@ -10,7 +10,7 @@
 //     carries no paddingLeft/gap so `Go Usage` aligns flush left like the
 //     `Context` header.
 //   - `session_prompt_right` -> compact single line next to the context status
-//     info (e.g. `Go 5h 42% | 7d 15%`), where the `80.6K (8%) · $0.09` readout
+//     info (e.g. `Go 5h 42% | 7d 15% | 30d 61%`), where the `80.6K (8%) · $0.09` readout
 //     lives. Additive multi-render only; `sidebar_footer` (single_winner,
 //     replaces name/version) is never used.
 //
@@ -178,7 +178,8 @@ function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
 function formatCompactLine(snapshot: UsageSnapshot): string {
   const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
   const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
-  return `Go ${rolling} | ${weekly}`;
+  const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
+  return `Go ${rolling} | ${weekly} | ${monthly}`;
 }
 
 function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
