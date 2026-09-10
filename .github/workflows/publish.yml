@@ -1,0 +1,394 @@
+# Publish oc-go-usage-display to npm via trusted publishing (OIDC).
+#
+# No long-lived npm token: authentication uses the short-lived OIDC token
+# minted for trusted publishing.
+# Therefore this workflow intentionally sets no npm auth token env var.
+#
+# Release gating: npm publish is reachable ONLY after the `test` gate job
+# in THIS workflow passes (`needs: [test, version-bump]`). The gate rebuilds
+# + retests the exact ref being released, so a force-pushed tag can never
+# publish broken code.
+#
+# Auto versioning: pushes to `main` run test -> version-bump, which parses
+# `git log <lastTag>..HEAD` (conventional commits: BREAKING CHANGE or `!:`
+# -> major, `feat:` -> minor, everything else incl. fix/perf/docs/chore
+# defaults to patch) and runs
+# `npm version <bump> -m "chore(release): %s"` (npm creates the
+# release commit + vX.Y.Z tag; no manual git tag), then pushes the commit
+# (`git push`) and the tag (`git push --tags` equivalent). The tag push
+# re-enters this workflow as test -> version-bump (pass-through) -> publish,
+# and exposes the new version as job outputs for the publish job's `needs`.
+# Branch pushes never publish directly; only tag pushes and manual
+# dispatches do, so each version publishes exactly once.
+#
+# Loop guards (version-bump no-ops with bumped=false when):
+# - HEAD is a chore(release) commit (the release commit itself),
+# - HEAD full message (%B) contains [skip release], [no release], or
+#   skip-release:true (case-insensitive, pipeline-local opt-out),
+# - the ref is already a tag, or a dispatch tag input was given,
+# - the event is not a branch push (a dispatch without a tag stays
+#   npm-publish-only unless dispatch release=true opts into a bump;
+#   workflow_run is audit-only).
+#
+# NOTE: the release commit message intentionally contains NO `[skip ci]`.
+# GitHub suppresses ALL runs triggered by a push whose commits contain
+# `[skip ci]` — and the tag points at the release commit, so a `[skip ci]`
+# release message would also suppress the tag-push run that performs the
+# publish (release cut but never published). Loop protection relies on the
+# `chore(release):` prefix check instead, which still allows tag workflows
+# to run.
+#
+# Triggers:
+# - push branches "main": the auto-bump path (test -> version-bump; the
+#   resulting tag push then flows through the release path below).
+# - push tags "v*": the release path (gate -> GitHub release -> npm).
+# - workflow_run "test" completed on main: re-validates the gate as an
+#   audit signal after every green main run; release/publish jobs are
+#   skipped for this event (only a tag, or an explicit manual dispatch,
+#   cuts a release — no branch push publishes).
+# - workflow_dispatch: manual release; optional `tag` input selects an
+#   existing tag for the GitHub release, otherwise only the npm step runs.
+#   Optional `release` (true/false, default false): true lets a dispatch
+#   cut a version bump like a main push; false stays npm-publish-only.
+#   Complement to the [skip release] trailer (pushes opt out, dispatches
+#   opt in).
+
+name: publish
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_run:
+    workflows: ["test"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to attach the GitHub release to (e.g. v1.0.0). Empty = npm publish only, no GitHub release."
+        required: false
+        default: ""
+      release:
+        description: "Cut a version bump on manual dispatch? true = allow bump like a main push, false = npm-publish-only."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    name: test gate (must pass before release)
+    # Cross-workflow signal: only trust successful test runs.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (tag / push / dispatch ref)
+        if: github.event_name != 'workflow_run'
+        uses: actions/checkout@v4
+
+      - name: Checkout (verified test head SHA)
+        if: github.event_name == 'workflow_run'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Node 24 with npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          # setup-node defaults always-auth to true, which writes the
+          # deprecated `always-auth` key into the runner .npmrc and breaks
+          # npm v11+ ("Unknown user config always-auth"). OIDC trusted
+          # publishing needs no static auth, so disable it explicitly.
+          always-auth: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test --if-present
+
+  version-bump:
+    name: version bump (conventional commits)
+    needs: [test]
+    # Audit signal only: never cut or pass versions for workflow_run events.
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      bumped: ${{ steps.bump.outputs.bumped }}
+      bump: ${{ steps.bump.outputs.bump }}
+      new_version: ${{ steps.bump.outputs.new_version }}
+      new_tag: ${{ steps.bump.outputs.new_tag }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Bump version and push tag
+        id: bump
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+
+          HEAD_SUBJECT="$(git log -1 --pretty='%s')"
+          echo "HEAD subject: $HEAD_SUBJECT"
+
+          pass_through() {
+            local tag="${1:-}" reason="${2:-pass-through}"
+            local ver
+            ver="$(node -p "require('./package.json').version")"
+            {
+              echo "bumped=false"
+              echo "bump="
+              echo "new_version=$ver"
+              echo "new_tag=$tag"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::version-bump skipped ($reason)."
+          }
+
+          # Guard: never bump on top of a release commit (loop guard).
+          # The chore(release) prefix check doubles as the loop guard AND
+          # still allows tag-push runs (a [skip ci] check would suppress
+          # the tag run that performs the publish, so it must NOT be used).
+          if printf '%s' "$HEAD_SUBJECT" | grep -qE '^chore\(release\):'; then
+            pass_through "" "HEAD is a chore(release) commit (version already bumped)"
+            exit 0
+          fi
+
+          # Guard: pipeline-local version opt-out via trailer in full message.
+          # Matches [skip release], [no release], or skip-release:true
+          # case-insensitively anywhere in subject or body (%B). Skips the
+          # version bump only (pass-through) — the test gate still runs.
+          # NOTE: do NOT use [skip ci] for this: GitHub suppresses ALL runs
+          # triggered by a push whose commits contain [skip ci], and the tag
+          # points at the release commit, so a [skip ci] message would also
+          # suppress the tag-push run that performs the publish (release cut
+          # but never published). [skip release] is only read here, so tag
+          # runs still fire.
+          HEAD_FULL="$(git log -1 --pretty='%B')"
+          echo "HEAD full message: $HEAD_FULL"
+          if printf '%s' "$HEAD_FULL" | grep -qiE '\[skip release\]|\[no release\]|skip-release:true'; then
+            pass_through "" "HEAD contains [skip release] trailer (version bump skipped)"
+            exit 0
+          fi
+
+          # Guard: tag refs and explicit dispatch tags publish as-is.
+          if [[ "$REF" == refs/tags/* ]]; then
+            pass_through "${REF#refs/tags/}" "ref ${REF} is already a tag"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_TAG" ]]; then
+            pass_through "$INPUT_TAG" "dispatch tag input given"
+            exit 0
+          fi
+
+          # Only branch pushes (or manual dispatch with release=true) cut a
+          # new version. A dispatch without a tag and without release=true
+          # stays npm-publish-only (no GitHub release), as documented above.
+          # Complement to the [skip release] trailer: pushes opt out via
+          # trailer, dispatches opt in via release=true.
+          if [[ "$EVENT_NAME" != "push" && ! ("$EVENT_NAME" == "workflow_dispatch" && "${INPUT_RELEASE:-false}" == "true") ]]; then
+            pass_through "" "event ${EVENT_NAME} never cuts a version (dispatch needs release=true)"
+            exit 0
+          fi
+
+          LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
+          if [[ -n "$LAST_TAG" ]]; then
+            RANGE="$LAST_TAG..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          echo "Commit range: $RANGE (last tag: ${LAST_TAG:-none})"
+          git log "$RANGE" --pretty='%s%n%b' > "$RUNNER_TEMP/commits.txt"
+
+          # Conventional commits: BREAKING CHANGE or `type!:` -> major,
+          # `feat:` -> minor, everything else (fix/perf/docs/chore/ci/...
+          # or unmatched) defaults to patch.
+          cat > "$RUNNER_TEMP/determine-bump.cjs" <<'NODE_EOF'
+          const fs = require("node:fs");
+          const text = fs.readFileSync(process.env.RUNNER_TEMP + "/commits.txt", "utf8");
+          const lines = text.split(/\r?\n/);
+          const isMajor = lines.some(
+            (line) => /BREAKING CHANGE/.test(line) || /^[A-Za-z0-9_.-]+(\([^)]*\))?!:/.test(line)
+          );
+          const isMinor = lines.some((line) => /^feat(\([^)]*\))?:/.test(line));
+          let bump = "patch";
+          if (isMajor) {
+            bump = "major";
+          } else if (isMinor) {
+            bump = "minor";
+          }
+          console.log(bump);
+          NODE_EOF
+          BUMP="$(node "$RUNNER_TEMP/determine-bump.cjs")"
+          echo "Determined bump: $BUMP"
+          if [[ "$BUMP" != "major" && "$BUMP" != "minor" && "$BUMP" != "patch" ]]; then
+            echo "::error::Unexpected bump value: $BUMP"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # npm version bumps package.json (+ lockfile) and creates the
+          # release commit + vX.Y.Z tag itself — no manual git tag needed.
+          # No [skip ci] in the message: it would suppress the tag-push run
+          # that performs the publish (see header NOTE).
+          NEW_TAG="$(npm version "$BUMP" -m "chore(release): %s")"
+          NEW_VERSION="${NEW_TAG#v}"
+          echo "Cut release commit + tag: $NEW_TAG"
+
+          # Fail fast: never move or overwrite an existing remote tag.
+          if git ls-remote --tags origin "$NEW_TAG" | grep -q "$NEW_TAG"; then
+            echo "::error::Remote tag $NEW_TAG already exists — refusing to overwrite."
+            exit 1
+          fi
+
+          # Push the release commit, then the new tag (== git push + push --tags).
+          git push origin "HEAD:refs/heads/$REF_NAME"
+          git push origin "$NEW_TAG"
+
+          {
+            echo "bumped=true"
+            echo "bump=$BUMP"
+            echo "new_version=$NEW_VERSION"
+            echo "new_tag=$NEW_TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Version bumped ($BUMP) to $NEW_VERSION ($NEW_TAG)."
+
+  publish:
+    name: release + publish to npm
+    needs: [test, version-bump]
+    # Tags and manual dispatch only: branch pushes (including the auto-bump
+    # path above) never publish here — the tag pushed by version-bump
+    # re-enters this workflow and publishes exactly once. Green main-branch
+    # test runs re-validate via the gate above but never cut a release here.
+    if: github.event_name != 'workflow_run' && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Resolve release ref
+        id: release-ref
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          BUMP_TAG: ${{ needs.version-bump.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          REF="$INPUT_TAG"
+          if [ -z "$REF" ]; then
+            REF="$BUMP_TAG"
+          fi
+          if [ -z "$REF" ]; then
+            REF="$GITHUB_REF"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Release ref: $REF"
+
+      - name: Checkout (release ref + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release-ref.outputs.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node 24 with npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          # See gate job: OIDC trusted publishing needs no static auth.
+          always-auth: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack release tarball
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-tarball"
+          rm -f "$RUNNER_TEMP/npm-tarball/"*.tgz
+          npm pack --pack-destination "$RUNNER_TEMP/npm-tarball/"
+          ls -la "$RUNNER_TEMP/npm-tarball/"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball-${{ github.sha }}
+          path: ${{ runner.temp }}/npm-tarball/*.tgz
+          if-no-files-found: error
+
+      - name: Create GitHub release with tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ needs.version-bump.outputs.new_tag }}"
+          fi
+          if [ -z "$TAG" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::notice::No tag ref — skipping GitHub release (tarball stays on the workflow artifact). Manual dispatch without a tag publishes to npm only."
+            exit 0
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$RUNNER_TEMP/npm-tarball/"*.tgz --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$RUNNER_TEMP/npm-tarball/"*.tgz --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          fi
+
+      - name: Publish to npm (OIDC trusted publishing)
+        # Idempotent re-runs: a moved/re-pushed tag (or a retried run)
+        # resolves to an already-published version — skip instead of
+        # failing with "cannot publish over the previously published versions".
+        # Last step by design: reached only if gate + tarball +
+        # release steps above all succeeded.
+        id: npm-publish
+        run: |
+          set -euo pipefail
+          NAME="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          if npm view "$NAME@$VER" version >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VER is already on npm — skipping publish (idempotent re-run)."
+            exit 0
+          fi
+          npm publish --provenance --access public

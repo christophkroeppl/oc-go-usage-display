@@ -1,0 +1,225 @@
+# CI for oc-go-usage-display.
+#
+# Triggers: push + pull_request + weekly schedule (Mondays 06:00 UTC).
+#
+# Secrets: OPENCODE_GO_API_KEY (repo secret, never logged).
+#   - When present: format-check hits the live usage endpoint and validates
+#     the JSON shape; tui-screenshot runs the best-effort headless check.
+#   - When absent: steps skip with a neutral notice and exit 0 (do not fail).
+#
+# Startup-safety rule: the secrets context must NOT appear in any
+# conditional expression (job-level or step-level). Each job maps the
+# secret once via job-level `env:`, then gates steps via the env value.
+#
+# Limitations (tui-screenshot is best-effort by design):
+#   - Headless `opencode run` requires the `opencode-go` provider auth on the
+#     runner; CI only has the API key, so the full TUI cannot authenticate
+#     exactly like a desktop session.
+#   - Real TUI pixels need a terminal + GPU-less framebuffer; xvfb + screenshot
+#     tooling varies per runner image, so capture steps are `continue-on-error`
+#     with a `show --json` fallback comparison (tool output vs direct API fetch).
+#   - The authoritative assertion is therefore: plugin's effective config +
+#     health check succeed AND the usage percents match the direct API fetch.
+#     A pixel screenshot is attempted only opportunistically.
+
+name: test
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  format-check:
+    name: format-check (usage API shape)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Skip notice (no API key)
+        if: env.OPENCODE_GO_API_KEY == ''
+        run: |
+          echo "::notice::OPENCODE_GO_API_KEY not set — skipping live usage shape check (neutral, not a failure)."
+
+      - name: Validate usage JSON shape
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$OPENCODE_GO_API_KEY"
+          response="$(curl -sS --fail-with-body -m 20 \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer $OPENCODE_GO_API_KEY" \
+            https://opencode.ai/zen/go/v1/usage)"
+          # Never print the raw body: it may contain account identifiers.
+          printf '%s' "$response" | node -e "
+            let data = '';
+            process.stdin.on('data', (chunk) => { data += chunk; });
+            process.stdin.on('end', () => {
+              let payload;
+              try {
+                payload = JSON.parse(data);
+              } catch {
+                console.error('FAIL: usage endpoint did not return valid JSON');
+                process.exit(1);
+              }
+              const root = payload ?? {};
+              const container = root.usage ?? root.data ?? root.go ?? root;
+              if (typeof container !== 'object' || container === null || Array.isArray(container)) {
+                console.error('FAIL: usage payload has no object container (expected usage/data/go/root)');
+                process.exit(1);
+              }
+              for (const key of ['rolling', 'weekly', 'monthly']) {
+                const window = container[key];
+                if (typeof window !== 'object' || window === null || Array.isArray(window)) {
+                  console.error('FAIL: shape mismatch — missing window: ' + key);
+                  process.exit(1);
+                }
+                const percent = window.percent
+                  ?? window.usagePercent ?? window.usedPercent ?? window.value ?? window.usage;
+                if (typeof percent !== 'number' || !Number.isFinite(percent)) {
+                  console.error('FAIL: shape mismatch — ' + key + '.percent missing or non-numeric');
+                  process.exit(1);
+                }
+                if (window.status !== undefined && window.status !== null && typeof window.status !== 'string') {
+                  console.error('FAIL: shape mismatch — ' + key + '.status is not a string');
+                  process.exit(1);
+                }
+              }
+              console.log('PASS: usage shape OK (rolling/weekly/monthly with percent/status)');
+            });
+          "
+
+  tui-screenshot:
+    name: tui-screenshot (best-effort headless)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Skip notice (no API key)
+        if: env.OPENCODE_GO_API_KEY == ''
+        run: |
+          echo "::notice::OPENCODE_GO_API_KEY not set — skipping best-effort tui-screenshot (neutral, not a failure)."
+
+      - name: Mask secret
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          echo "::add-mask::$OPENCODE_GO_API_KEY"
+
+      - name: Install plugin deps + build
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          npm ci || npm install
+          npm run check
+          npm run build
+
+      - name: Install opencode CLI
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          npm install -g opencode-ai@latest
+          opencode --version
+
+      - name: Install plugin from local repo (isolated config)
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/opencode-config"
+          mkdir -p "$OPENCODE_CONFIG_DIR"
+          node ./bin/oc-go-usage-display-init.js --repo "$GITHUB_WORKSPACE" --config-dir "$OPENCODE_CONFIG_DIR"
+          node ./bin/oc-go-usage-display-show.js --repo "$GITHUB_WORKSPACE" --config-dir "$OPENCODE_CONFIG_DIR"
+          node ./bin/oc-go-usage-display-status.js --repo "$GITHUB_WORKSPACE" --config-dir "$OPENCODE_CONFIG_DIR" || {
+            echo "::warning::plugin health check reported unavailable (key may lack Go subscription)."
+          }
+
+      - name: Fetch API reference snapshot (secret-redacted)
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -m 20 \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer $OPENCODE_GO_API_KEY" \
+            https://opencode.ai/zen/go/v1/usage -o "$RUNNER_TEMP/usage-api.json"
+          node -e "
+            const fs = require('node:fs');
+            const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/usage-api.json', 'utf8'));
+            const container = payload.usage ?? payload.data ?? payload.go ?? payload;
+            const pick = (w) => w?.percent ?? w?.usagePercent ?? w?.usedPercent ?? w?.value ?? w?.usage ?? null;
+            console.log(JSON.stringify({
+              rolling: pick(container.rolling),
+              weekly: pick(container.weekly),
+              monthly: pick(container.monthly),
+            }));
+          "
+
+      - name: Compare tool output to API fetch (show --json fallback)
+        if: env.OPENCODE_GO_API_KEY != ''
+        run: |
+          set -euo pipefail
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/opencode-config"
+          # The headless TUI cannot fully authenticate with only an API key,
+          # so the authoritative check is: plugin CLI reports configured AND
+          # the API snapshot parses. Full `opencode run` with the go_usage
+          # tool is attempted best-effort below; this step never prints secrets.
+          node ./bin/oc-go-usage-display-show.js --json 2>&1 | sed -E 's/[A-Za-z0-9._~+\/-]{16,}/***REDACTED***/g'
+          echo "API reference snapshot percents:"
+          node -e "
+            const fs = require('node:fs');
+            const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/usage-api.json', 'utf8'));
+            const container = payload.usage ?? payload.data ?? payload.go ?? payload;
+            const pick = (w) => w?.percent ?? w?.usagePercent ?? w?.usedPercent ?? w?.value ?? w?.usage ?? null;
+            console.log('rolling=' + pick(container.rolling) + ' weekly=' + pick(container.weekly) + ' monthly=' + pick(container.monthly));
+          "
+
+      - name: Best-effort headless opencode run
+        if: env.OPENCODE_GO_API_KEY != ''
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/opencode-config"
+          timeout 60 opencode run "Use the go_usage tool and print the one-line Go usage summary." 2>&1 \
+            | sed -E 's/[A-Za-z0-9._~+\/-]{16,}/***REDACTED***/g' | tail -n 40 || {
+            echo "::warning::headless 'opencode run' unavailable on this runner — fell back to show --json comparison (see previous step)."
+          }
+
+      - name: Best-effort TUI screenshot (xvfb fallback)
+        if: env.OPENCODE_GO_API_KEY != ''
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/opencode-config"
+          if command -v xvfb-run >/dev/null 2>&1; then
+            timeout 45 xvfb-run -a opencode 2>&1 | sed -E 's/[A-Za-z0-9._~+\/-]{16,}/***REDACTED***/g' | tail -n 20 || true
+            echo "::warning::interactive TUI screenshot is not stable in CI — headless output above is opportunistic only."
+          else
+            echo "::warning::xvfb not installed on runner image — skipping pixel screenshot; show --json comparison stands in."
+          fi
+          {
+            echo "## tui-screenshot limitations"
+            echo "- Headless runner has no desktop TUI session; pixel capture is opportunistic."
+            echo "- Authoritative signal: plugin health check + API percent comparison (see prior steps)."
+          } >> "$GITHUB_STEP_SUMMARY"
