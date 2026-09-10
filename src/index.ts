@@ -392,6 +392,13 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
 
 async function getUsageSnapshot(): Promise<UsageSnapshot> {
   const now = Date.now();
+  // Mock bypasses cache for determinism: a stale disk/memory entry must
+  // never shadow the deterministic mock snapshot during tests.
+  if (process.env.OPENCODE_GO_MOCK === "1") {
+    const snapshot = mockSnapshot();
+    memoryCache = { at: now, snapshot };
+    return snapshot;
+  }
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
   const diskCached = readDiskCache(now);
   if (diskCached) {
