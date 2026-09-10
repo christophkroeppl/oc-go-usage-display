@@ -59,7 +59,7 @@ try {
   }
   if (tuiLink.state === "symlink") {
     if (path.resolve(configDir, "plugins", tuiLink.detail ?? "") !== expectedTui) {
-      problems.push(`tui symlink points at ${tuiLink.detail}, expected ${expectedTui}`);
+      problems.push(`tui symlink points at ${tuiLink.detail ?? ""}, expected ${expectedTui}`);
     }
   } else if (tuiLink.state === "file") {
     if (copyMatchesRepo(path.join(configDir, "plugins", TUI_FILE_NAME), expectedTui)) {
