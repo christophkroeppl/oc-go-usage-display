@@ -79,10 +79,32 @@ node ./bin/oc-go-usage-display-init.js     # (re-)install
 node ./bin/oc-go-usage-display-show.js     # show effective config (secrets redacted)
 node ./bin/oc-go-usage-display-status.js   # health check (exit 0/1)
 node ./bin/oc-go-usage-display-update.js   # re-link (+ git pull when a remote exists)
+node ./bin/oc-go-usage-display-remove.js   # uninstall (files + config entries; secrets untouched)
 ```
 
 After installing the package, the commands are also available as
-`oc-go-usage-display-init|show|status|update`.
+`oc-go-usage-display-init|show|status|update|remove`.
+
+## Uninstall
+
+```sh
+npx oc-go-usage-display-remove
+npm uninstall oc-go-usage-display
+```
+
+Or from a checkout: `node ./bin/oc-go-usage-display-remove.js`.
+This removes the plugin files plus the `opencode.jsonc` (server) and
+`tui.json` (TUI) entries (`--config-dir` / `OPENCODE_CONFIG_DIR` supported).
+Secrets are never touched: env vars, `auth.json`, and
+`oc-go-usage-display.json` stay in place — delete them by hand if desired.
+Restart opencode afterwards.
+
+Manual file list (global scope):
+
+- `~/.config/opencode/plugins/oc-go-usage-display.ts`
+- `~/.config/opencode/plugins/oc-go-usage-display.tsx`
+- server entry (`./plugins/oc-go-usage-display.ts`) in `~/.config/opencode/opencode.jsonc`
+- TUI entry (`./plugins/oc-go-usage-display.tsx`) in `~/.config/opencode/tui.json`
 
 ## Display toggles
 

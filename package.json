@@ -21,6 +21,7 @@
   ],
   "bin": {
     "oc-go-usage-display-init": "bin/oc-go-usage-display-init.js",
+    "oc-go-usage-display-remove": "bin/oc-go-usage-display-remove.js",
     "oc-go-usage-display-show": "bin/oc-go-usage-display-show.js",
     "oc-go-usage-display-status": "bin/oc-go-usage-display-status.js",
     "oc-go-usage-display-update": "bin/oc-go-usage-display-update.js"
