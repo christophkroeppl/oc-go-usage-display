@@ -66,6 +66,7 @@ import {
   mockSnapshot,
   readAuthJsonApiKey,
   toNonEmptyString,
+  unavailableSnapshot,
 } from "./shared.js";
 import type { UsageSnapshot } from "./shared.js";
 
@@ -245,7 +246,11 @@ async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);
   if (payload === null) return null;
-  if (isRecord(payload) && payload.__rejected === true) return null;
+  // Mirror the server: a rejected key is a distinct unavailable snapshot
+  // (surfaced via `apiError`) rather than a silent null.
+  if (isRecord(payload) && payload.__rejected === true) {
+    return unavailableSnapshot("API key rejected (401/403)");
+  }
   return extractSnapshotFromApiPayload(payload);
 }
 
@@ -321,7 +326,10 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     createEffect(() => {
       const snapshot = usageSnapshot();
       if (snapshot !== null && snapshot.source === "unavailable") {
-        void logUsageError(api, "Go usage snapshot unavailable");
+        void logUsageError(
+          api,
+          snapshot.apiError ? `Go usage unavailable (${snapshot.apiError})` : "Go usage snapshot unavailable",
+        );
       }
     });
     return (
