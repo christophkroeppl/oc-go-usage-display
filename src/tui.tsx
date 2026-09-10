@@ -143,11 +143,11 @@ function isDisplayMode(value: unknown): value is DisplayMode {
   return value === "sidebar" || value === "statusline" || value === "both";
 }
 
-function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
+export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
   return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
 }
 
-function parseBooleanFlag(value: unknown): boolean | null {
+export function parseBooleanFlag(value: unknown): boolean | null {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (value === 1) return true;
@@ -161,7 +161,7 @@ function parseBooleanFlag(value: unknown): boolean | null {
   return null;
 }
 
-function formatResetDuration(totalSec: number | null): string | null {
+export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);
   const hours = Math.floor(sec / 3600);
@@ -171,18 +171,18 @@ function formatResetDuration(totalSec: number | null): string | null {
   return `${sec}s`;
 }
 
-function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
+export function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
   return snapshot.rolling === null && snapshot.weekly === null && snapshot.monthly === null;
 }
 
-function formatCompactLine(snapshot: UsageSnapshot): string {
+export function formatCompactLine(snapshot: UsageSnapshot): string {
   const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
   const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
   const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
   return `Go ${rolling} | ${weekly} | ${monthly}`;
 }
 
-function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
+export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
   const rows: UsageRow[] = [];
   if (snapshot.rolling !== null) {
     const reset = formatResetDuration(snapshot.rolling.resetInSec) ?? snapshot.rolling.resetText;

@@ -103,7 +103,7 @@ function toNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function formatResetDuration(totalSec: number | null): string | null {
+export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);
   const hours = Math.floor(sec / 3600);
@@ -118,7 +118,7 @@ function formatWindow(window: UsageWindow | null): string {
   return `${window.percent}%`;
 }
 
-function formatCompactLine(snapshot: UsageSnapshot): string {
+export function formatCompactLine(snapshot: UsageSnapshot): string {
   if (snapshot.apiUnavailable || (!snapshot.rolling && !snapshot.weekly && !snapshot.monthly)) {
     const reason = snapshot.apiError ?? "unknown error";
     return `Go n/a (${reason})`;

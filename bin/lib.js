@@ -224,7 +224,7 @@ export function readTuiSelection(configDir) {
   return { found: true, entry: false, sidebar: null, statusline: null };
 }
 
-function normalizeTuiEntry(entry) {
+export function normalizeTuiEntry(entry) {
   if (typeof entry === "string") return { spec: entry, sidebar: null, statusline: null };
   if (!Array.isArray(entry) || typeof entry[0] !== "string") return null;
   const options = entry.length > 1 && isRecord(entry[1]) ? entry[1] : {};
