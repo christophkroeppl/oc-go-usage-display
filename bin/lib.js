@@ -224,7 +224,7 @@ export function readTuiSelection(configDir) {
   return { found: true, entry: false, sidebar: null, statusline: null };
 }
 
-function normalizeTuiEntry(entry) {
+export function normalizeTuiEntry(entry) {
   if (typeof entry === "string") return { spec: entry, sidebar: null, statusline: null };
   if (!Array.isArray(entry) || typeof entry[0] !== "string") return null;
   const options = entry.length > 1 && isRecord(entry[1]) ? entry[1] : {};
@@ -292,4 +292,50 @@ export function secretPresence(configDir) {
     envPresent,
     filePresent: fs.existsSync(fileConfig),
   };
+}
+
+export function removePluginFiles(configDir) {
+  const removed = [];
+  const kept = [];
+  for (const fileName of [SERVER_FILE_NAME, TUI_FILE_NAME]) {
+    const target = path.join(configDir, "plugins", fileName);
+    const stat = safeLstat(target);
+    if (stat === null) continue;
+    if (stat.isSymbolicLink() || stat.isFile()) {
+      fs.rmSync(target, { force: true });
+      removed.push(fileName);
+    } else {
+      kept.push(fileName);
+    }
+  }
+  return { removed, kept };
+}
+
+export function removeServerEntry(configDir) {
+  const filePath = path.join(configDir, "opencode.jsonc");
+  const { found, value } = readJsonFile(filePath);
+  if (!found) return { changed: false, present: false };
+  if (!isRecord(value)) fail(`opencode.jsonc is not an object: ${filePath}`);
+  const plugins = Array.isArray(value.plugin) ? value.plugin : [];
+  if (!plugins.includes(SERVER_PLUGIN_REL)) return { changed: false, present: false };
+  value.plugin = plugins.filter((entry) => entry !== SERVER_PLUGIN_REL);
+  writeJsonFile(filePath, value);
+  return { changed: true, present: false };
+}
+
+export function removeTuiEntry(configDir) {
+  const filePath = path.join(configDir, "tui.json");
+  const { found, value } = readJsonFile(filePath);
+  if (!found) return { changed: false, present: false };
+  if (!isRecord(value)) fail(`tui.json is not an object: ${filePath}`);
+  const plugins = Array.isArray(value.plugin) ? value.plugin : [];
+  const next = plugins.filter((entry) => {
+    const normalized = normalizeTuiEntry(entry);
+    if (normalized === null) return true;
+    return normalized.spec !== TUI_PLUGIN_REL;
+  });
+  if (next.length === plugins.length) return { changed: false, present: false };
+  value.plugin = next;
+  writeJsonFile(filePath, value);
+  return { changed: true, present: false };
 }

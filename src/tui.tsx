@@ -10,7 +10,7 @@
 //     carries no paddingLeft/gap so `Go Usage` aligns flush left like the
 //     `Context` header.
 //   - `session_prompt_right` -> compact single line next to the context status
-//     info (e.g. `Go 5h 42% | 7d 15%`), where the `80.6K (8%) · $0.09` readout
+//     info (e.g. `Go 5h 42% | 7d 15% | 30d 61%`), where the `80.6K (8%) · $0.09` readout
 //     lives. Additive multi-render only; `sidebar_footer` (single_winner,
 //     replaces name/version) is never used.
 //
@@ -59,9 +59,19 @@ import type {
   TuiTheme,
 } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createSignal } from "solid-js";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import {
+  extractSnapshotFromApiPayload,
+  formatResetDuration,
+  isRecord,
+  mockSnapshot,
+  readAuthJsonApiKey,
+  toNonEmptyString,
+  unavailableSnapshot,
+} from "./shared.js";
+import type { UsageSnapshot } from "./shared.js";
+
+// Re-exported so `dist/tui.js` keeps the helper surface used by tests.
+export { formatResetDuration };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,20 +87,9 @@ const KV_COLLAPSED_STATUSLINE_KEY = "collapsed_statusline";
 const KV_COLLAPSED_LEGACY_KEY = "collapsed";
 const LOG_SERVICE = "oc-go-usage-display";
 
-const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode");
-
-function dataShareAuthPath(): string {
-  const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);
-  if (xdgDataHome) return path.join(xdgDataHome, "opencode", "auth.json");
-  return path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
-}
-
-function authJsonPaths(): string[] {
-  return [dataShareAuthPath(), path.join(CONFIG_DIR, "auth.json")];
-}
-
 // ---------------------------------------------------------------------------
-// Trusted types (parsed at the boundary, trusted internally)
+// Trusted types (parsed at the boundary, trusted internally; usage shapes
+// live in `./shared.js` so server and TUI parse identically)
 // ---------------------------------------------------------------------------
 
 type DisplayMode = "sidebar" | "statusline" | "both";
@@ -98,21 +97,6 @@ type DisplayMode = "sidebar" | "statusline" | "both";
 type SurfaceSelection = {
   sidebar: boolean;
   statusline: boolean;
-};
-
-type UsageWindow = {
-  percent: number;
-  resetInSec: number | null;
-  resetText: string | null;
-};
-
-type UsageSnapshot = {
-  rolling: UsageWindow | null;
-  weekly: UsageWindow | null;
-  monthly: UsageWindow | null;
-  source: "api" | "mock" | "unavailable";
-  fetchedAt: number;
-  apiError?: string;
 };
 
 type UsageRow = {
@@ -124,30 +108,15 @@ type UsageRow = {
 // Small pure helpers
 // ---------------------------------------------------------------------------
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value;
-}
-
-function toNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function isDisplayMode(value: unknown): value is DisplayMode {
   return value === "sidebar" || value === "statusline" || value === "both";
 }
 
-function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
+export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
   return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
 }
 
-function parseBooleanFlag(value: unknown): boolean | null {
+export function parseBooleanFlag(value: unknown): boolean | null {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (value === 1) return true;
@@ -161,27 +130,18 @@ function parseBooleanFlag(value: unknown): boolean | null {
   return null;
 }
 
-function formatResetDuration(totalSec: number | null): string | null {
-  if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
-  const sec = Math.floor(totalSec);
-  const hours = Math.floor(sec / 3600);
-  const minutes = Math.floor((sec % 3600) / 60);
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${sec}s`;
-}
-
-function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
+export function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
   return snapshot.rolling === null && snapshot.weekly === null && snapshot.monthly === null;
 }
 
-function formatCompactLine(snapshot: UsageSnapshot): string {
+export function formatCompactLine(snapshot: UsageSnapshot): string {
   const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
   const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
-  return `Go ${rolling} | ${weekly}`;
+  const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
+  return `Go ${rolling} | ${weekly} | ${monthly}`;
 }
 
-function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
+export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
   const rows: UsageRow[] = [];
   if (snapshot.rolling !== null) {
     const reset = formatResetDuration(snapshot.rolling.resetInSec) ?? snapshot.rolling.resetText;
@@ -256,66 +216,6 @@ function migrateLegacyCollapsedFlag(api: TuiPluginApi): void {
 // Data boundary (auth.json -> Bearer usage fetch; throws nothing)
 // ---------------------------------------------------------------------------
 
-function readAuthJsonApiKey(): string | null {
-  for (const authPath of authJsonPaths()) {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(authPath, "utf8");
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) continue;
-    const goEntry = parsed["opencode-go"];
-    const fallbackEntry = parsed["opencode"];
-    const goKey = isRecord(goEntry) ? toNonEmptyString(goEntry.key) : null;
-    if (goKey) return goKey;
-    const fallbackKey = isRecord(fallbackEntry) ? toNonEmptyString(fallbackEntry.key) : null;
-    if (fallbackKey) return fallbackKey;
-  }
-  return null;
-}
-
-function extractWindow(candidate: unknown): UsageWindow | null {
-  if (!isRecord(candidate)) return null;
-  const percent = toFiniteNumber(
-    candidate.percent ??
-      candidate.usagePercent ??
-      candidate.usedPercent ??
-      candidate.value ??
-      candidate.usage,
-  );
-  if (percent === null) return null;
-  return {
-    percent: Math.round(percent),
-    resetInSec: toFiniteNumber(candidate.resetInSec ?? candidate.resetInSeconds ?? null),
-    resetText: toNonEmptyString(candidate.resetText ?? candidate.reset ?? null),
-  };
-}
-
-function extractSnapshotFromApiPayload(payload: unknown): UsageSnapshot | null {
-  if (!isRecord(payload)) return null;
-  const containers: unknown[] = [payload];
-  for (const key of ["usage", "data", "go"]) {
-    if (isRecord(payload[key])) containers.push(payload[key]);
-  }
-  for (const container of containers) {
-    if (!isRecord(container)) continue;
-    const rolling = extractWindow(container.rolling ?? container.rollingUsage ?? container["5h"]);
-    const weekly = extractWindow(container.weekly ?? container.weeklyUsage ?? container["7d"]);
-    const monthly = extractWindow(container.monthly ?? container.monthlyUsage ?? container["30d"]);
-    if (rolling !== null || weekly !== null || monthly !== null) {
-      return { rolling, weekly, monthly, source: "api", fetchedAt: Date.now() };
-    }
-  }
-  return null;
-}
-
 async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknown | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -338,16 +238,6 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
   }
 }
 
-function mockSnapshot(): UsageSnapshot {
-  return {
-    rolling: { percent: 42, resetInSec: 7543, resetText: null },
-    weekly: { percent: 15, resetInSec: null, resetText: null },
-    monthly: { percent: 61, resetInSec: null, resetText: null },
-    source: "mock",
-    fetchedAt: Date.now(),
-  };
-}
-
 async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
   if (process.env.OPENCODE_GO_MOCK === "1") return mockSnapshot();
 
@@ -356,7 +246,11 @@ async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);
   if (payload === null) return null;
-  if (isRecord(payload) && payload.__rejected === true) return null;
+  // Mirror the server: a rejected key is a distinct unavailable snapshot
+  // (surfaced via `apiError`) rather than a silent null.
+  if (isRecord(payload) && payload.__rejected === true) {
+    return unavailableSnapshot("API key rejected (401/403)");
+  }
   return extractSnapshotFromApiPayload(payload);
 }
 
@@ -432,7 +326,10 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     createEffect(() => {
       const snapshot = usageSnapshot();
       if (snapshot !== null && snapshot.source === "unavailable") {
-        void logUsageError(api, "Go usage snapshot unavailable");
+        void logUsageError(
+          api,
+          snapshot.apiError ? `Go usage unavailable (${snapshot.apiError})` : "Go usage snapshot unavailable",
+        );
       }
     });
     return (
@@ -474,6 +371,10 @@ const goUsageTui: TuiPlugin = async (api, options) => {
   }
 
   if (surfaces.sidebar) {
+    // Host-owned slot: `register` returns an id but the SDK exposes no
+    // unregister API, so there is nothing to dispose here (the slot dies
+    // with the host). Interval/event/command teardown below is the full
+    // dispose path.
     api.slots.register({
       order: SLOT_ORDER,
       slots: {
@@ -488,6 +389,8 @@ const goUsageTui: TuiPlugin = async (api, options) => {
   }
 
   if (surfaces.statusline) {
+    // Host-owned slot (see sidebar note above): no unregister API exists,
+    // so disposal is a no-op for slots.
     api.slots.register({
       order: SLOT_ORDER,
       slots: {
@@ -500,7 +403,9 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     });
   }
 
-  const unregisterToggleCommand = api.command.register(() => [
+  // `api.command` is a deprecated legacy shim that hosts may omit; guard so
+  // the plugin still initializes and disposes safely without it.
+  const unregisterToggleCommand = api.command?.register(() => [
     {
       title: "Go usage: toggle sidebar",
       value: "oc-go-usage-display.toggle-sidebar",
@@ -513,7 +418,7 @@ const goUsageTui: TuiPlugin = async (api, options) => {
       category: "Go",
       onSelect: () => toggleStatuslineCollapsed(),
     },
-  ]);
+  ]) ?? (() => {});
 
   const unsubscribeSession = api.event.on("session.updated", () => {
     void refreshUsage();

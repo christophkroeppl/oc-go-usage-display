@@ -32,8 +32,23 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import {
+  CONFIG_DIR,
+  extractSnapshotFromApiPayload,
+  extractWindow,
+  formatResetDuration,
+  isRecord,
+  mockSnapshot,
+  readAuthJsonApiKey,
+  toFiniteNumber,
+  toNonEmptyString,
+  unavailableSnapshot,
+} from "./shared.js";
+import type { UsageSnapshot, UsageWindow } from "./shared.js";
+
+// Re-exported so `dist/index.js` keeps the helper surface used by tests.
+export { formatResetDuration };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -43,40 +58,12 @@ const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode");
 const FILE_CONFIG_PATH = path.join(CONFIG_DIR, "oc-go-usage-display.json");
 const DISK_CACHE_PATH = path.join(CONFIG_DIR, "oc-go-usage-display-cache.json");
-
-function dataShareAuthPath(): string {
-  const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);
-  if (xdgDataHome) return path.join(xdgDataHome, "opencode", "auth.json");
-  return path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
-}
-
-function authJsonPaths(): string[] {
-  return [dataShareAuthPath(), path.join(CONFIG_DIR, "auth.json")];
-}
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally)
 // ---------------------------------------------------------------------------
-
-type UsageWindow = {
-  percent: number;
-  resetInSec: number | null;
-  status: string | null;
-  resetText: string | null;
-};
-
-type UsageSnapshot = {
-  rolling: UsageWindow | null;
-  weekly: UsageWindow | null;
-  monthly: UsageWindow | null;
-  source: "api" | "scrape" | "mock" | "unavailable";
-  fetchedAt: number;
-  apiUnavailable?: boolean;
-  apiError?: string;
-};
 
 type Credentials =
   | { kind: "apiKey"; apiKey: string }
@@ -84,41 +71,12 @@ type Credentials =
   | { kind: "mock" }
   | { kind: "none" };
 
-// ---------------------------------------------------------------------------
-// Small pure helpers
-// ---------------------------------------------------------------------------
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value;
-}
-
-function toNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function formatResetDuration(totalSec: number | null): string | null {
-  if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
-  const sec = Math.floor(totalSec);
-  const hours = Math.floor(sec / 3600);
-  const minutes = Math.floor((sec % 3600) / 60);
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${sec}s`;
-}
-
 function formatWindow(window: UsageWindow | null): string {
   if (!window) return "n/a";
   return `${window.percent}%`;
 }
 
-function formatCompactLine(snapshot: UsageSnapshot): string {
+export function formatCompactLine(snapshot: UsageSnapshot): string {
   if (snapshot.apiUnavailable || (!snapshot.rolling && !snapshot.weekly && !snapshot.monthly)) {
     const reason = snapshot.apiError ?? "unknown error";
     return `Go n/a (${reason})`;
@@ -156,31 +114,6 @@ function readFileConfig(): { workspaceId: string | null; authCookie: string | nu
     workspaceId: toNonEmptyString(parsed.workspaceId),
     authCookie: toNonEmptyString(parsed.authCookie),
   };
-}
-
-function readAuthJsonApiKey(): string | null {
-  for (const authPath of authJsonPaths()) {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(authPath, "utf8");
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) continue;
-    const goEntry = parsed["opencode-go"];
-    const fallbackEntry = parsed["opencode"];
-    const goKey = isRecord(goEntry) ? toNonEmptyString(goEntry.key) : null;
-    if (goKey) return goKey;
-    const fallbackKey = isRecord(fallbackEntry) ? toNonEmptyString(fallbackEntry.key) : null;
-    if (fallbackKey) return fallbackKey;
-  }
-  return null;
 }
 
 function resolveCredentials(): Credentials {
@@ -229,6 +162,13 @@ function readDiskCache(now: number): UsageSnapshot | null {
   if (!isRecord(parsed.snapshot)) return null;
   const snapshot = parsed.snapshot;
   if (!("rolling" in snapshot && "weekly" in snapshot && "monthly" in snapshot)) return null;
+  // Validate cached windows instead of blindly trusting the shape; a corrupt
+  // entry is dropped so the next fetch repopulates the cache.
+  for (const key of ["rolling", "weekly", "monthly"] as const) {
+    const cachedWindow = snapshot[key];
+    if (cachedWindow === null) continue;
+    if (extractWindow(cachedWindow) === null) return null;
+  }
   return snapshot as UsageSnapshot;
 }
 
@@ -249,18 +189,6 @@ function writeDiskCache(snapshot: UsageSnapshot): void {
 // Fetch helpers
 // ---------------------------------------------------------------------------
 
-function unavailableSnapshot(error: string, source: UsageSnapshot["source"] = "unavailable"): UsageSnapshot {
-  return {
-    rolling: null,
-    weekly: null,
-    monthly: null,
-    source,
-    fetchedAt: Date.now(),
-    apiUnavailable: true,
-    apiError: error,
-  };
-}
-
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -271,47 +199,8 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-// --- API-key path: tolerant JSON parsing (shape may evolve) ---
-
-function extractWindow(candidate: unknown): UsageWindow | null {
-  if (!isRecord(candidate)) return null;
-  const percent = toFiniteNumber(
-    candidate.percent ??
-      candidate.usagePercent ??
-      candidate.usedPercent ??
-      candidate.value ??
-      candidate.usage,
-  );
-  if (percent === null) return null;
-  const resetInSec = toFiniteNumber(candidate.resetInSec ?? candidate.resetInSeconds ?? null);
-  const status = toNonEmptyString(candidate.status);
-  const resetText = toNonEmptyString(candidate.resetText ?? candidate.reset ?? null);
-  return { percent: Math.round(percent), resetInSec, status, resetText };
-}
-
-function extractSnapshotFromApiPayload(payload: unknown): UsageSnapshot | null {
-  if (!isRecord(payload)) return null;
-  const containers: unknown[] = [payload];
-  for (const key of ["usage", "data", "go"]) {
-    if (isRecord(payload[key])) containers.push(payload[key]);
-  }
-  for (const container of containers) {
-    if (!isRecord(container)) continue;
-    const rolling = extractWindow(container.rolling ?? container.rollingUsage ?? container["5h"]);
-    const weekly = extractWindow(container.weekly ?? container.weeklyUsage ?? container["7d"]);
-    const monthly = extractWindow(container.monthly ?? container.monthlyUsage ?? container["30d"]);
-    if (rolling || weekly || monthly) {
-      return {
-        rolling,
-        weekly,
-        monthly,
-        source: "api",
-        fetchedAt: Date.now(),
-      };
-    }
-  }
-  return null;
-}
+// --- API-key path: tolerant JSON parsing lives in `./shared.js` (shape may
+// evolve); scrape helpers below stay server-local. ---
 
 async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
   let response: Response;
@@ -464,7 +353,7 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
       redirect: "follow",
       headers: {
         Cookie: `auth=${authCookie}`,
-        "User-Agent": "oc-go-usage-display-plugin/1.0",
+        "User-Agent": "oc-go-usage-display-plugin",
         Accept: "text/html,application/xhtml+xml",
       },
     });
@@ -497,22 +386,19 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
   };
 }
 
-function mockSnapshot(): UsageSnapshot {
-  return {
-    rolling: { percent: 42, resetInSec: 7543, status: "active", resetText: null },
-    weekly: { percent: 15, resetInSec: null, status: "active", resetText: null },
-    monthly: { percent: 61, resetInSec: null, status: "active", resetText: null },
-    source: "mock",
-    fetchedAt: Date.now(),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Snapshot entry point (cached, never throws, never logs secrets)
 // ---------------------------------------------------------------------------
 
 async function getUsageSnapshot(): Promise<UsageSnapshot> {
   const now = Date.now();
+  // Mock bypasses cache for determinism: a stale disk/memory entry must
+  // never shadow the deterministic mock snapshot during tests.
+  if (process.env.OPENCODE_GO_MOCK === "1") {
+    const snapshot = mockSnapshot();
+    memoryCache = { at: now, snapshot };
+    return snapshot;
+  }
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
   const diskCached = readDiskCache(now);
   if (diskCached) {
