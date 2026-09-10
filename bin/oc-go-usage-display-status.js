@@ -4,6 +4,7 @@
 // plain-file copy installs accepted with a note), config entries exist,
 // toggles set.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   SERVER_FILE_NAME,
@@ -29,12 +30,30 @@ try {
   const tuiLink = describeLink(path.join(configDir, "plugins", TUI_FILE_NAME));
   const notes = [];
 
+  // Copy installs intentionally diverge, so a stale copy stays NOTE + exit 0
+  // (never FAIL): users who pin a copy must not break on every repo update.
+  function copyMatchesRepo(installedPath, repoPath) {
+    let installed;
+    let source;
+    try {
+      installed = fs.readFileSync(installedPath, "utf8");
+      source = fs.readFileSync(repoPath, "utf8");
+    } catch {
+      return false;
+    }
+    return installed === source;
+  }
+
   if (serverLink.state === "symlink") {
     if (path.resolve(configDir, "plugins", serverLink.detail) !== expectedServer) {
       problems.push(`server symlink points at ${serverLink.detail}, expected ${expectedServer}`);
     }
   } else if (serverLink.state === "file") {
-    notes.push("server plugin is a copy install (file, not a symlink)");
+    if (copyMatchesRepo(path.join(configDir, "plugins", SERVER_FILE_NAME), expectedServer)) {
+      notes.push("server plugin is a copy install (file, matches repo)");
+    } else {
+      notes.push(`server copy install differs from repo ${expectedServer}`);
+    }
   } else {
     problems.push(`server plugin is ${serverLink.state}, expected symlink -> ${expectedServer}`);
   }
@@ -43,7 +62,11 @@ try {
       problems.push(`tui symlink points at ${tuiLink.detail}, expected ${expectedTui}`);
     }
   } else if (tuiLink.state === "file") {
-    notes.push("tui plugin is a copy install (file, not a symlink)");
+    if (copyMatchesRepo(path.join(configDir, "plugins", TUI_FILE_NAME), expectedTui)) {
+      notes.push("tui plugin is a copy install (file, matches repo)");
+    } else {
+      notes.push(`tui copy install differs from repo ${expectedTui}`);
+    }
   } else {
     problems.push(`tui plugin is ${tuiLink.state}, expected symlink -> ${expectedTui}`);
   }
