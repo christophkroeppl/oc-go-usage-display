@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Check the installation. Exit 0 when healthy, 1 with reasons otherwise.
-// Verifies: plugin files point at this repo (symlinks verified by target,
+// Verifies: bundled plugin files (dist/plugins/*) point at this repo
+// (symlinks verified by target, dangling symlinks reported unhealthy,
 // plain-file copy installs accepted with a note), config entries exist,
 // toggles set.
 
@@ -11,6 +12,7 @@ import {
   TUI_FILE_NAME,
   describeLink,
   fail,
+  isDanglingSymlink,
   openCodeDirFromArgv,
   readJsonFile,
   SERVER_PLUGIN_REL,
@@ -24,10 +26,12 @@ try {
   const configDir = openCodeDirFromArgv(argv);
   const problems = [];
 
-  const expectedServer = path.join(repoDir, "src", "index.ts");
-  const expectedTui = path.join(repoDir, "src", "tui.tsx");
-  const serverLink = describeLink(path.join(configDir, "plugins", SERVER_FILE_NAME));
-  const tuiLink = describeLink(path.join(configDir, "plugins", TUI_FILE_NAME));
+  const expectedServer = path.join(repoDir, "dist", "plugins", SERVER_FILE_NAME);
+  const expectedTui = path.join(repoDir, "dist", "plugins", TUI_FILE_NAME);
+  const serverPath = path.join(configDir, "plugins", SERVER_FILE_NAME);
+  const tuiPath = path.join(configDir, "plugins", TUI_FILE_NAME);
+  const serverLink = describeLink(serverPath);
+  const tuiLink = describeLink(tuiPath);
   const notes = [];
 
   // Copy installs intentionally diverge, so a stale copy stays NOTE + exit 0
@@ -45,7 +49,9 @@ try {
   }
 
   if (serverLink.state === "symlink") {
-    if (path.resolve(configDir, "plugins", serverLink.detail ?? "") !== expectedServer) {
+    if (isDanglingSymlink(serverPath)) {
+      problems.push(`server symlink target missing (dangling): ${serverLink.detail ?? ""} (re-run install or build)`);
+    } else if (path.resolve(configDir, "plugins", serverLink.detail ?? "") !== expectedServer) {
       problems.push(`server symlink points at ${serverLink.detail ?? ""}, expected ${expectedServer}`);
     }
   } else if (serverLink.state === "file") {
@@ -58,7 +64,9 @@ try {
     problems.push(`server plugin is ${serverLink.state}, expected symlink -> ${expectedServer}`);
   }
   if (tuiLink.state === "symlink") {
-    if (path.resolve(configDir, "plugins", tuiLink.detail ?? "") !== expectedTui) {
+    if (isDanglingSymlink(tuiPath)) {
+      problems.push(`tui symlink target missing (dangling): ${tuiLink.detail ?? ""} (re-run install or build)`);
+    } else if (path.resolve(configDir, "plugins", tuiLink.detail ?? "") !== expectedTui) {
       problems.push(`tui symlink points at ${tuiLink.detail ?? ""}, expected ${expectedTui}`);
     }
   } else if (tuiLink.state === "file") {

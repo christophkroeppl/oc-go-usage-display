@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Install (or re-install) the plugin from this repo into ~/.config/opencode:
-// symlinks src/* -> plugins/* by default (--copy to copy instead),
-// then registers the opencode.jsonc + tui.json entries (toggles preserved).
+// symlinks dist/plugins/* (bundled, self-contained) -> plugins/* by default
+// (--copy to copy instead), then registers the opencode.jsonc + tui.json
+// entries (toggles preserved). Run `npm run build` first so dist/plugins/*
+// exists (pretest/publish build it automatically).
 
 import {
   ensureServerEntry,

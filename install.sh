@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install oc-go-usage-display from this repo (local, no network required).
-# Symlinks src/* into ~/.config/opencode/plugins/* and registers the
+# Symlinks dist/plugins/* (bundled, self-contained) into
+# ~/.config/opencode/plugins/* and registers the
 # opencode.jsonc + tui.json entries (existing toggles are preserved).
 #
 # Usage:

@@ -2,10 +2,13 @@
 
 [![npm version](https://img.shields.io/npm/v/oc-go-usage-display.svg)](https://www.npmjs.com/package/oc-go-usage-display)
 
-OpenCode Go subscription usage plugin (dual target):
+OpenCode Go subscription usage plugin (dual target, bundled self-contained):
 
-- **server** (`src/index.ts`): `go_usage` tool (manual query: `Go 5h … | 7d … | 30d …`).
-- **tui** (`src/tui.tsx`): `Go Usage` sidebar block (muted `5h`/`7d`/`30d` rows) + `session_prompt_right` statusline.
+- **server** (`src/index.ts` → `dist/plugins/oc-go-usage-display.ts`): `go_usage` tool (manual query: `Go 5h … | 7d … | 30d …`).
+- **tui** (`src/tui.tsx` → `dist/plugins/oc-go-usage-display.tsx`): `Go Usage` sidebar block (muted `5h`/`7d`/`30d` rows) + `session_prompt_right` statusline.
+
+Only these two bundled files are installed (`shared.ts` is inlined at
+build time, so no shared file is deployed).
 
 ![Go Usage sidebar and statusline showing 5h, 7d, and 30d subscription usage](docs/screenshot.png)
 
@@ -22,7 +25,8 @@ Or one-shot without installing:
 npx -y oc-go-usage-display@latest oc-go-usage-display-init
 ```
 
-This links `src/*` into `~/.config/opencode/plugins/*` and registers the
+This links `dist/plugins/*` (bundled, self-contained: `shared.ts` inlined,
+no shared file) into `~/.config/opencode/plugins/*` and registers the
 `opencode.jsonc` + `tui.json` entries. Restart opencode afterwards.
 No secrets are touched. Requires Node >= 22.
 
@@ -34,9 +38,12 @@ No secrets are touched. Requires Node >= 22.
 | Project | `npx oc-go-usage-display-init --scope project` (or manual: `.opencode/plugins/*` + `opencode.json`/`tui.json` in repo) | Repo-local `.opencode/` + `opencode.json`/`tui.json` | Restart opencode afterwards |
 | Bun | `bunx oc-go-usage-display-init` + `bunx oc-go-usage-display-show` | Same as global (`~/.config/opencode/…`) | `show` prints effective config (secrets redacted) |
 
-Project-scope manual fallback: copy `src/index.ts` → `.opencode/plugins/oc-go-usage-display.ts`
-and `src/tui.tsx` → `.opencode/plugins/oc-go-usage-display.tsx`, then register the
+Project-scope manual fallback: copy `dist/plugins/oc-go-usage-display.ts`
+→ `.opencode/plugins/oc-go-usage-display.ts`
+and `dist/plugins/oc-go-usage-display.tsx` → `.opencode/plugins/oc-go-usage-display.tsx`, then register the
 `opencode.json` (server) + `tui.json` (TUI) entries from the manual section below.
+(Build first with `npm run build`; the `dist/plugins/*` files are
+self-contained — no shared file needed.)
 
 ## Install (manual plugin entries)
 
@@ -68,9 +75,9 @@ provider so `auth.json` supplies the key.
 ./install.sh
 ```
 
-This symlinks `src/*` into `~/.config/opencode/plugins/*` and registers the
-`opencode.jsonc` + `tui.json` entries. Edits in this repo apply after an
-opencode restart. No secrets are touched.
+This symlinks `dist/plugins/*` (bundled, self-contained) into `~/.config/opencode/plugins/*` and registers the
+`opencode.jsonc` + `tui.json` entries. Edits in this repo apply after
+`npm run build` plus an opencode restart. No secrets are touched.
 
 ## Commands
 
@@ -103,7 +110,7 @@ Entries are managed as JSON; existing comments in
 `opencode.jsonc`/`tui.json` may be normalized to plain JSON on write.
 No-op removals skip the write so comments are preserved when nothing changes.
 
-Manual file list (global scope):
+Manual file list (global scope, bundled self-contained — no shared file):
 
 - `~/.config/opencode/plugins/oc-go-usage-display.ts`
 - `~/.config/opencode/plugins/oc-go-usage-display.tsx`
@@ -132,7 +139,7 @@ toggles are absent. Restart opencode after changing them.
 
 ```sh
 npm install
-npm run build   # tsc -> dist/
+npm run build   # tsc -> dist/ + esbuild -> dist/plugins/* (self-contained)
 npm run check   # typecheck only
 ```
 

@@ -51,6 +51,18 @@ function mkTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "oc-go-usage-display-test-"));
 }
 
+// Deployed plugin files are bundled self-contained: shared.ts is inlined,
+// so no relative `./shared` import may remain and the entry markers must be
+// present (proves the shared helpers resolved into the bundle).
+function assertDeployedSelfContained(pluginsDir, fileName, marker) {
+  const content = fs.readFileSync(path.join(pluginsDir, fileName), "utf8");
+  assert.ok(!content.includes('from "./shared'), `${fileName} must not import from "./shared"`);
+  assert.ok(!content.includes("from './shared"), `${fileName} must not import from './shared'`);
+  assert.ok(!content.includes('from "./'), `${fileName} must have no relative imports`);
+  assert.ok(!content.includes("from './"), `${fileName} must have no relative imports`);
+  assert.ok(content.includes(marker), `${fileName} must contain ${marker}`);
+}
+
 // --- parseBooleanFlag (dist/tui.js) ---
 
 test("parseBooleanFlag passes booleans through", () => {
@@ -311,6 +323,8 @@ test("removePluginFiles removes a symlink install and reruns idempotently", () =
     linkPluginFiles(REPO_DIR, dir, "symlink");
     assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.ts")).isSymbolicLink(), true);
     assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.tsx")).isSymbolicLink(), true);
+    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.ts", "go_usage");
+    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.tsx", "sidebar_content");
     const first = removePluginFiles(dir);
     assert.deepStrictEqual([...first.removed].sort(), [
       "oc-go-usage-display.ts",
@@ -331,6 +345,8 @@ test("removePluginFiles removes a copy (file) install and reruns idempotently", 
     linkPluginFiles(REPO_DIR, dir, "copy");
     assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.ts")).isFile(), true);
     assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.tsx")).isFile(), true);
+    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.ts", "go_usage");
+    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.tsx", "sidebar_content");
     const first = removePluginFiles(dir);
     assert.deepStrictEqual([...first.removed].sort(), [
       "oc-go-usage-display.ts",

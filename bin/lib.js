@@ -149,12 +149,14 @@ export function writeJsonFile(filePath, value) {
 export function linkPluginFiles(repoDir, configDir, mode) {
   const pluginsDir = path.join(configDir, "plugins");
   fs.mkdirSync(pluginsDir, { recursive: true });
+  // Bundled self-contained outputs (no `./shared` import, no shared file):
+  // `npm run build` produces dist/plugins/*, which is what gets installed.
   const pairs = [
-    [path.join(repoDir, "src", "index.ts"), path.join(pluginsDir, SERVER_FILE_NAME)],
-    [path.join(repoDir, "src", "tui.tsx"), path.join(pluginsDir, TUI_FILE_NAME)],
+    [path.join(repoDir, "dist", "plugins", SERVER_FILE_NAME), path.join(pluginsDir, SERVER_FILE_NAME)],
+    [path.join(repoDir, "dist", "plugins", TUI_FILE_NAME), path.join(pluginsDir, TUI_FILE_NAME)],
   ];
   for (const [source, target] of pairs) {
-    if (!fs.existsSync(source)) fail(`repo source missing: ${source}`);
+    if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run npm run build)`);
     if (mode === "copy") {
       const stat = safeLstat(target);
       if (stat?.isSymbolicLink() || stat?.isFile()) fs.rmSync(target, { force: true });
@@ -190,6 +192,17 @@ export function describeLink(target) {
   if (stat.isSymbolicLink()) return { state: "symlink", detail: safeReadlink(target) };
   if (stat.isFile()) return { state: "file", detail: null };
   return { state: "other", detail: null };
+}
+
+export function isDanglingSymlink(target) {
+  const stat = safeLstat(target);
+  if (stat === null || !stat.isSymbolicLink()) return false;
+  try {
+    fs.statSync(target);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export function ensureServerEntry(configDir, { create = true } = {}) {

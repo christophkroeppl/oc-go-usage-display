@@ -62,6 +62,149 @@ jobs:
       - name: Test
         run: npm test
 
+  install-from-tarball:
+    name: install-from-tarball (npx ephemeral + explicit --repo)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack + assert tarball contents
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tarball"
+          npm pack --pack-destination "$RUNNER_TEMP/tarball"
+          TARBALL=""
+          for candidate in "$RUNNER_TEMP"/tarball/*.tgz; do
+            TARBALL="$candidate"
+            break
+          done
+          test -n "$TARBALL" || { echo "FAIL: no tarball produced" >&2; exit 1; }
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          echo "tarball: $TARBALL"
+          tar -tzf "$TARBALL" | sort | tee "$RUNNER_TEMP/tarlist.txt"
+          # NOTE: grep the saved list file — `tar | grep -q` under pipefail
+          # reports SIGPIPE (141) as failure because grep -q closes early.
+          for entry in \
+            "package/dist/shared.js" \
+            "package/dist/index.js" \
+            "package/dist/tui.js" \
+            "package/bin/oc-go-usage-display-init.js" \
+            "package/src/shared.ts"; do
+            grep -Fxq "$entry" "$RUNNER_TEMP/tarlist.txt" \
+              || { echo "FAIL: tarball missing $entry" >&2; exit 1; }
+          done
+          echo "PASS: tarball contents OK"
+
+      - name: Install from tarball via npm exec + assert (isolated, no secrets)
+        run: |
+          set -euo pipefail
+          TARBALL=""
+          for candidate in "$RUNNER_TEMP"/tarball/*.tgz; do
+            TARBALL="$candidate"
+            break
+          done
+          test -n "$TARBALL" || { echo "FAIL: no tarball found" >&2; exit 1; }
+          echo "tarball: $TARBALL"
+          export HOME="$RUNNER_TEMP/home"
+          export XDG_DATA_HOME="$RUNNER_TEMP/xdg"
+          export OPENCODE_GO_MOCK=1
+          mkdir -p "$HOME" "$XDG_DATA_HOME"
+          mkdir -p "$RUNNER_TEMP/npm-cache-a" "$RUNNER_TEMP/npm-cache-b"
+          mkdir -p "$RUNNER_TEMP/config-a" "$RUNNER_TEMP/config-b" "$RUNNER_TEMP/extract"
+          tar -xzf "$TARBALL" -C "$RUNNER_TEMP/extract"
+          # Bare extract has no node_modules (peer dep is external): syntax-check
+          # here; full runtime import is proven against the ephemeral extract
+          # below and the local build.
+          node --check "$RUNNER_TEMP/extract/package/dist/index.js"
+          echo "tarball dist/index.js syntax OK"
+          node --input-type=module -e "await import(process.argv[1])" "$GITHUB_WORKSPACE/dist/index.js"
+          echo "local dist/index.js imports OK"
+          # NOTE: only the installs run via `npm exec` (one per case, each with
+          # its own fresh npm cache). Show/status run via `node` with an
+          # explicit --repo pointing at the same repo the install used
+          # (discovered through the installed symlink for the ephemeral case).
+
+          echo "--- case A: WITHOUT --repo (ephemeral _npx extract, primary) ---"
+          export npm_config_cache="$RUNNER_TEMP/npm-cache-a"
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/config-a"
+          npm exec --yes --package "$TARBALL" -- oc-go-usage-display-init --config-dir "$RUNNER_TEMP/config-a"
+          if grep -R -F 'from "./shared' "$RUNNER_TEMP/config-a/plugins" 2>/dev/null; then
+            echo "FAIL: deployed plugins still import from \"./shared\" (not bundled)" >&2; exit 1;
+          fi
+          if grep -R -F "from './shared" "$RUNNER_TEMP/config-a/plugins" 2>/dev/null; then
+            echo "FAIL: deployed plugins still import from './shared' (not bundled)" >&2; exit 1;
+          fi
+          if grep -R -F 'from "./' "$RUNNER_TEMP/config-a/plugins" 2>/dev/null; then
+            echo "FAIL: deployed plugins contain relative imports (not bundled)" >&2; exit 1;
+          fi
+          if grep -R -F "from './" "$RUNNER_TEMP/config-a/plugins" 2>/dev/null; then
+            echo "FAIL: deployed plugins contain relative imports (not bundled)" >&2; exit 1;
+          fi
+          grep -q "go_usage" "$RUNNER_TEMP/config-a/plugins/oc-go-usage-display.ts" \
+            || { echo "FAIL: server bundle missing go_usage marker" >&2; exit 1; }
+          grep -q "sidebar_content" "$RUNNER_TEMP/config-a/plugins/oc-go-usage-display.tsx" \
+            || { echo "FAIL: tui bundle missing sidebar_content marker" >&2; exit 1; }
+          # Resolve the ephemeral repo path at runtime (no hardcoded _npx hash):
+          EPH_LINK="$(readlink -f "$RUNNER_TEMP/config-a/plugins/oc-go-usage-display.ts")"
+          EPH_REPO="$(dirname "$(dirname "$(dirname "$EPH_LINK")")")"
+          echo "ephemeral repo: $EPH_REPO"
+          node --input-type=module -e "await import(process.argv[1])" "$EPH_REPO/dist/index.js"
+          test -z "$(find "$RUNNER_TEMP/config-a" -xtype l -print -quit 2>/dev/null || true)" \
+            || { echo "FAIL: dangling symlinks in config-a:" >&2; find "$RUNNER_TEMP/config-a" -xtype l -print >&2; exit 1; }
+          node "$EPH_REPO/bin/oc-go-usage-display-show.js" --repo "$EPH_REPO" --config-dir "$RUNNER_TEMP/config-a" --json \
+            >"$RUNNER_TEMP/show-a.json"
+          cat "$RUNNER_TEMP/show-a.json"
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const report = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'show-a.json'), 'utf8'));
+            const assert = require('node:assert/strict');
+            assert.equal(report.server.entry, true, 'server entry must be true');
+            assert.equal(report.tui.entry, true, 'tui entry must be true');
+            console.log('PASS: show --json entries true (case A)');
+          "
+          node "$EPH_REPO/bin/oc-go-usage-display-status.js" --repo "$EPH_REPO" --config-dir "$RUNNER_TEMP/config-a"
+          echo "PASS: case A (ephemeral, no --repo)"
+
+          echo "--- case B: WITH explicit --repo ---"
+          export npm_config_cache="$RUNNER_TEMP/npm-cache-b"
+          export OPENCODE_CONFIG_DIR="$RUNNER_TEMP/config-b"
+          npm exec --yes --package "$TARBALL" -- oc-go-usage-display-init --repo "$GITHUB_WORKSPACE" --config-dir "$RUNNER_TEMP/config-b"
+          if grep -R -F 'from "./shared' "$RUNNER_TEMP/config-b/plugins" 2>/dev/null; then
+            echo "FAIL: case B plugins still import from \"./shared\"" >&2; exit 1;
+          fi
+          test -z "$(find "$RUNNER_TEMP/config-b" -xtype l -print -quit 2>/dev/null || true)" \
+            || { echo "FAIL: dangling symlinks in config-b" >&2; exit 1; }
+          node "$GITHUB_WORKSPACE/bin/oc-go-usage-display-show.js" --repo "$GITHUB_WORKSPACE" --config-dir "$RUNNER_TEMP/config-b" --json \
+            >"$RUNNER_TEMP/show-b.json"
+          cat "$RUNNER_TEMP/show-b.json"
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const report = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'show-b.json'), 'utf8'));
+            const assert = require('node:assert/strict');
+            assert.equal(report.server.entry, true, 'server entry must be true (case B)');
+            assert.equal(report.tui.entry, true, 'tui entry must be true (case B)');
+            console.log('PASS: show --json entries true (case B)');
+          "
+          node "$GITHUB_WORKSPACE/bin/oc-go-usage-display-status.js" --repo "$GITHUB_WORKSPACE" --config-dir "$RUNNER_TEMP/config-b"
+          echo "PASS: case B (explicit --repo)"
+          echo "ALL NPX INSTALL CHECKS PASS"
+
   format-check:
     name: format-check (usage API shape)
     runs-on: ubuntu-latest
