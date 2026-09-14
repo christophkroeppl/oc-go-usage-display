@@ -12,31 +12,52 @@ build time, so no shared file is deployed).
 
 ![Go Usage sidebar and statusline showing 5h, 7d, and 30d subscription usage](docs/screenshot.png)
 
-## Install (npm)
+## Install (npm, durable)
 
 ```sh
-npm install oc-go-usage-display
-npx oc-go-usage-display-init
+npm install oc-go-usage-display@1.1.0
+npx oc-go-usage-display-init --copy
 ```
 
-Or one-shot without installing:
+Or declare the versioned package in config (no files to copy —
+opencode installs via Bun at startup, cached in `~/.cache/opencode`):
 
-```sh
-npx -y oc-go-usage-display@latest oc-go-usage-display-init
+```jsonc
+// opencode.jsonc — server target (go_usage tool)
+{
+  "plugin": ["oc-go-usage-display@1.1.0"]
+}
 ```
 
-This links `dist/plugins/*` (bundled, self-contained: `shared.ts` inlined,
+```jsonc
+// tui.json — TUI target (Go Usage sidebar + statusline)
+{
+  "plugin": [["oc-go-usage-display@1.1.0", { "sidebar": true, "statusline": true }]]
+}
+```
+
+This copies `dist/plugins/*` (bundled, self-contained: `shared.ts` inlined,
 no shared file) into `~/.config/opencode/plugins/*` and registers the
 `opencode.jsonc` + `tui.json` entries. Restart opencode afterwards.
-No secrets are touched. Requires Node >= 22.
+No secrets are touched. Requires Node >= 22. Pin the version (`@1.1.0`,
+not `@latest`) so installs stay reproducible.
+
+Do not use a `bunx -y oc-go-usage-display@latest ... init` one-shot:
+`bunx`/`npx` extracts to an ephemeral `/tmp/bunx-*` / `/tmp/_npx` dir that
+dangles on reboot/GC. The installer rejects ephemeral sources with
+`ephemeral source <path> - re-run with --repo <durable-path> or npm install + --copy`.
+When run via `bunx`/`npx` without a local install, pass
+`--repo <durable-path>` pointing at a durable checkout or installed package.
+`--symlink` is dev-only (repo edits apply after `npm run build` + restart);
+prod installs must use `--copy` (the default).
 
 ## Installation scope
 
 | Scope | Command | Writes to | Notes |
 | ----- | ------- | --------- | ----- |
-| Global | `npx oc-go-usage-display-init` (or `bunx oc-go-usage-display-init`) | `~/.config/opencode/plugins/*` + `opencode.jsonc` + `tui.json` | Restart opencode afterwards |
-| Project | `npx oc-go-usage-display-init --scope project` (or manual: `.opencode/plugins/*` + `opencode.json`/`tui.json` in repo) | Repo-local `.opencode/` + `opencode.json`/`tui.json` | Restart opencode afterwards |
-| Bun | `bunx oc-go-usage-display-init` + `bunx oc-go-usage-display-show` | Same as global (`~/.config/opencode/…`) | `show` prints effective config (secrets redacted) |
+| Global | `npx oc-go-usage-display-init --copy` | `~/.config/opencode/plugins/*` + `opencode.jsonc` + `tui.json` | Copy (default, durable); restart opencode afterwards |
+| Project | `npx oc-go-usage-display-init --copy --config-dir .opencode` (or manual: `.opencode/plugins/*` + `opencode.json`/`tui.json` in repo) | Repo-local `.opencode/` + `opencode.json`/`tui.json` | Restart opencode afterwards |
+| Bun | `bunx oc-go-usage-display-init --copy --repo <durable-path>` + `bunx oc-go-usage-display-show` | Same as global (`~/.config/opencode/…`) | `--repo` required via bunx (ephemeral `/tmp/bunx-*` rejected); `show` prints effective config (secrets redacted) |
 
 Project-scope manual fallback: copy `dist/plugins/oc-go-usage-display.ts`
 → `.opencode/plugins/oc-go-usage-display.ts`
@@ -75,9 +96,10 @@ provider so `auth.json` supplies the key.
 ./install.sh
 ```
 
-This symlinks `dist/plugins/*` (bundled, self-contained) into `~/.config/opencode/plugins/*` and registers the
-`opencode.jsonc` + `tui.json` entries. Edits in this repo apply after
-`npm run build` plus an opencode restart. No secrets are touched.
+This copies `dist/plugins/*` (bundled, self-contained) into `~/.config/opencode/plugins/*` and registers the
+`opencode.jsonc` + `tui.json` entries. Use `./install.sh --symlink` for
+dev-only symlink installs (edits in this repo apply after
+`npm run build` plus an opencode restart). No secrets are touched.
 
 ## Commands
 

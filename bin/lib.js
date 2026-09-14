@@ -13,6 +13,7 @@ export const SERVER_FILE_NAME = "oc-go-usage-display.ts";
 export const TUI_FILE_NAME = "oc-go-usage-display.tsx";
 
 export function fail(message) {
+  if (message.startsWith("oc-go-usage-display: ")) throw new Error(message);
   throw new Error(`oc-go-usage-display: ${message}`);
 }
 
@@ -32,9 +33,29 @@ export function openCodeDirFromArgv(argv) {
 }
 
 export function linkModeFromArgv(argv) {
-  if (argv.includes("--copy")) return "copy";
   if (argv.includes("--symlink")) return "symlink";
-  return "symlink";
+  if (argv.includes("--copy")) return "copy";
+  return "copy";
+}
+
+export function isEphemeralRepoDir(repoDir) {
+  const resolved = path.resolve(repoDir);
+  if (resolved.startsWith("/tmp/bunx-") || resolved.startsWith("/tmp/_npx")) return true;
+  const candidates = [process.env.TMPDIR, process.env.TEMP, process.env.TMP, os.tmpdir(), "/tmp"];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed.length === 0) continue;
+    const normalized = path.resolve(trimmed);
+    if (resolved === normalized || resolved.startsWith(`${normalized}${path.sep}`)) return true;
+  }
+  return false;
+}
+
+export function assertDurableRepoDir(repoDir) {
+  if (isEphemeralRepoDir(repoDir)) {
+    fail(`ephemeral source ${repoDir} - re-run with --repo <durable-path> or npm install + --copy`);
+  }
 }
 
 export function readFlag(argv, name) {
@@ -147,6 +168,10 @@ export function writeJsonFile(filePath, value) {
 }
 
 export function linkPluginFiles(repoDir, configDir, mode) {
+  assertDurableRepoDir(repoDir);
+  if (mode === "symlink" && isEphemeralRepoDir(repoDir)) {
+    fail(`ephemeral source ${repoDir} - re-run with --repo <durable-path> or npm install + --copy`);
+  }
   const pluginsDir = path.join(configDir, "plugins");
   fs.mkdirSync(pluginsDir, { recursive: true });
   // Bundled self-contained outputs (no `./shared` import, no shared file):
