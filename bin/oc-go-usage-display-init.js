@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // Install (or re-install) the plugin from this repo into ~/.config/opencode:
 // copies dist/plugins/* (bundled, self-contained) -> plugins/* by default
-// (--symlink is dev-only: edits apply after restart but dangle if the repo
-// moves; never used from ephemeral /tmp sources). Then registers the
-// opencode.jsonc + tui.json entries (toggles preserved). Run `npm run build`
-// first so dist/plugins/* exists (pretest/publish build it automatically).
-// Durable flows:
+// (--symlink is dev-only: edits apply after restart but dangle if the source
+// tree moves). Then registers the opencode.jsonc + tui.json entries (toggles
+// preserved). Run `npm run build` first so dist/plugins/* exists
+// (pretest/publish build it automatically).
+// Supported flows:
 //   npm install oc-go-usage-display@1.1.0 && npx oc-go-usage-display-init --copy
 //   (or declare "plugin": ["oc-go-usage-display@1.1.0"] in config instead).
-// When run via bunx/npx without an install, --repo <durable-path> is
-// required (ephemeral /tmp/bunx-*/_npx sources are rejected).
+//   npx -p oc-go-usage-display oc-go-usage-display-init --copy  (one-shot from the package cache)
+//   bunx -p oc-go-usage-display oc-go-usage-display-init --copy  (same, via Bun)
+// Any source path is accepted; --repo only overrides the default repo root.
 
 import {
   ensureServerEntry,

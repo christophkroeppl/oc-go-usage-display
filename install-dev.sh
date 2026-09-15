@@ -169,25 +169,24 @@ resolve_abs() {
   fi
 }
 
-# Mirror bin/lib.js assertDurableRepoDir: refuse ephemeral /tmp sources.
-assertDurableRepoDir() {
+# Last line of defense for --clean/--force: never `rm -rf` a shared or
+# system root. Complements the argument guards below.
+assert_safe_clean_target() {
   local resolved="$1"
-  local candidates=("/tmp")
-  if [[ -n "${TMPDIR:-}" ]]; then
-    candidates+=("$TMPDIR")
+  local refused=("" "/" "//" "/tmp" "$(resolve_abs "${TMPDIR:-${TMP:-/tmp}}")")
+  if [[ -n "${HOME:-}" ]]; then
+    refused+=("$(resolve_abs "$HOME")")
   fi
-  for candidate in "${candidates[@]}"; do
-    local base
-    base="$(resolve_abs "$candidate")"
-    if [[ "$resolved" == "$base" || "$resolved" == "$base"/* ]]; then
-      echo "error: refusing ephemeral dir under $base: $1" >&2
+  refused+=("$(resolve_abs ".")")
+  for target in "${refused[@]}"; do
+    if [[ "$resolved" == "$target" ]]; then
+      echo "error: refusing to remove unsafe directory '$resolved' (choose a dedicated subdir like ./tmp-dev)" >&2
       exit 1
     fi
   done
 }
 
 RESOLVED_DIR="$(resolve_abs "$DIR")"
-assertDurableRepoDir "$RESOLVED_DIR"
 
 # Refuse destructive targets for --force/--clean (rm -rf safety).
 if [[ -z "$RESOLVED_DIR" || "$RESOLVED_DIR" == "/" || "$RESOLVED_DIR" == "//" ]]; then
@@ -205,6 +204,7 @@ fi
 
 if [[ -d "$DIR" && -n "$(ls -A "$DIR" 2>/dev/null || true)" ]]; then
   if [[ "$CLEAN" == "1" || "$FORCE" == "1" ]]; then
+    assert_safe_clean_target "$RESOLVED_DIR"
     echo "cleaning existing dir $DIR"
     rm -rf "$DIR"
   else

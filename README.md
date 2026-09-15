@@ -12,7 +12,7 @@ build time, so no shared file is deployed).
 
 ![Go Usage sidebar and statusline showing 5h, 7d, and 30d subscription usage](docs/screenshot.png)
 
-## Install (npm, durable)
+## Install (npm)
 
 ```sh
 npm install oc-go-usage-display@1.1.0
@@ -42,22 +42,32 @@ no shared file) into `~/.config/opencode/plugins/*` and registers the
 No secrets are touched. Requires Node >= 22. Pin the version (`@1.1.0`,
 not `@latest`) so installs stay reproducible.
 
-Do not use a `bunx -y oc-go-usage-display@latest ... init` one-shot:
-`bunx`/`npx` extracts to an ephemeral `/tmp/bunx-*` / `/tmp/_npx` dir that
-dangles on reboot/GC. The installer rejects ephemeral sources with
-`ephemeral source <path> - re-run with --repo <durable-path> or npm install + --copy`.
-When run via `bunx`/`npx` without a local install, pass
-`--repo <durable-path>` pointing at a durable checkout or installed package.
-`--symlink` is dev-only (repo edits apply after `npm run build` + restart);
-prod installs must use `--copy` (the default).
+A `bunx`/`npx` one-shot install is supported. The package name differs from
+the bin names, so select the package explicitly:
+
+```sh
+npx -p oc-go-usage-display oc-go-usage-display-init --copy
+bunx -p oc-go-usage-display oc-go-usage-display-init --copy
+```
+
+(`npx -p oc-go-usage-display oc-go-usage-display-init` is equivalent to
+`npm exec --yes --package oc-go-usage-display -- oc-go-usage-display-init`.)
+
+The package manager extracts the tarball into its own cache and the
+installer copies the bundled plugins out of it. Because `--copy` is the
+default, the installed files are self-contained and keep working after the
+package-manager cache is pruned. `--symlink` is dev-only: it points at the
+extracted source tree, so it dangles if that tree moves or the cache is
+cleaned (repo edits apply after `npm run build` + restart). Prefer `--copy`
+for any install you want to keep.
 
 ## Installation scope
 
 | Scope | Command | Writes to | Notes |
 | ----- | ------- | --------- | ----- |
-| Global | `npx oc-go-usage-display-init --copy` | `~/.config/opencode/plugins/*` + `opencode.jsonc` + `tui.json` | Copy (default, durable); restart opencode afterwards |
+| Global | `npx oc-go-usage-display-init --copy` | `~/.config/opencode/plugins/*` + `opencode.jsonc` + `tui.json` | Copy (default, self-contained); restart opencode afterwards |
 | Project | `npx oc-go-usage-display-init --copy --config-dir .opencode` (or manual: `.opencode/plugins/*` + `opencode.json`/`tui.json` in repo) | Repo-local `.opencode/` + `opencode.json`/`tui.json` | Restart opencode afterwards |
-| Bun | `bunx oc-go-usage-display-init --copy --repo <durable-path>` + `bunx oc-go-usage-display-show` | Same as global (`~/.config/opencode/…`) | `--repo` required via bunx (ephemeral `/tmp/bunx-*` rejected); `show` prints effective config (secrets redacted) |
+| Bun | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy` + `bunx -p oc-go-usage-display oc-go-usage-display-show` | Same as global (`~/.config/opencode/…`) | One-shot bunx supported; copy (default) keeps installed files independent of the bunx cache; `show` prints effective config (secrets redacted) |
 
 Project-scope manual fallback: copy `dist/plugins/oc-go-usage-display.ts`
 → `.opencode/plugins/oc-go-usage-display.ts`

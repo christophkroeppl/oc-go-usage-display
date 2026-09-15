@@ -5,7 +5,7 @@
 # opencode.jsonc + tui.json entries (existing toggles are preserved).
 #
 # Usage:
-#   ./install.sh                  # copy (default, durable for prod)
+#   ./install.sh                  # copy (default, self-contained; preferred for prod)
 #   ./install.sh --symlink        # symlink (dev-only; repo edits apply after restart)
 #   ./install.sh --sidebar=0 --statusline=1
 #
