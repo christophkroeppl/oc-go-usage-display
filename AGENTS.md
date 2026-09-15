@@ -10,7 +10,7 @@ Format: `type(scope): subject`
 
 - `type` is required — never commit without a `type` (never empty type).
 - `scope` is required for `sidebar`, `statusline`, `server`, `ci`, `docs` changes. `release` scope is reserved for the pipeline (see Versioning).
-- Known scopes: `sidebar`, `statusline`, `server`, `ci`, `docs`, `release`.
+- Scopes in use (non-exhaustive): `server`, `tui`, `sidebar`, `statusline`, `plugin`, `bin`, `test`, `ci`, `docs`, `release`.
 - Keep subject imperative, lowercase, no trailing period.
 
 Examples for this repo:
@@ -18,13 +18,32 @@ Examples for this repo:
 - `feat(sidebar): add weekly usage row`
 - `fix(statusline): handle missing percent`
 - `feat!: drop node 18 support`
-- `fix(server): redact api key in show output`
+- `fix(plugin): keep the loader contract on stray exports`
+- `fix(bin): report stale copy installs as note without failing`
 - `chore(ci): tighten test gate`
 - `docs: clarify tui toggles`
 
 A non-conventional message defaults to patch and may mistrigger versioning — so format correctly.
 
-## 2. Versioning
+## 2. Architecture
+
+Two targets, both derived from `src/`, both deployed as self-contained bundles:
+
+- **server** — `src/index.ts` -> `dist/index.js` / bundle `dist/plugins/oc-go-usage-display.ts`. Registers only the `go_usage` tool (manual query, JSON + one-line summary); no TUI surface.
+- **tui** — `src/tui.tsx` -> `dist/tui.js` / bundle `dist/plugins/oc-go-usage-display.tsx`. Registers additive `sidebar_content` + `session_prompt_right` multi-render slots, toggles, and 60s polling; never a `single_winner` slot.
+- **shared** — `src/shared.ts` (auth.json, tolerant API payload parsing, snapshot builders) and `src/helpers.ts` (formatting, display-mode parsing, file config) are inlined into both bundles, so `dist/plugins/*` have no relative imports.
+
+Install surfaces: the `bin/` CLIs (`oc-go-usage-display-{init,remove,show,status,update}`), the package `exports` (`./server`, `./tui`), `install.sh` (checkout install), and `install-dev.sh` (CI dev-tarball install). See README for the user-facing flows.
+
+Data flow: `OPENCODE_GO_MOCK=1` -> `OPENCODE_GO_API_KEY` -> `auth.json` -> workspaceId + authCookie (env or `oc-go-usage-display.json`) -> unavailable snapshot. API-key path uses `GET https://opencode.ai/zen/go/v1/usage` as Bearer; cookie path scrapes the workspace page. Snapshots cache 60s (memory + `oc-go-usage-display-cache.json`); failures never poison the cache and secrets are never logged.
+
+Invariants (see `.opencode/skills/plugin-contract`):
+
+- Each entry module exports exactly one thing: the default `{ id, server | tui }` module. Extra function exports are invoked by the loader as plugin factories and can crash startup.
+- Importing an entry never throws; factories and slot renders are fail-safe, so OpenCode always starts.
+- Tests never touch the developer's real `~/.config/opencode` or credentials (see `.opencode/skills/testing-and-dev-install`).
+
+## 3. Versioning
 
 Bump mapping (pipeline `version-bump` in `publish.yml` parses `git log <lastTag>..HEAD`):
 
@@ -45,22 +64,31 @@ Release commit format:
 - `chore(release): X.Y.Z` (written by the pipeline, no skip trailer).
 - Intentionally contains NO `[skip ci]` — GitHub suppresses tag-push runs for commits carrying it, so the release would be cut but never published. The loop guard matches the `chore(release):` prefix instead.
 
-## 3. CI
+## 4. CI
 
-Two workflows:
+Three workflows:
 
 - `test.yml` (`test`): runs on `push` + `pull_request` + weekly schedule (Mondays 06:00 UTC).
-  - `unit`: always runs (no secrets needed) — `npm ci`, `npm run check`, `npm run build`, `npm test` on Node 22.
-  - `format-check`: validates the live usage JSON shape (`rolling` / `weekly` / `monthly` with numeric `percent` + optional string `status`). Skips neutral (exit 0) when `OPENCODE_GO_API_KEY` is absent or when the API returns no usable windows (no subscription); still fails on malformed JSON or a missing percent within a present window.
-  - `tui-screenshot`: best-effort headless check — installs deps, builds (`npm run check` + `npm run build`), installs the plugin in an isolated config, compares `show --json` output to a direct API fetch. Pixel/TUI steps are `continue-on-error` with redacted output; the authoritative signal is health check + percent match.
-- `publish.yml` test gate (`test` job inside `publish.yml`): rebuilds + retests the exact ref being released (`npm ci`, `npm run check`, `npm run build`, `npm test --if-present`).
+  - `unit`: always runs (no secrets needed) — `npm ci`, `npm run check`, `npm test` on Node 22.
+  - `container-e2e`: authoritative end-to-end gate — `docker compose run --rm --build test` builds the root Dockerfile and runs `opencode --version && npm ci && npm run check && npm test && npm run test:e2e` against the baked-in checkout (no bind mount, hermetic tmp HOME/XDG).
+  - `format-check`: secret-gated live usage-shape check (`OPENCODE_GO_API_KEY`). Skips neutral (exit 0) when the key is absent or when the API returns no usable windows (no subscription); still fails on malformed JSON or a missing percent within a present window.
+- `dev-build.yml` (`dev-build`): runs on `push` to `develop` + manual dispatch. `npm ci`, `npm run check`, `npm test`, then `npm pack` uploads the `dev-tgz` artifact (90-day retention). `install-dev.sh` consumes it.
+- `publish.yml` (`publish`): `test` gate -> `version-bump` -> `publish` (OIDC provenance). Rebuilds + retests the exact ref being released.
 
 What must pass:
 
 - `test` must pass before `version-bump`; `publish` runs only after bump (tag push re-enters workflow).
 - A force-pushed tag can never publish broken code because the gate rebuilds the release ref.
 
-## 4. Action publishing
+## 5. Testing
+
+- `npm test` builds, then runs unit + integration (`node:test`).
+- `npm run test:unit` / `npm run test:integration` skip the build — run `npm run build` first (or use `npm test`).
+- `npm run test:e2e` needs the `opencode` binary and a prior build; it skips cleanly without the binary. It boots a real `opencode serve` in an isolated tmp root and asserts `go_usage` is registered.
+- `docker compose run --rm --build test` is the isolation boundary and the authoritative gate; the devcontainer (`.devcontainer/`) uses the same image with a bind mount.
+- Hermeticity is mandatory: never point a plugin test at the real config. `test/helpers/run.js` redirects HOME/XDG/`OPENCODE_CONFIG_DIR` into a tmp root, forces `OPENCODE_GO_MOCK=1`, and strips credentials; the e2e tier additionally fails if `opencode debug paths` escapes the tmp root.
+
+## 6. Action publishing
 
 - Branch pushes never publish. Only tag pushes (`v*`) and manual dispatches reach the `publish` job — each version publishes exactly once.
 - Triggers in `publish.yml`:
