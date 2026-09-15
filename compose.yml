@@ -1,0 +1,15 @@
+# Containerized test entrypoint.
+#
+#   docker compose run --rm --build test
+#
+# Builds the root Dockerfile, mounts the repo at WORKDIR, and runs the full
+# gate (typecheck + build + unit + integration + e2e) inside the container.
+# The harness redirects HOME/XDG/opencode paths into tmp dirs, so the real
+# host ~/.config/opencode and ~/.opencode are never mounted or read.
+services:
+  test:
+    build: .
+    working_dir: /workspaces/oc-go-usage-display
+    volumes:
+      - .:/workspaces/oc-go-usage-display
+    command: sh -lc "npm ci && npm run check && npm test && npm run test:e2e"
