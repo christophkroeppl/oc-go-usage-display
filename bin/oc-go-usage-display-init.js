@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 // Install (or re-install) the plugin from this repo into ~/.config/opencode:
-// symlinks src/* -> plugins/* by default (--copy to copy instead),
-// then registers the opencode.jsonc + tui.json entries (toggles preserved).
+// copies dist/plugins/* (bundled, self-contained) -> plugins/* by default
+// (--symlink is dev-only: edits apply after restart but dangle if the source
+// tree moves). Then registers the opencode.jsonc + tui.json entries (toggles
+// preserved). Run `npm run build` first so dist/plugins/* exists
+// (`npm test` and publish build it automatically).
+// Supported flows:
+//   npm install oc-go-usage-display@1.2.0 && npx oc-go-usage-display-init --copy
+//   (or declare "plugin": ["oc-go-usage-display@1.2.0"] in config instead).
+//   npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (one-shot from the package cache)
+//   bunx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (same, via Bun)
+// Copy-first needs the published 1.2.0+: 1.1.0 symlinks and ignores --copy.
+// Any source path is accepted; --repo only overrides the default repo root.
 
 import {
   ensureServerEntry,
   ensureTuiEntry,
-  fail,
+  exitWithError,
   linkModeFromArgv,
   linkPluginFiles,
   openCodeDirFromArgv,
@@ -30,6 +40,5 @@ try {
   console.log(`server entry: ${server.present ? "present" : "missing"}`);
   console.log(`tui toggles: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }

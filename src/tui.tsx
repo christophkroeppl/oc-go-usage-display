@@ -60,8 +60,17 @@ import type {
 } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createSignal } from "solid-js";
 import {
+  buildUsageRows,
+  formatStatusline,
+  isDisplayMode,
+  isSnapshotEmpty,
+  parseBooleanFlag,
+  surfaceSelectionFromDisplayMode,
+} from "./helpers.js";
+import type { SurfaceSelection } from "./helpers.js";
+import {
+  errorMessage,
   extractSnapshotFromApiPayload,
-  formatResetDuration,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
@@ -69,9 +78,6 @@ import {
   unavailableSnapshot,
 } from "./shared.js";
 import type { UsageSnapshot } from "./shared.js";
-
-// Re-exported so `dist/tui.js` keeps the helper surface used by tests.
-export { formatResetDuration };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -89,68 +95,9 @@ const LOG_SERVICE = "oc-go-usage-display";
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally; usage shapes
-// live in `./shared.js` so server and TUI parse identically)
+// live in `./shared.js` so server and TUI parse identically; display-mode
+// helpers live in `./helpers.js` to keep this entry module export-free)
 // ---------------------------------------------------------------------------
-
-type DisplayMode = "sidebar" | "statusline" | "both";
-
-type SurfaceSelection = {
-  sidebar: boolean;
-  statusline: boolean;
-};
-
-type UsageRow = {
-  label: string;
-  value: string;
-};
-
-// ---------------------------------------------------------------------------
-// Small pure helpers
-// ---------------------------------------------------------------------------
-
-function isDisplayMode(value: unknown): value is DisplayMode {
-  return value === "sidebar" || value === "statusline" || value === "both";
-}
-
-export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
-  return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
-}
-
-export function parseBooleanFlag(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (value === 1) return true;
-    if (value === 0) return false;
-    return null;
-  }
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "1" || normalized === "true") return true;
-  if (normalized === "0" || normalized === "false") return false;
-  return null;
-}
-
-export function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
-  return snapshot.rolling === null && snapshot.weekly === null && snapshot.monthly === null;
-}
-
-export function formatCompactLine(snapshot: UsageSnapshot): string {
-  const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
-  const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
-  const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
-  return `Go ${rolling} | ${weekly} | ${monthly}`;
-}
-
-export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
-  const rows: UsageRow[] = [];
-  if (snapshot.rolling !== null) {
-    const reset = formatResetDuration(snapshot.rolling.resetInSec) ?? snapshot.rolling.resetText;
-    rows.push({ label: "5h", value: `${snapshot.rolling.percent}%${reset ? ` · resets ${reset}` : ""}` });
-  }
-  if (snapshot.weekly !== null) rows.push({ label: "7d", value: `${snapshot.weekly.percent}%` });
-  if (snapshot.monthly !== null) rows.push({ label: "30d", value: `${snapshot.monthly.percent}%` });
-  return rows;
-}
 
 // ---------------------------------------------------------------------------
 // Settings boundary (new toggles > legacy display; tui.json options > env >
@@ -266,7 +213,10 @@ async function logUsageError(api: TuiPluginApi, message: string): Promise<void> 
 // TUI plugin
 // ---------------------------------------------------------------------------
 
-const goUsageTui: TuiPlugin = async (api, options) => {
+// The factory body lives here so the exported `goUsageTui` can wrap the whole
+// initialization in a single fail-safe boundary. A throwing factory would
+// destabilize the host's plugin load, so it must never reject.
+async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefined): Promise<void> {
   const surfaces = resolveSurfaceSelection(options, api);
   migrateLegacyCollapsedFlag(api);
 
@@ -302,10 +252,18 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     }
   }
 
+  // Fire-and-forget refresh that cannot surface an unhandled rejection. The
+  // poll interval and every event callback funnel through here.
+  function refreshSafely(): void {
+    void refreshUsage().catch(() => {
+      // refreshUsage already swallows failures; this guards a regression.
+    });
+  }
+
   function toggleSidebarCollapsed(): void {
-    const next = !isSidebarCollapsed();
-    setIsSidebarCollapsed(next);
     try {
+      const next = !isSidebarCollapsed();
+      setIsSidebarCollapsed(next);
       api.kv.set(KV_COLLAPSED_SIDEBAR_KEY, next);
     } catch {
       // Collapse state is best-effort persistence only.
@@ -313,9 +271,9 @@ const goUsageTui: TuiPlugin = async (api, options) => {
   }
 
   function toggleStatuslineCollapsed(): void {
-    const next = !isStatuslineCollapsed();
-    setIsStatuslineCollapsed(next);
     try {
+      const next = !isStatuslineCollapsed();
+      setIsStatuslineCollapsed(next);
       api.kv.set(KV_COLLAPSED_STATUSLINE_KEY, next);
     } catch {
       // Collapse state is best-effort persistence only.
@@ -345,15 +303,28 @@ const goUsageTui: TuiPlugin = async (api, options) => {
             </text>
           }
         >
-          {(snapshot) => (
-            <For each={buildUsageRows(snapshot())}>
-              {(row) => (
+          {(snapshot) => {
+            const snap = snapshot();
+            // Rejected keys (and other unavailable snapshots) must surface a
+            // row instead of a bare header with zero rows. Statusline stays
+            // hidden for unavailable (isSnapshotEmpty -> null).
+            if (snap.source === "unavailable") {
+              return (
                 <text fg={props.theme.current.textMuted} wrapMode="none">
-                  {row.label} {row.value}
+                  Go n/a ({snap.apiError ?? "unavailable"})
                 </text>
-              )}
-            </For>
-          )}
+              );
+            }
+            return (
+              <For each={buildUsageRows(snap)}>
+                {(row) => (
+                  <text fg={props.theme.current.textMuted} wrapMode="none">
+                    {row.label} {row.value}
+                  </text>
+                )}
+              </For>
+            );
+          }}
         </Show>
       </box>
     );
@@ -364,7 +335,7 @@ const goUsageTui: TuiPlugin = async (api, options) => {
       <Show when={usageSnapshot()} fallback={null}>
         {(snapshot) => {
           if (isSnapshotEmpty(snapshot())) return null;
-          return <text>{formatCompactLine(snapshot())}</text>;
+          return <text>{formatStatusline(snapshot())}</text>;
         }}
       </Show>
     );
@@ -375,69 +346,141 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     // unregister API, so there is nothing to dispose here (the slot dies
     // with the host). Interval/event/command teardown below is the full
     // dispose path.
-    api.slots.register({
-      order: SLOT_ORDER,
-      slots: {
-        sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
-          if (props.session_id.length === 0) return null;
-          if (api.route.current.name !== "session") return null;
-          if (isSidebarCollapsed()) return null;
-          return <GoSidebarPanel theme={ctx.theme} />;
+    try {
+      api.slots.register({
+        order: SLOT_ORDER,
+        slots: {
+          sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
+            // Individually guarded: a later render must never throw into the host.
+            try {
+              if (props.session_id.length === 0) return null;
+              if (api.route.current.name !== "session") return null;
+              if (isSidebarCollapsed()) return null;
+              return <GoSidebarPanel theme={ctx.theme} />;
+            } catch {
+              return null;
+            }
+          },
         },
-      },
-    });
+      });
+    } catch {
+      // Additive slot: a registration failure must not abort the plugin.
+    }
   }
 
   if (surfaces.statusline) {
     // Host-owned slot (see sidebar note above): no unregister API exists,
     // so disposal is a no-op for slots.
-    api.slots.register({
-      order: SLOT_ORDER,
-      slots: {
-        session_prompt_right(_ctx: TuiSlotContext, props: { session_id: string }) {
-          if (props.session_id.length === 0) return null;
-          if (isStatuslineCollapsed()) return null;
-          return <GoStatusline />;
+    try {
+      api.slots.register({
+        order: SLOT_ORDER,
+        slots: {
+          session_prompt_right(_ctx: TuiSlotContext, props: { session_id: string }) {
+            // Individually guarded: a later render must never throw into the host.
+            try {
+              if (props.session_id.length === 0) return null;
+              if (isStatuslineCollapsed()) return null;
+              return <GoStatusline />;
+            } catch {
+              return null;
+            }
+          },
         },
-      },
-    });
+      });
+    } catch {
+      // Additive slot: a registration failure must not abort the plugin.
+    }
   }
 
   // `api.command` is a deprecated legacy shim that hosts may omit; guard so
   // the plugin still initializes and disposes safely without it.
-  const unregisterToggleCommand = api.command?.register(() => [
-    {
-      title: "Go usage: toggle sidebar",
-      value: "oc-go-usage-display.toggle-sidebar",
-      category: "Go",
-      onSelect: () => toggleSidebarCollapsed(),
-    },
-    {
-      title: "Go usage: toggle statusline",
-      value: "oc-go-usage-display.toggle-statusline",
-      category: "Go",
-      onSelect: () => toggleStatuslineCollapsed(),
-    },
-  ]) ?? (() => {});
+  let unregisterToggleCommand: () => void = () => {};
+  try {
+    const unregister = api.command?.register(() => [
+      {
+        title: "Go usage: toggle sidebar",
+        value: "oc-go-usage-display.toggle-sidebar",
+        category: "Go",
+        onSelect: () => toggleSidebarCollapsed(),
+      },
+      {
+        title: "Go usage: toggle statusline",
+        value: "oc-go-usage-display.toggle-statusline",
+        category: "Go",
+        onSelect: () => toggleStatuslineCollapsed(),
+      },
+    ]);
+    if (typeof unregister === "function") unregisterToggleCommand = unregister;
+  } catch {
+    // Legacy command registration is optional; ignore failures.
+  }
 
-  const unsubscribeSession = api.event.on("session.updated", () => {
-    void refreshUsage();
-  });
-  const unsubscribeMessage = api.event.on("message.updated", () => {
-    void refreshUsage();
-  });
-  const pollTimer = setInterval(() => {
-    void refreshUsage();
-  }, POLL_INTERVAL_MS);
+  let unsubscribeSession: () => void = () => {};
+  let unsubscribeMessage: () => void = () => {};
+  try {
+    const unsubscribe = api.event.on("session.updated", () => refreshSafely());
+    if (typeof unsubscribe === "function") unsubscribeSession = unsubscribe;
+  } catch {
+    // Event subscription is additive; a failure must not abort the plugin.
+  }
+  try {
+    const unsubscribe = api.event.on("message.updated", () => refreshSafely());
+    if (typeof unsubscribe === "function") unsubscribeMessage = unsubscribe;
+  } catch {
+    // Event subscription is additive; a failure must not abort the plugin.
+  }
 
-  api.lifecycle.onDispose(() => {
-    clearInterval(pollTimer);
-    unsubscribeSession();
-    unsubscribeMessage();
-    unregisterToggleCommand();
-  });
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  try {
+    pollTimer = setInterval(() => refreshSafely(), POLL_INTERVAL_MS);
+  } catch {
+    // No poll timer: the on-demand refresh below still runs.
+  }
+
+  try {
+    api.lifecycle.onDispose(() => {
+      // Each teardown step is isolated: one throwing unsubscribe must not
+      // prevent the rest (or leak into the host's dispose pass).
+      if (pollTimer !== null) {
+        try {
+          clearInterval(pollTimer);
+        } catch {
+          // noop
+        }
+      }
+      for (const teardown of [unsubscribeSession, unsubscribeMessage, unregisterToggleCommand]) {
+        try {
+          teardown();
+        } catch {
+          // noop
+        }
+      }
+    });
+  } catch {
+    // Lifecycle registration is best-effort; never leak a timer into the host.
+    if (pollTimer !== null) {
+      try {
+        clearInterval(pollTimer);
+      } catch {
+        // noop
+      }
+    }
+  }
 
   await refreshUsage();
+}
+
+const goUsageTui: TuiPlugin = async (api, options) => {
+  try {
+    await initializeTui(api, options);
+  } catch (error) {
+    // Best-effort and non-blocking: never delay plugin resolution on the host
+    // log and never let an initialization error reject into the host.
+    void logUsageError(
+      api,
+      `Go usage TUI failed to initialize: ${errorMessage(error)}; continuing without display`,
+    );
+  }
 };
 
 export default { id: "oc-go-usage-display", tui: goUsageTui } satisfies TuiPluginModule;

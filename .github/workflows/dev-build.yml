@@ -1,0 +1,54 @@
+name: dev-build
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build dev tarball
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Test (build + unit + integration)
+        run: npm test
+
+      - name: Pack dev tarball
+        run: |
+          set -euo pipefail
+          rm -rf ./tmp-dev-pack
+          mkdir -p ./tmp-dev-pack
+          npm pack --pack-destination ./tmp-dev-pack
+          ls -la ./tmp-dev-pack
+
+      - name: Upload dev tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-tgz
+          path: ./tmp-dev-pack/*.tgz
+          if-no-files-found: error
+          retention-days: 90

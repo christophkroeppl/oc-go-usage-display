@@ -13,7 +13,41 @@ export const SERVER_FILE_NAME = "oc-go-usage-display.ts";
 export const TUI_FILE_NAME = "oc-go-usage-display.tsx";
 
 export function fail(message) {
+  if (message.startsWith("oc-go-usage-display: ")) throw new Error(message);
   throw new Error(`oc-go-usage-display: ${message}`);
+}
+
+// Format any thrown value as the single line the bin commands report, with the
+// `oc-go-usage-display: ` prefix applied exactly once. Newlines and other
+// whitespace runs collapse to single spaces so the one-line contract holds for
+// multi-line messages (e.g. a wrapped npm error). Pure and never throws.
+export function cliErrorMessage(error) {
+  let raw;
+  if (error instanceof Error) {
+    raw = error.message;
+  } else {
+    try {
+      raw = String(error);
+    } catch {
+      return "oc-go-usage-display: unknown error";
+    }
+  }
+  const message = raw.replace(/\s+/g, " ").trim();
+  if (message.length === 0) return "oc-go-usage-display: unknown error";
+  if (message.startsWith("oc-go-usage-display: ")) return message;
+  return `oc-go-usage-display: ${message}`;
+}
+
+// Top-level error boundary shared by every bin: one clean line on stderr (no
+// stack trace, no rethrow) and exit 1. The synchronous fd write keeps the
+// message from being truncated by `process.exit` when stderr is a pipe (npx).
+export function exitWithError(error) {
+  try {
+    fs.writeSync(process.stderr.fd, `${cliErrorMessage(error)}\n`);
+  } catch {
+    // No writable stderr: the exit code still carries the failure.
+  }
+  process.exit(1);
 }
 
 export function repoDirFromArgv(argv) {
@@ -32,9 +66,9 @@ export function openCodeDirFromArgv(argv) {
 }
 
 export function linkModeFromArgv(argv) {
-  if (argv.includes("--copy")) return "copy";
   if (argv.includes("--symlink")) return "symlink";
-  return "symlink";
+  if (argv.includes("--copy")) return "copy";
+  return "copy";
 }
 
 export function readFlag(argv, name) {
@@ -149,14 +183,20 @@ export function writeJsonFile(filePath, value) {
 export function linkPluginFiles(repoDir, configDir, mode) {
   const pluginsDir = path.join(configDir, "plugins");
   fs.mkdirSync(pluginsDir, { recursive: true });
+  // Bundled self-contained outputs (no `./shared` import, no shared file):
+  // `npm run build` produces dist/plugins/*, which is what gets installed.
   const pairs = [
-    [path.join(repoDir, "src", "index.ts"), path.join(pluginsDir, SERVER_FILE_NAME)],
-    [path.join(repoDir, "src", "tui.tsx"), path.join(pluginsDir, TUI_FILE_NAME)],
+    [path.join(repoDir, "dist", "plugins", SERVER_FILE_NAME), path.join(pluginsDir, SERVER_FILE_NAME)],
+    [path.join(repoDir, "dist", "plugins", TUI_FILE_NAME), path.join(pluginsDir, TUI_FILE_NAME)],
   ];
   for (const [source, target] of pairs) {
-    if (!fs.existsSync(source)) fail(`repo source missing: ${source}`);
+    if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run npm run build)`);
     if (mode === "copy") {
       const stat = safeLstat(target);
+      if (stat?.isDirectory()) {
+        // copyFileSync would fail with a raw EISDIR; fail fast with the fix.
+        fail(`cannot replace a directory with the plugin file: ${target} (remove it, then re-run)`);
+      }
       if (stat?.isSymbolicLink() || stat?.isFile()) fs.rmSync(target, { force: true });
       fs.copyFileSync(source, target);
       continue;
@@ -190,6 +230,17 @@ export function describeLink(target) {
   if (stat.isSymbolicLink()) return { state: "symlink", detail: safeReadlink(target) };
   if (stat.isFile()) return { state: "file", detail: null };
   return { state: "other", detail: null };
+}
+
+export function isDanglingSymlink(target) {
+  const stat = safeLstat(target);
+  if (stat === null || !stat.isSymbolicLink()) return false;
+  try {
+    fs.statSync(target);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export function ensureServerEntry(configDir, { create = true } = {}) {

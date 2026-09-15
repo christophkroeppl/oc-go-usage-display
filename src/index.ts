@@ -29,26 +29,32 @@
 //   5. none                       -> unavailable snapshot (literal-only error)
 // Snapshots are cached 60s in memory + on disk.
 
-import type { Plugin } from "@opencode-ai/plugin";
+import type { Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  formatServerLine,
+  hasMalformedAuthCookie,
+  isMalformedAuthCookie,
+  readFileConfig,
+  resolveAllowedRedirect,
+} from "./helpers.js";
+import type { FileConfig } from "./helpers.js";
+import {
   CONFIG_DIR,
+  errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
-  formatResetDuration,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
+  safeJoinPath,
   toFiniteNumber,
   toNonEmptyString,
   unavailableSnapshot,
 } from "./shared.js";
 import type { UsageSnapshot, UsageWindow } from "./shared.js";
-
-// Re-exported so `dist/index.js` keeps the helper surface used by tests.
-export { formatResetDuration };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,8 +64,10 @@ const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-const FILE_CONFIG_PATH = path.join(CONFIG_DIR, "oc-go-usage-display.json");
-const DISK_CACHE_PATH = path.join(CONFIG_DIR, "oc-go-usage-display-cache.json");
+// Fetch redirect statuses (the cookie path handles them manually).
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+const DISK_CACHE_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display-cache.json");
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally)
@@ -71,52 +79,11 @@ type Credentials =
   | { kind: "mock" }
   | { kind: "none" };
 
-function formatWindow(window: UsageWindow | null): string {
-  if (!window) return "n/a";
-  return `${window.percent}%`;
-}
-
-export function formatCompactLine(snapshot: UsageSnapshot): string {
-  if (snapshot.apiUnavailable || (!snapshot.rolling && !snapshot.weekly && !snapshot.monthly)) {
-    const reason = snapshot.apiError ?? "unknown error";
-    return `Go n/a (${reason})`;
-  }
-  const rollingReset =
-    formatResetDuration(snapshot.rolling?.resetInSec ?? null) ??
-    snapshot.rolling?.resetText ??
-    null;
-  const rollingText =
-    snapshot.rolling === null
-      ? "5h n/a"
-      : `5h ${snapshot.rolling.percent}%${rollingReset ? ` (reset ${rollingReset})` : ""}`;
-  return `Go ${rollingText} | 7d ${formatWindow(snapshot.weekly)} | 30d ${formatWindow(snapshot.monthly)}`;
-}
-
 // ---------------------------------------------------------------------------
 // Credentials (boundary: env + optional JSON file; never logged)
 // ---------------------------------------------------------------------------
 
-function readFileConfig(): { workspaceId: string | null; authCookie: string | null } {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(FILE_CONFIG_PATH, "utf8");
-  } catch {
-    return { workspaceId: null, authCookie: null };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { workspaceId: null, authCookie: null };
-  }
-  if (!isRecord(parsed)) return { workspaceId: null, authCookie: null };
-  return {
-    workspaceId: toNonEmptyString(parsed.workspaceId),
-    authCookie: toNonEmptyString(parsed.authCookie),
-  };
-}
-
-function resolveCredentials(): Credentials {
+function resolveCredentials(fileConfig: FileConfig = readFileConfig()): Credentials {
   if (process.env.OPENCODE_GO_MOCK === "1") return { kind: "mock" };
 
   const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY);
@@ -125,10 +92,14 @@ function resolveCredentials(): Credentials {
   const authJsonKey = readAuthJsonApiKey();
   if (authJsonKey) return { kind: "apiKey", apiKey: authJsonKey };
 
-  const fileConfig = readFileConfig();
   const workspaceId = toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
   const authCookie = toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
-  if (workspaceId && authCookie) return { kind: "cookie", workspaceId, authCookie };
+  if (workspaceId && authCookie) {
+    // Reject header-injection / cookie-jar confusion payloads. The cookie
+    // value is never logged; malformed values fall through to "none".
+    if (isMalformedAuthCookie(authCookie)) return { kind: "none" };
+    return { kind: "cookie", workspaceId, authCookie };
+  }
 
   return { kind: "none" };
 }
@@ -140,7 +111,7 @@ function resolveCredentials(): Credentials {
 let memoryCache: { at: number; snapshot: UsageSnapshot } | null = null;
 
 function isFresh(at: number, now: number): boolean {
-  return now - at < CACHE_TTL_MS;
+  return at <= now && now - at < CACHE_TTL_MS;
 }
 
 function readDiskCache(now: number): UsageSnapshot | null {
@@ -189,11 +160,22 @@ function writeDiskCache(snapshot: UsageSnapshot): void {
 // Fetch helpers
 // ---------------------------------------------------------------------------
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+// Run the whole exchange (headers and body) under one abort timer: clearing
+// it as soon as the response headers arrive would leave a server that stalls
+// mid-body hanging past FETCH_TIMEOUT_MS. `read` consumes the body while the
+// timer is armed; the signal lets callers tell an aborted read from a payload
+// problem. The timer is cleared on every path (body read, redirect handling,
+// fetch failure, abort).
+async function fetchWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  read: (response: Response, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return await read(response, controller.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -203,30 +185,38 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
 // evolve); scrape helpers below stay server-local. ---
 
 async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
-  let response: Response;
   try {
-    response = await fetchWithTimeout(API_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
+    return await fetchWithTimeout(
+      API_USAGE_URL,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json",
+        },
       },
-    });
+      async (response, signal) => {
+        if (response.status === 401 || response.status === 403) {
+          return unavailableSnapshot("API key rejected (401/403)");
+        }
+        if (!response.ok) {
+          return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
+        }
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          // A body read cut off by the timeout is a request failure; anything
+          // else is a payload the API-shape parser cannot use.
+          return unavailableSnapshot(
+            signal.aborted ? "request failed" : "unexpected API response shape",
+          );
+        }
+        return extractSnapshotFromApiPayload(payload) ?? unavailableSnapshot("unexpected API response shape");
+      },
+    );
   } catch {
     return unavailableSnapshot("request failed");
   }
-  if (response.status === 401 || response.status === 403) {
-    return unavailableSnapshot("API key rejected (401/403)");
-  }
-  if (!response.ok) {
-    return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return unavailableSnapshot("unexpected API response shape");
-  }
-  return extractSnapshotFromApiPayload(payload) ?? unavailableSnapshot("unexpected API response shape");
 }
 
 // --- Cookie path: workspace page scrape (ported from opencode-go-hud) ---
@@ -345,45 +335,76 @@ function parseScrapedUsage(html: string): Partial<Record<"rolling" | "weekly" | 
   return { ...parseDomUsage(html), ...inline };
 }
 
+// One redirect-following step of the workspace scrape: a redirect hop carries
+// only the Location decision, an ordinary response carries its status + body.
+type CookieHop =
+  | { kind: "redirect"; location: string | null }
+  | { kind: "body"; status: number; html: string };
+
 async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<UsageSnapshot> {
   const workspaceUrl = `https://opencode.ai/workspace/${encodeURIComponent(workspaceId)}/go`;
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(workspaceUrl, {
-      redirect: "follow",
-      headers: {
-        Cookie: `auth=${authCookie}`,
-        "User-Agent": "oc-go-usage-display-plugin",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-  } catch {
-    return unavailableSnapshot("request failed");
+  let currentUrl = workspaceUrl;
+  let hopsFollowed = 0;
+
+  // `redirect: "manual"`: automatic redirect following may re-send caller
+  // headers (including the auth cookie) to a cross-origin Location, and runtime
+  // header stripping cannot be relied on. Each hop is re-requested only after
+  // `resolveAllowedRedirect` approves the Location (allowlisted canonical HTTPS
+  // hosts, at most MAX_REDIRECT_HOPS hops).
+  for (;;) {
+    let hop: CookieHop;
+    try {
+      hop = await fetchWithTimeout(
+        currentUrl,
+        {
+          redirect: "manual",
+          headers: {
+            Cookie: `auth=${authCookie}`,
+            "User-Agent": "oc-go-usage-display-plugin",
+            Accept: "text/html,application/xhtml+xml",
+          },
+        },
+        async (response) => {
+          if (REDIRECT_STATUSES.has(response.status)) {
+            // The redirect body is never read: Location alone decides the next
+            // hop, so this resolves (and clears the abort timer) immediately.
+            return { kind: "redirect", location: response.headers.get("location") };
+          }
+          return { kind: "body", status: response.status, html: await response.text() };
+        },
+      );
+    } catch {
+      return unavailableSnapshot("request failed");
+    }
+
+    if (hop.kind === "redirect") {
+      const decision = resolveAllowedRedirect(currentUrl, hop.location, hopsFollowed);
+      if (!decision.follow) return unavailableSnapshot(decision.reason);
+      currentUrl = decision.url;
+      hopsFollowed += 1;
+      continue;
+    }
+
+    const { status, html } = hop;
+    if (isLoginPage(currentUrl, html)) {
+      return unavailableSnapshot("login expired (refresh auth cookie)");
+    }
+    if (status !== 200) {
+      return unavailableSnapshot(`upstream returned HTTP ${status}`);
+    }
+    const usages = parseScrapedUsage(html);
+    if (Object.keys(usages).length === 0) {
+      if (isNoSubscription(html)) return unavailableSnapshot("no OpenCode Go subscription");
+      return unavailableSnapshot("usage markup not recognized");
+    }
+    return {
+      rolling: usages.rolling ?? null,
+      weekly: usages.weekly ?? null,
+      monthly: usages.monthly ?? null,
+      source: "scrape",
+      fetchedAt: Date.now(),
+    };
   }
-  let html = "";
-  try {
-    html = await response.text();
-  } catch {
-    return unavailableSnapshot("request failed");
-  }
-  if (isLoginPage(response.url, html)) {
-    return unavailableSnapshot("login expired (refresh auth cookie)");
-  }
-  if (response.status !== 200) {
-    return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
-  }
-  const usages = parseScrapedUsage(html);
-  if (Object.keys(usages).length === 0) {
-    if (isNoSubscription(html)) return unavailableSnapshot("no OpenCode Go subscription");
-    return unavailableSnapshot("usage markup not recognized");
-  }
-  return {
-    rolling: usages.rolling ?? null,
-    weekly: usages.weekly ?? null,
-    monthly: usages.monthly ?? null,
-    source: "scrape",
-    fetchedAt: Date.now(),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +414,10 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
 async function getUsageSnapshot(): Promise<UsageSnapshot> {
   const now = Date.now();
   // Mock bypasses cache for determinism: a stale disk/memory entry must
-  // never shadow the deterministic mock snapshot during tests.
+  // never shadow the deterministic mock snapshot during tests. The mock
+  // never reads or writes the cache.
   if (process.env.OPENCODE_GO_MOCK === "1") {
-    const snapshot = mockSnapshot();
-    memoryCache = { at: now, snapshot };
-    return snapshot;
+    return mockSnapshot();
   }
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
   const diskCached = readDiskCache(now);
@@ -406,13 +426,20 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
     return diskCached;
   }
 
-  const credentials = resolveCredentials();
+  const fileConfig = readFileConfig();
+  const credentials = resolveCredentials(fileConfig);
   if (credentials.kind === "mock") {
-    const snapshot = mockSnapshot();
-    memoryCache = { at: now, snapshot };
-    return snapshot;
+    return mockSnapshot();
   }
   if (credentials.kind === "none") {
+    // A malformed-cookie reason is only meaningful when a workspaceId is
+    // present (the user actually attempted cookie auth); a fully
+    // unconfigured setup reports the generic reason.
+    const workspaceId =
+      toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
+    if (workspaceId && hasMalformedAuthCookie(fileConfig)) {
+      return unavailableSnapshot("not configured (malformed auth cookie)");
+    }
     return unavailableSnapshot("not configured (set OPENCODE_GO_API_KEY)");
   }
 
@@ -432,21 +459,93 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
 // Plugin
 // ---------------------------------------------------------------------------
 
-export default (async () => {
-  return {
-    tool: {
-      go_usage: tool({
-        description:
-          "Show OpenCode Go subscription usage: rolling 5h, weekly, and monthly windows. Takes no arguments.",
-        args: {},
-        execute: async () => {
-          const snapshot = await getUsageSnapshot().catch(() =>
-            unavailableSnapshot("request failed"),
-          );
-          const line = formatCompactLine(snapshot);
-          return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
-        },
-      }),
-    },
-  };
-}) satisfies Plugin;
+// The ONLY export must be the default module: OpenCode's loader enumerates
+// every export and invokes each as a plugin factory when the default is not a
+// `{ id, server }` module. Helpers live in `./helpers.js` for exactly that
+// reason. `server` returns the existing `{ tool: { go_usage } }` hook surface.
+
+// A Hooks value is always a plain object. Drop nullish hook entries (and
+// nullish tool definitions) so the loader can never dereference
+// `hook.config` / `hook.provider` on a null value.
+function sanitizeHooks(hooks: unknown): Hooks {
+  if (!isRecord(hooks)) return {};
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(hooks)) {
+    if (value === null || value === undefined) continue;
+    if (key === "tool" && isRecord(value)) {
+      const tools: Record<string, unknown> = {};
+      for (const [name, definition] of Object.entries(value)) {
+        if (definition === null || definition === undefined) continue;
+        tools[name] = definition;
+      }
+      clean[key] = tools;
+      continue;
+    }
+    clean[key] = value;
+  }
+  return clean as Hooks;
+}
+
+type LogClient = {
+  app?: { log?: (input: { service: string; level: string; message: string }) => unknown };
+};
+
+// Best-effort error log. The client (or its `log` method) may be absent or
+// throw on a malformed input, and logging must never rethrow into a caller or
+// delay plugin resolution: callers use `void logServerError(...)`.
+async function logServerError(input: unknown, message: string): Promise<void> {
+  try {
+    const client = (input as { client?: LogClient } | null | undefined)?.client;
+    await client?.app?.log?.({
+      service: "oc-go-usage-display",
+      level: "error",
+      message,
+    });
+  } catch {
+    // Logging is best-effort; callers must never fail because of it.
+  }
+}
+
+// Fail-safe contract: OpenCode always starts, even if this plugin cannot. The
+// factory resolves to a valid Hooks object (never undefined/null) for any
+// input; on initialization failure it logs best-effort and resolves to `{}`.
+const server: Plugin = async (input, _options) => {
+  try {
+    return sanitizeHooks({
+      tool: {
+        go_usage: tool({
+          description:
+            "Show OpenCode Go subscription usage: rolling 5h, weekly, and monthly windows. Takes no arguments.",
+          args: {},
+          execute: async () => {
+            try {
+              const snapshot = await getUsageSnapshot().catch(() =>
+                unavailableSnapshot("request failed"),
+              );
+              const line = formatServerLine(snapshot);
+              return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
+            } catch (error) {
+              // Same output shape as the success path (line + JSON tail); the
+              // failure is logged best-effort and the invocation still
+              // resolves so it can never reject into the host.
+              const snapshot = unavailableSnapshot("request failed");
+              void logServerError(
+                input,
+                `go_usage tool execution failed: ${errorMessage(error)}`,
+              );
+              return `${formatServerLine(snapshot)}\n${JSON.stringify(snapshot, null, 2)}`;
+            }
+          },
+        }),
+      },
+    });
+  } catch (error) {
+    void logServerError(
+      input,
+      `Go usage plugin failed to initialize: ${errorMessage(error)}; continuing without hooks`,
+    );
+    return {};
+  }
+};
+
+export default { id: "oc-go-usage-display", server } satisfies PluginModule;

@@ -9,6 +9,7 @@ import * as path from "node:path";
 import {
   ensureServerEntry,
   ensureTuiEntry,
+  exitWithError,
   fail,
   linkModeFromArgv,
   linkPluginFiles,
@@ -61,6 +62,5 @@ try {
   console.log(`tui toggles: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
   console.log("restart opencode to pick up plugin changes");
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }

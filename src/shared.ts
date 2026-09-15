@@ -14,7 +14,41 @@ import * as path from "node:path";
 // Constants
 // ---------------------------------------------------------------------------
 
-export const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode");
+// Path construction is best-effort. `os.homedir()` can throw when no home
+// directory is resolvable, and a throwing top-level expression aborts the
+// host's plugin import; degrade to a relative config path instead. `homedir`
+// is injectable so the fallback is directly unit-testable.
+export function resolveConfigDir(homedir: () => string = os.homedir): string {
+  try {
+    return path.join(homedir(), ".config", "opencode");
+  } catch {
+    return ".config/opencode";
+  }
+}
+
+export const CONFIG_DIR = resolveConfigDir();
+
+// Coerce any runtime value into a path segment deterministically: strings pass
+// through, every other value uses its string form, and only an object with a
+// throwing `toString` degrades to "" (an empty segment, which `path.join`
+// ignores). Never throws.
+function toPathSegment(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return String(value);
+  } catch {
+    return "";
+  }
+}
+
+// Tolerant `path.join` for module-level path construction. `path.join` throws
+// on a non-string segment; plugin entry modules build cache/config paths at
+// import time, so a throw there would crash startup. Non-string segments are
+// coerced (never silently dropped or thrown away) and the resulting string
+// join cannot throw.
+export function safeJoinPath(base: string, ...segments: unknown[]): string {
+  return path.join(toPathSegment(base), ...segments.map(toPathSegment));
+}
 
 export function dataShareAuthPath(): string {
   const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);
@@ -64,6 +98,20 @@ export function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// Stable, human-readable message for any thrown value. Never throws itself, so
+// callers can include it in best-effort logs without a second failure mode.
+export function errorMessage(error: unknown): string {
+  if (error === null || error === undefined) return "unknown error";
+  if (error instanceof Error) {
+    return toNonEmptyString(error.message) ?? toNonEmptyString(error.name) ?? "unknown error";
+  }
+  try {
+    return toNonEmptyString(String(error)) ?? "unknown error";
+  } catch {
+    return "unknown error";
+  }
 }
 
 export function formatResetDuration(totalSec: number | null): string | null {
@@ -163,15 +211,12 @@ export function mockSnapshot(): UsageSnapshot {
   };
 }
 
-export function unavailableSnapshot(
-  error: string,
-  source: UsageSnapshot["source"] = "unavailable",
-): UsageSnapshot {
+export function unavailableSnapshot(error: string): UsageSnapshot {
   return {
     rolling: null,
     weekly: null,
     monthly: null,
-    source,
+    source: "unavailable",
     fetchedAt: Date.now(),
     apiUnavailable: true,
     apiError: error,

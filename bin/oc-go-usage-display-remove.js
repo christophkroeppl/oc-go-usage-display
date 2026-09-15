@@ -7,7 +7,7 @@
 // Restart opencode afterwards to pick up the change.
 
 import {
-  fail,
+  exitWithError,
   openCodeDirFromArgv,
   removePluginFiles,
   removeServerEntry,
@@ -28,6 +28,5 @@ try {
   console.log(`tui entry: ${tui.changed ? "removed" : "already absent"}`);
   console.log(`uninstalled from ${configDir} (restart opencode to pick up the change)`);
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }
