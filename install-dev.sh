@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SNAPSHOT_SCRIPT="$SCRIPT_DIR/scripts/dev-config-snapshot.sh"
 BRANCH="develop"
-WORKFLOW=""
+WORKFLOW="dev-build.yml"
 RUN_ID=""
 DIR="./tmp-dev"
 ART="dev-tgz"
@@ -36,7 +36,7 @@ usage() {
 Usage: install-dev.sh [options]
 
   --branch <name>        workflow branch to query (default: develop)
-  --workflow <file>      limit run lookup to a workflow file (e.g. dev-build.yml)
+  --workflow <file>      limit run lookup to a workflow file (default: dev-build.yml)
   --run-id <id>          use a specific run id (skips run lookup)
   --dir <path>           download dir (default: ./tmp-dev)
   --force, --clean       allow/replace a non-empty download dir
@@ -174,11 +174,9 @@ if [[ -z "$RUN_ID" ]]; then
     process.stdin.on("end", () => {
       try {
         const runs = JSON.parse(data);
-        if (!Array.isArray(runs) || runs.length === 0) {
-          console.error("error: no successful runs found");
-          process.exit(1);
+        if (Array.isArray(runs) && runs.length > 0) {
+          console.log(`${runs[0].databaseId} ${runs[0].headSha ?? ""}`);
         }
-        console.log(`${runs[0].databaseId} ${runs[0].headSha ?? ""}`);
       } catch {
         console.error("error: cannot parse run list JSON");
         process.exit(1);
@@ -188,13 +186,18 @@ if [[ -z "$RUN_ID" ]]; then
   RUN_ID="${PARSED%% *}"
   HEAD_SHA="${PARSED#* }"
   if [[ -z "$RUN_ID" ]]; then
-    echo "error: could not resolve run id" >&2
+    echo "error: no successful run found on $BRANCH for $WORKFLOW" >&2
+    echo "hint: the $BRANCH dev-build workflow must have completed successfully" >&2
     exit 1
   fi
   echo "using run $RUN_ID (branch $BRANCH, sha ${HEAD_SHA:-unknown})"
 fi
 
-gh run download "$RUN_ID" -n "$ART" -D "$DIR"
+if ! gh run download "$RUN_ID" -n "$ART" -D "$DIR"; then
+  echo "error: artifact $ART is missing from run $RUN_ID" >&2
+  echo "hint: the $BRANCH dev-build workflow must have completed successfully" >&2
+  exit 1
+fi
 
 shopt -s nullglob
 TARBALLS=("$DIR"/*.tgz)
