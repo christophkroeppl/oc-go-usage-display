@@ -68,6 +68,21 @@ test("cliErrorMessage prefixes exactly once and never includes a stack", () => {
   assert.ok(!stack.includes("\n"), "message must be a single line");
 });
 
+test("cliErrorMessage collapses multi-line input to a single line", () => {
+  assert.equal(
+    cliErrorMessage(new Error("npm ERR! code E404\nnpm ERR! 404 Not Found\t(npm)")),
+    "oc-go-usage-display: npm ERR! code E404 npm ERR! 404 Not Found (npm)",
+  );
+  // An already-prefixed multi-line message keeps the prefix exactly once.
+  assert.equal(
+    cliErrorMessage(new Error("oc-go-usage-display: first\n  second")),
+    "oc-go-usage-display: first second",
+  );
+  const collapsed = cliErrorMessage(new Error("line one\r\nline two"));
+  assert.ok(!collapsed.includes("\n"), "multi-line input must collapse to one line");
+  assert.ok(!collapsed.includes("\r"), "carriage returns must collapse as well");
+});
+
 test("normalizeTuiEntry handles string, tuple, and invalid entries", () => {
   assert.deepStrictEqual(normalizeTuiEntry("./plugins/oc-go-usage-display.tsx"), {
     spec: "./plugins/oc-go-usage-display.tsx",

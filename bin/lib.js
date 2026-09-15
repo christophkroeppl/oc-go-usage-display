@@ -18,7 +18,9 @@ export function fail(message) {
 }
 
 // Format any thrown value as the single line the bin commands report, with the
-// `oc-go-usage-display: ` prefix applied exactly once. Pure and never throws.
+// `oc-go-usage-display: ` prefix applied exactly once. Newlines and other
+// whitespace runs collapse to single spaces so the one-line contract holds for
+// multi-line messages (e.g. a wrapped npm error). Pure and never throws.
 export function cliErrorMessage(error) {
   let raw;
   if (error instanceof Error) {
@@ -30,7 +32,7 @@ export function cliErrorMessage(error) {
       return "oc-go-usage-display: unknown error";
     }
   }
-  const message = raw.trim();
+  const message = raw.replace(/\s+/g, " ").trim();
   if (message.length === 0) return "oc-go-usage-display: unknown error";
   if (message.startsWith("oc-go-usage-display: ")) return message;
   return `oc-go-usage-display: ${message}`;

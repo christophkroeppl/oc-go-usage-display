@@ -242,14 +242,16 @@ echo "config snapshot: $SNAPSHOT_DIR"
 
 print_reminder() {
   local restore_cmd="scripts/dev-config-snapshot.sh restore --backup-dir $SNAPSHOT_DIR"
+  local fallback_cmd="npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
   if [[ -n "$CONFIG_DIR_ARG" ]]; then
     restore_cmd+=" --config-dir $CONFIG_DIR_ARG"
+    fallback_cmd+=" --config-dir $CONFIG_DIR_ARG"
   fi
   printf '\n%s\n' "----------------------------------------------------------------"
   echo "To restore your previous OpenCode config:"
   echo "  $restore_cmd"
   echo "To return to the published version instead:"
-  echo "  npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
+  echo "  $fallback_cmd"
   printf '%s\n\n' "----------------------------------------------------------------"
 }
 

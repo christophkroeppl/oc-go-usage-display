@@ -91,11 +91,12 @@ export function hasMalformedAuthCookie(fileConfig: FileConfig = readFileConfig()
 // Server: cookie-fetch redirect policy
 // ---------------------------------------------------------------------------
 //
-// The workspace scrape carries the user's `auth` cookie. Node's fetch follows
-// redirects without stripping caller headers, so a cross-origin redirect would
-// leak the cookie. The cookie path therefore requests `redirect: "manual"` and
-// re-sends only after these helpers approve a Location on the allowlisted
-// canonical HTTPS hosts. `fetchViaApiKey` is untouched (anonymous API path).
+// The workspace scrape carries the user's `auth` cookie. Automatic redirect
+// following may re-send caller headers (including the cookie) to a cross-origin
+// Location, and runtime header stripping cannot be relied on to prevent that.
+// The cookie path therefore requests `redirect: "manual"` and re-sends only
+// after these helpers approve a Location on the allowlisted canonical HTTPS
+// hosts. `fetchViaApiKey` is untouched (anonymous API path).
 
 const ALLOWED_REDIRECT_HOSTS = new Set(["opencode.ai", "auth.opencode.ai"]);
 

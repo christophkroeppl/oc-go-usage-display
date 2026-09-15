@@ -1,9 +1,10 @@
 // Unit tier: `dist/helpers.js` redirect policy for the cookie scrape.
 //
-// Node's fetch keeps caller headers (including the auth Cookie) on
-// cross-origin redirects, so the cookie path follows redirects manually and
-// delegates each hop decision to these pure helpers. The tests pin the
-// allowlist, relative-resolution, and hop-limit behavior.
+// Automatic redirect following may re-send caller headers (including the auth
+// Cookie) to a cross-origin Location, and runtime header stripping cannot be
+// relied on, so the cookie path follows redirects manually and delegates each
+// hop decision to these pure helpers. The tests pin the allowlist,
+// relative-resolution, and hop-limit behavior.
 //
 // Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
 

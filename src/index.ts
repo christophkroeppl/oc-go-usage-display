@@ -160,11 +160,22 @@ function writeDiskCache(snapshot: UsageSnapshot): void {
 // Fetch helpers
 // ---------------------------------------------------------------------------
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+// Run the whole exchange (headers and body) under one abort timer: clearing
+// it as soon as the response headers arrive would leave a server that stalls
+// mid-body hanging past FETCH_TIMEOUT_MS. `read` consumes the body while the
+// timer is armed; the signal lets callers tell an aborted read from a payload
+// problem. The timer is cleared on every path (body read, redirect handling,
+// fetch failure, abort).
+async function fetchWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  read: (response: Response, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return await read(response, controller.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -174,30 +185,38 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
 // evolve); scrape helpers below stay server-local. ---
 
 async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
-  let response: Response;
   try {
-    response = await fetchWithTimeout(API_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
+    return await fetchWithTimeout(
+      API_USAGE_URL,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json",
+        },
       },
-    });
+      async (response, signal) => {
+        if (response.status === 401 || response.status === 403) {
+          return unavailableSnapshot("API key rejected (401/403)");
+        }
+        if (!response.ok) {
+          return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
+        }
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          // A body read cut off by the timeout is a request failure; anything
+          // else is a payload the API-shape parser cannot use.
+          return unavailableSnapshot(
+            signal.aborted ? "request failed" : "unexpected API response shape",
+          );
+        }
+        return extractSnapshotFromApiPayload(payload) ?? unavailableSnapshot("unexpected API response shape");
+      },
+    );
   } catch {
     return unavailableSnapshot("request failed");
   }
-  if (response.status === 401 || response.status === 403) {
-    return unavailableSnapshot("API key rejected (401/403)");
-  }
-  if (!response.ok) {
-    return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return unavailableSnapshot("unexpected API response shape");
-  }
-  return extractSnapshotFromApiPayload(payload) ?? unavailableSnapshot("unexpected API response shape");
 }
 
 // --- Cookie path: workspace page scrape (ported from opencode-go-hud) ---
@@ -316,53 +335,62 @@ function parseScrapedUsage(html: string): Partial<Record<"rolling" | "weekly" | 
   return { ...parseDomUsage(html), ...inline };
 }
 
+// One redirect-following step of the workspace scrape: a redirect hop carries
+// only the Location decision, an ordinary response carries its status + body.
+type CookieHop =
+  | { kind: "redirect"; location: string | null }
+  | { kind: "body"; status: number; html: string };
+
 async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<UsageSnapshot> {
   const workspaceUrl = `https://opencode.ai/workspace/${encodeURIComponent(workspaceId)}/go`;
   let currentUrl = workspaceUrl;
   let hopsFollowed = 0;
 
-  // `redirect: "manual"`: Node's fetch keeps caller headers on cross-origin
-  // redirects, so following automatically would leak the auth cookie. Each hop
-  // is re-requested only after `resolveAllowedRedirect` approves the Location
-  // (allowlisted canonical HTTPS hosts, at most MAX_REDIRECT_HOPS hops).
+  // `redirect: "manual"`: automatic redirect following may re-send caller
+  // headers (including the auth cookie) to a cross-origin Location, and runtime
+  // header stripping cannot be relied on. Each hop is re-requested only after
+  // `resolveAllowedRedirect` approves the Location (allowlisted canonical HTTPS
+  // hosts, at most MAX_REDIRECT_HOPS hops).
   for (;;) {
-    let response: Response;
+    let hop: CookieHop;
     try {
-      response = await fetchWithTimeout(currentUrl, {
-        redirect: "manual",
-        headers: {
-          Cookie: `auth=${authCookie}`,
-          "User-Agent": "oc-go-usage-display-plugin",
-          Accept: "text/html,application/xhtml+xml",
+      hop = await fetchWithTimeout(
+        currentUrl,
+        {
+          redirect: "manual",
+          headers: {
+            Cookie: `auth=${authCookie}`,
+            "User-Agent": "oc-go-usage-display-plugin",
+            Accept: "text/html,application/xhtml+xml",
+          },
         },
-      });
+        async (response) => {
+          if (REDIRECT_STATUSES.has(response.status)) {
+            // The redirect body is never read: Location alone decides the next
+            // hop, so this resolves (and clears the abort timer) immediately.
+            return { kind: "redirect", location: response.headers.get("location") };
+          }
+          return { kind: "body", status: response.status, html: await response.text() };
+        },
+      );
     } catch {
       return unavailableSnapshot("request failed");
     }
 
-    if (REDIRECT_STATUSES.has(response.status)) {
-      const decision = resolveAllowedRedirect(
-        currentUrl,
-        response.headers.get("location"),
-        hopsFollowed,
-      );
+    if (hop.kind === "redirect") {
+      const decision = resolveAllowedRedirect(currentUrl, hop.location, hopsFollowed);
       if (!decision.follow) return unavailableSnapshot(decision.reason);
       currentUrl = decision.url;
       hopsFollowed += 1;
       continue;
     }
 
-    let html = "";
-    try {
-      html = await response.text();
-    } catch {
-      return unavailableSnapshot("request failed");
-    }
+    const { status, html } = hop;
     if (isLoginPage(currentUrl, html)) {
       return unavailableSnapshot("login expired (refresh auth cookie)");
     }
-    if (response.status !== 200) {
-      return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
+    if (status !== 200) {
+      return unavailableSnapshot(`upstream returned HTTP ${status}`);
     }
     const usages = parseScrapedUsage(html);
     if (Object.keys(usages).length === 0) {
