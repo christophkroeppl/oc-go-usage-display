@@ -103,10 +103,10 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Setup Node 24 with npm registry
+      - name: Setup Node 22 with npm registry
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           registry-url: https://registry.npmjs.org
           # setup-node defaults always-auth to true, which writes the
           # deprecated `always-auth` key into the runner .npmrc and breaks
@@ -120,11 +120,8 @@ jobs:
       - name: Typecheck
         run: npm run check
 
-      - name: Build
-        run: npm run build
-
-      - name: Test
-        run: npm test --if-present
+      - name: Test (build + unit + integration)
+        run: npm test
 
   version-bump:
     name: version bump (conventional commits)

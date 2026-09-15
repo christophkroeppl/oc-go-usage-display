@@ -34,8 +34,8 @@ jobs:
       - name: Typecheck
         run: npm run check
 
-      - name: Build
-        run: npm run build
+      - name: Test (build + unit + integration)
+        run: npm test
 
       - name: Pack dev tarball
         run: |
