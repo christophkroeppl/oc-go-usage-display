@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Install oc-go-usage-display from the latest successful develop dev-build.
-# Downloads the stable `dev-tgz` artifact, sanity-checks the tarball, installs
-# it via npm, and registers the plugin (existing toggles are preserved).
+# Downloads the stable `dev-tgz` artifact, sanity-checks the tarball, snapshots
+# the 6 OpenCode config files, installs it via npm, and registers the plugin
+# (existing toggles are preserved).
+#
+# There is no auto-restore: the snapshot path and the restore command are
+# printed at the end, and on install failure before exiting non-zero.
 #
 # Usage:
 #   ./install-dev.sh [--branch develop] [--workflow FILE] [--run-id ID]
 #                    [--dir ./tmp-dev] [--force|--clean] [--dry-run]
-#                    [--sidebar=0/1 --statusline=0/1]
 #                    [--config-dir PATH] [--backup-dir PATH]
-#                    [--no-restore] [--backup-only] [--restore-only]
+#                    [--sidebar=0/1 --statusline=0/1]
 #
-# --dry-run stops after download + tarball sanity (no install/register).
-# Config safety: the 6 opencode config files are backed up before any
-# mutation (default backup root under ${TMPDIR:-${TMP:-/tmp}}) and restored
-# on EXIT/INT/TERM unless --no-restore. --backup-only/--restore-only run
-# only that step. A failed backup aborts before any mutation (fail closed).
-# Secrets are never touched. Restart opencode afterwards.
+# Restore after testing:
+#   scripts/dev-config-snapshot.sh restore --backup-dir <snapshot path>
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNAPSHOT_SCRIPT="$SCRIPT_DIR/scripts/dev-config-snapshot.sh"
 BRANCH="develop"
 WORKFLOW=""
 RUN_ID=""
@@ -29,9 +29,6 @@ CLEAN=0
 DRY_RUN=0
 BACKUP_DIR=""
 CONFIG_DIR_ARG=""
-NO_RESTORE=0
-BACKUP_ONLY=0
-RESTORE_ONLY=0
 INIT_ARGS=()
 
 usage() {
@@ -47,11 +44,11 @@ Usage: install-dev.sh [options]
   --sidebar=0/1          passthrough to oc-go-usage-display-init
   --statusline=0/1       passthrough to oc-go-usage-display-init
   --config-dir <path>    opencode config dir (default: $OPENCODE_CONFIG_DIR or ~/.config/opencode)
-  --backup-dir <path>    backup root (default: tmp oc-go-usage-display-backup-<timestamp-pid>)
-  --no-restore           keep installed files, skip auto-restore on exit
-  --backup-only          only back up config files, then exit
-  --restore-only         only restore config files from --backup-dir, then exit
+  --backup-dir <path>    snapshot root (default: tmp oc-go-usage-display-backup)
   -h, --help             show this help
+
+Restore after testing:
+  scripts/dev-config-snapshot.sh restore --backup-dir <snapshot path>
 EOF
 }
 
@@ -86,9 +83,6 @@ while [[ $# -gt 0 ]]; do
       CONFIG_DIR_ARG="$2"
       shift 2
       ;;
-    --no-restore) NO_RESTORE=1; shift ;;
-    --backup-only) BACKUP_ONLY=1; shift ;;
-    --restore-only) RESTORE_ONLY=1; shift ;;
     --sidebar=*|--statusline=*) INIT_ARGS+=("$1"); shift ;;
     --sidebar|--statusline)
       if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -103,61 +97,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$BACKUP_ONLY" == "1" && "$RESTORE_ONLY" == "1" ]]; then
-  echo "error: --backup-only and --restore-only are mutually exclusive" >&2
-  exit 1
-fi
-
-# --- config backup/restore (test-install safety) -----------------------------
-TMP_BASE="${TMPDIR:-${TMP:-/tmp}}"
-if [[ -z "$BACKUP_DIR" ]]; then
-  BACKUP_DIR="$TMP_BASE/oc-go-usage-display-backup-$(date +%Y%m%d-%H%M%S)-$$"
-fi
-BACKUP_SCRIPT="$SCRIPT_DIR/scripts/backup-opencode-config.sh"
-RESTORE_SCRIPT="$SCRIPT_DIR/scripts/restore-opencode-config.sh"
-CONFIG_FORWARD=()
-if [[ -n "$CONFIG_DIR_ARG" ]]; then
-  CONFIG_FORWARD=(--config-dir "$CONFIG_DIR_ARG")
-fi
-BACKUP_DONE=0
-TAR_LIST=""
-# Unified exit/signal trap: auto-restores the backup (unless opted out) and
-# always removes the tarball list temp file. Chains the old TAR_LIST trap.
-trap 'rc=$?; if [[ "$BACKUP_DONE" == "1" && "$NO_RESTORE" == "0" && "$BACKUP_ONLY" == "0" && "$RESTORE_ONLY" == "0" ]]; then "$RESTORE_SCRIPT" --backup-dir "$BACKUP_DIR" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} 2>&1 || echo "warning: restore failed (backup kept at $BACKUP_DIR)" >&2; fi; if [[ -n "${TAR_LIST:-}" ]]; then rm -f "$TAR_LIST"; fi; exit $rc' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-if [[ "$RESTORE_ONLY" == "1" ]]; then
-  "$RESTORE_SCRIPT" --backup-dir "$BACKUP_DIR" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"}
-  exit $?
-fi
-
-# Fail closed: abort before any mutation if the backup cannot be taken.
-if ! "$BACKUP_SCRIPT" --backup-dir "$BACKUP_DIR" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"}; then
-  echo "error: config backup failed, refusing to continue (nothing was changed)" >&2
-  exit 1
-fi
-BACKUP_DONE=1
-
-if [[ "$BACKUP_ONLY" == "1" ]]; then
-  echo "backup-only: backup at $BACKUP_DIR, exiting without install"
-  exit 0
-fi
-
-if ! command -v gh >/dev/null 2>&1; then
-  echo "error: gh is required" >&2
-  exit 1
-fi
-if ! command -v node >/dev/null 2>&1; then
-  echo "error: node is required" >&2
-  exit 1
-fi
-if ! command -v npm >/dev/null 2>&1; then
-  echo "error: npm is required" >&2
-  exit 1
-fi
+for cmd in gh node npm; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "error: $cmd is required" >&2; exit 1; }
+done
 gh auth status >/dev/null 2>&1 || {
   echo "error: gh is not authenticated (run gh auth login)" >&2
+  exit 1
+}
+[[ -x "$SNAPSHOT_SCRIPT" ]] || {
+  echo "error: missing snapshot script: $SNAPSHOT_SCRIPT" >&2
   exit 1
 }
 
@@ -258,30 +206,69 @@ fi
 TARBALL="${TARBALLS[0]}"
 echo "tarball: $TARBALL"
 
-TAR_LIST="$(mktemp)"
-tar -tzf "$TARBALL" | sort > "$TAR_LIST"
+TARBALL_LIST="$(tar -tzf "$TARBALL")"
 for entry in "package/dist/index.js" "package/bin/oc-go-usage-display-init.js"; do
-  grep -Fxq "$entry" "$TAR_LIST" || {
+  grep -Fxq "$entry" <<<"$TARBALL_LIST" || {
     echo "error: tarball missing $entry" >&2
     exit 1
   }
 done
 echo "tarball contents OK"
-rm -f "$TAR_LIST"
-TAR_LIST=""
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "dry-run: stopping after download (run $RUN_ID -> $TARBALL)"
   exit 0
 fi
 
-TARBALL_ABS="$(resolve_abs "$TARBALL")"
-(
-  cd "$SCRIPT_DIR"
-  npm install --no-save "file:$TARBALL_ABS"
-  npx --no-install oc-go-usage-display-init --copy "${INIT_ARGS[@]}" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"}
-  npx --no-install oc-go-usage-display-show --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"}
-  npx --no-install oc-go-usage-display-status ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"}
-)
+CONFIG_FORWARD=()
+if [[ -n "$CONFIG_DIR_ARG" ]]; then
+  CONFIG_FORWARD=(--config-dir "$CONFIG_DIR_ARG")
+fi
+BACKUP_FORWARD=()
+if [[ -n "$BACKUP_DIR" ]]; then
+  BACKUP_FORWARD=(--backup-dir "$BACKUP_DIR")
+fi
 
+# Fail closed: abort before any mutation if the snapshot cannot be taken.
+SNAPSHOT_DIR=""
+if ! SNAPSHOT_DIR="$("$SNAPSHOT_SCRIPT" save ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} ${BACKUP_FORWARD[@]+"${BACKUP_FORWARD[@]}"})"; then
+  echo "error: config snapshot failed, refusing to install (nothing was changed)" >&2
+  exit 1
+fi
+echo "config snapshot: $SNAPSHOT_DIR"
+
+print_reminder() {
+  local restore_cmd="scripts/dev-config-snapshot.sh restore --backup-dir $SNAPSHOT_DIR"
+  if [[ -n "$CONFIG_DIR_ARG" ]]; then
+    restore_cmd+=" --config-dir $CONFIG_DIR_ARG"
+  fi
+  printf '\n%s\n' "----------------------------------------------------------------"
+  echo "To restore your previous OpenCode config:"
+  echo "  $restore_cmd"
+  echo "To return to the published version instead:"
+  echo "  npx -y oc-go-usage-display@latest init --copy"
+  printf '%s\n\n' "----------------------------------------------------------------"
+}
+
+install_dev() {
+  (
+    cd "$SCRIPT_DIR" || exit 1
+    npm install --no-save "file:$(resolve_abs "$TARBALL")" || exit 1
+    npx --no-install oc-go-usage-display-init --copy ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
+    npx --no-install oc-go-usage-display-show --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
+      || echo "warning: show --json failed (best-effort)"
+    npx --no-install oc-go-usage-display-status ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
+      || echo "warning: status failed (best-effort)"
+  )
+}
+
+install_rc=0
+install_dev || install_rc=$?
+if [[ "$install_rc" -ne 0 ]]; then
+  echo "error: dev install failed after the config snapshot was taken" >&2
+  print_reminder >&2
+  exit 1
+fi
+
+print_reminder
 echo "restart opencode to pick up plugin changes"
