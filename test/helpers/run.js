@@ -4,8 +4,8 @@
 // inside the caller's tmp directory, plus `OPENCODE_GO_MOCK=1` (deterministic
 // snapshot, no network). The real `~/.config/opencode` and `~/.opencode` are
 // never reachable: the home/config/data/state/cache paths are explicit and
-// guarded to live under `root`, and credential plus behavior-toggle env vars
-// are stripped.
+// guarded to live under `root`, credential plus behavior-toggle env vars are
+// stripped, and opencode config-override vars are removed unconditionally.
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -38,6 +38,19 @@ const BEHAVIOR_KEYS = [
   "OPENCODE_GO_STATUSLINE",
 ];
 
+// Vars that override opencode's own config/database/permission resolution.
+// An inherited value can redirect a child at the real host config, disable the
+// plugin under test, or point at a shared DB, so these are removed even when
+// an `overrides` object tries to reintroduce them.
+export const CONFIG_OVERRIDE_KEYS = [
+  "OPENCODE_CONFIG",
+  "OPENCODE_CONFIG_CONTENT",
+  "OPENCODE_TUI_CONFIG",
+  "OPENCODE_PERMISSION",
+  "OPENCODE_DB",
+  "OPENCODE_PLUGIN_META_FILE",
+];
+
 function assertUnderRoot(root, key, value) {
   const relative = path.relative(root, value);
   const inside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -62,7 +75,7 @@ export function isolatedEnv(root, overrides = {}) {
     OPENCODE_CONFIG_DIR: path.join(root, "config"),
     OPENCODE_GO_MOCK: "1",
   }, overrides);
-  for (const key of SECRET_KEYS) delete env[key];
+  for (const key of [...SECRET_KEYS, ...CONFIG_OVERRIDE_KEYS]) delete env[key];
   for (const key of HERMETIC_KEYS) {
     assertUnderRoot(root, key, env[key]);
     fs.mkdirSync(env[key], { recursive: true });

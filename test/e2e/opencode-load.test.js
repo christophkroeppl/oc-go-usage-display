@@ -20,11 +20,13 @@ import { isolatedEnv } from "../helpers/run.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
   assertGoUsageRegistered,
+  assertHermeticPaths,
   fetchToolIds,
   findOpencodeBinary,
   hasPty,
   OPENCODE_LOAD_ENV,
   startOpencodeServer,
+  stripConfigOverrides,
   writePluginConfig,
 } from "../helpers/opencode.js";
 
@@ -49,10 +51,19 @@ function makeHermeticRoot() {
 
 test("opencode serve loads the plugin and registers go_usage", { skip: SKIP_NO_BINARY }, async (t) => {
   const { tmp, env } = makeHermeticRoot();
-  t.after(() => tmp.cleanup());
+  let server = null;
+  // One teardown hook: the server is always stopped before the tmp root is
+  // removed, regardless of how the test exits (a pair of t.after hooks would
+  // run FIFO, i.e. cleanup would race ahead of stop).
+  t.after(() => {
+    server?.stop();
+    tmp.cleanup();
+  });
 
-  const server = await startOpencodeServer({ binary: OPENCODE_BINARY, cwd: REPO_DIR, env });
-  t.after(() => server.stop());
+  // Fail before booting if opencode resolves any path outside the tmp root.
+  assertHermeticPaths({ binary: OPENCODE_BINARY, cwd: REPO_DIR, env, root: tmp.root });
+
+  server = await startOpencodeServer({ binary: OPENCODE_BINARY, cwd: REPO_DIR, env });
 
   const ids = await fetchToolIds(server.url, REPO_DIR);
   assertGoUsageRegistered(ids);
@@ -67,7 +78,7 @@ test(
     try {
       const result = spawnSync("timeout", ["30", "script", "-qec", "opencode", "/dev/null"], {
         cwd: REPO_DIR,
-        env,
+        env: stripConfigOverrides(env),
         encoding: "utf8",
         timeout: 45000,
       });

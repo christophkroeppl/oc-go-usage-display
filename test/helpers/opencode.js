@@ -11,6 +11,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { CONFIG_OVERRIDE_KEYS } from "./run.js";
 
 // Behavior toggles the load check needs. Deliberately omits OPENCODE_PURE /
 // `--pure`: that would skip the very plugin under test.
@@ -26,6 +28,14 @@ export const OPENCODE_LOAD_ENV = {
 const SENTINEL_PATTERN = /server listening on (http:\/\/[0-9.]+:[0-9]+)/;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Defense in depth over `isolatedEnv`: never hand an opencode child a
+// config-override var, even if a caller built the env some other way.
+export function stripConfigOverrides(env) {
+  const clean = { ...env };
+  for (const key of CONFIG_OVERRIDE_KEYS) delete clean[key];
+  return clean;
+}
 
 export function findOpencodeBinary() {
   const found = spawnSync("which", ["opencode"], { encoding: "utf8" });
@@ -43,14 +53,49 @@ export function hasPty() {
   return probe.status === 0;
 }
 
+// Hermeticity tripwire: before any server is booted, every path
+// `opencode debug paths` reports must live inside the hermetic tmp root. A
+// mismatch means the child would read the developer's real config/db, so the
+// e2e fails loudly instead.
+export function assertHermeticPaths({ binary, cwd, env, root }) {
+  const result = spawnSync(binary, ["debug", "paths"], { cwd, env, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(
+      `opencode debug paths exited ${result.status}:\n${result.stderr || result.stdout}`,
+    );
+  }
+  const output = result.stdout ?? "";
+  const checked = [];
+  for (const line of output.split("\n")) {
+    // `key<whitespace>value` lines; anything else (blank lines, notes) is
+    // ignored, matching the shell check this replaces.
+    const match = /^(\S+)\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    const value = rawValue.trim();
+    const relative = path.relative(root, value);
+    const inside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+    if (!inside) {
+      throw new Error(`opencode debug path "${key}" escaped the hermetic root: ${value} (root: ${root})`);
+    }
+    checked.push(key);
+  }
+  if (checked.length === 0) {
+    throw new Error(`opencode debug paths produced no parsable path lines:\n${output}`);
+  }
+  return checked;
+}
+
 // Write the two config files opencode reads: opencode.json points the server
 // at dist/index.js; tui.json points the TUI at dist/tui.js and enables both
-// surfaces. Plain `file://` specs deliberately exercise the post-build entry
-// modules (the bundled dist/plugins/* copies are validated elsewhere).
+// surfaces. `pathToFileURL` percent-encodes the spec so a repo path containing
+// spaces still resolves. Plain `file://` specs deliberately exercise the
+// post-build entry modules (the bundled dist/plugins/* copies are validated
+// elsewhere).
 export function writePluginConfig(configDir, repoDir) {
   fs.mkdirSync(configDir, { recursive: true });
-  const serverPlugin = `file://${path.join(repoDir, "dist", "index.js")}`;
-  const tuiPlugin = `file://${path.join(repoDir, "dist", "tui.js")}`;
+  const serverPlugin = pathToFileURL(path.join(repoDir, "dist", "index.js")).href;
+  const tuiPlugin = pathToFileURL(path.join(repoDir, "dist", "tui.js")).href;
   fs.writeFileSync(
     path.join(configDir, "opencode.json"),
     `${JSON.stringify({ $schema: "https://opencode.ai/config.json", plugin: [serverPlugin] }, null, 2)}\n`,
@@ -70,7 +115,7 @@ export function writePluginConfig(configDir, repoDir) {
 export async function startOpencodeServer({ binary, cwd, env, timeoutMs = 15000 }) {
   const child = spawn(binary, ["serve", "--port", "0", "--hostname", "127.0.0.1"], {
     cwd,
-    env,
+    env: stripConfigOverrides(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
