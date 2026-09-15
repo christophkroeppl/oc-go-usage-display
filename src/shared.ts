@@ -14,7 +14,30 @@ import * as path from "node:path";
 // Constants
 // ---------------------------------------------------------------------------
 
-export const CONFIG_DIR = path.join(os.homedir(), ".config", "opencode");
+// Path construction is best-effort. `os.homedir()` can throw when no home
+// directory is resolvable, and a throwing top-level expression aborts the
+// host's plugin import; degrade to a relative config path instead.
+function resolveConfigDir(): string {
+  try {
+    return path.join(os.homedir(), ".config", "opencode");
+  } catch {
+    return ".config/opencode";
+  }
+}
+
+export const CONFIG_DIR = resolveConfigDir();
+
+// Tolerant `path.join` for module-level path construction. `path.join` throws
+// on a non-string segment; plugin entry modules build cache/config paths at
+// import time, so a throw there would crash startup. Degrade to a joined
+// string instead of throwing.
+export function safeJoinPath(base: string, ...segments: string[]): string {
+  try {
+    return path.join(base, ...segments);
+  } catch {
+    return [base, ...segments].filter((segment) => segment.length > 0).join("/");
+  }
+}
 
 export function dataShareAuthPath(): string {
   const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);

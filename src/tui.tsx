@@ -212,7 +212,10 @@ async function logUsageError(api: TuiPluginApi, message: string): Promise<void> 
 // TUI plugin
 // ---------------------------------------------------------------------------
 
-const goUsageTui: TuiPlugin = async (api, options) => {
+// The factory body lives here so the exported `goUsageTui` can wrap the whole
+// initialization in a single fail-safe boundary. A throwing factory would
+// destabilize the host's plugin load, so it must never reject.
+async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefined): Promise<void> {
   const surfaces = resolveSurfaceSelection(options, api);
   migrateLegacyCollapsedFlag(api);
 
@@ -248,10 +251,18 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     }
   }
 
+  // Fire-and-forget refresh that cannot surface an unhandled rejection. The
+  // poll interval and every event callback funnel through here.
+  function refreshSafely(): void {
+    void refreshUsage().catch(() => {
+      // refreshUsage already swallows failures; this guards a regression.
+    });
+  }
+
   function toggleSidebarCollapsed(): void {
-    const next = !isSidebarCollapsed();
-    setIsSidebarCollapsed(next);
     try {
+      const next = !isSidebarCollapsed();
+      setIsSidebarCollapsed(next);
       api.kv.set(KV_COLLAPSED_SIDEBAR_KEY, next);
     } catch {
       // Collapse state is best-effort persistence only.
@@ -259,9 +270,9 @@ const goUsageTui: TuiPlugin = async (api, options) => {
   }
 
   function toggleStatuslineCollapsed(): void {
-    const next = !isStatuslineCollapsed();
-    setIsStatuslineCollapsed(next);
     try {
+      const next = !isStatuslineCollapsed();
+      setIsStatuslineCollapsed(next);
       api.kv.set(KV_COLLAPSED_STATUSLINE_KEY, next);
     } catch {
       // Collapse state is best-effort persistence only.
@@ -334,69 +345,137 @@ const goUsageTui: TuiPlugin = async (api, options) => {
     // unregister API, so there is nothing to dispose here (the slot dies
     // with the host). Interval/event/command teardown below is the full
     // dispose path.
-    api.slots.register({
-      order: SLOT_ORDER,
-      slots: {
-        sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
-          if (props.session_id.length === 0) return null;
-          if (api.route.current.name !== "session") return null;
-          if (isSidebarCollapsed()) return null;
-          return <GoSidebarPanel theme={ctx.theme} />;
+    try {
+      api.slots.register({
+        order: SLOT_ORDER,
+        slots: {
+          sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
+            // Individually guarded: a later render must never throw into the host.
+            try {
+              if (props.session_id.length === 0) return null;
+              if (api.route.current.name !== "session") return null;
+              if (isSidebarCollapsed()) return null;
+              return <GoSidebarPanel theme={ctx.theme} />;
+            } catch {
+              return null;
+            }
+          },
         },
-      },
-    });
+      });
+    } catch {
+      // Additive slot: a registration failure must not abort the plugin.
+    }
   }
 
   if (surfaces.statusline) {
     // Host-owned slot (see sidebar note above): no unregister API exists,
     // so disposal is a no-op for slots.
-    api.slots.register({
-      order: SLOT_ORDER,
-      slots: {
-        session_prompt_right(_ctx: TuiSlotContext, props: { session_id: string }) {
-          if (props.session_id.length === 0) return null;
-          if (isStatuslineCollapsed()) return null;
-          return <GoStatusline />;
+    try {
+      api.slots.register({
+        order: SLOT_ORDER,
+        slots: {
+          session_prompt_right(_ctx: TuiSlotContext, props: { session_id: string }) {
+            // Individually guarded: a later render must never throw into the host.
+            try {
+              if (props.session_id.length === 0) return null;
+              if (isStatuslineCollapsed()) return null;
+              return <GoStatusline />;
+            } catch {
+              return null;
+            }
+          },
         },
-      },
-    });
+      });
+    } catch {
+      // Additive slot: a registration failure must not abort the plugin.
+    }
   }
 
   // `api.command` is a deprecated legacy shim that hosts may omit; guard so
   // the plugin still initializes and disposes safely without it.
-  const unregisterToggleCommand = api.command?.register(() => [
-    {
-      title: "Go usage: toggle sidebar",
-      value: "oc-go-usage-display.toggle-sidebar",
-      category: "Go",
-      onSelect: () => toggleSidebarCollapsed(),
-    },
-    {
-      title: "Go usage: toggle statusline",
-      value: "oc-go-usage-display.toggle-statusline",
-      category: "Go",
-      onSelect: () => toggleStatuslineCollapsed(),
-    },
-  ]) ?? (() => {});
+  let unregisterToggleCommand: () => void = () => {};
+  try {
+    const unregister = api.command?.register(() => [
+      {
+        title: "Go usage: toggle sidebar",
+        value: "oc-go-usage-display.toggle-sidebar",
+        category: "Go",
+        onSelect: () => toggleSidebarCollapsed(),
+      },
+      {
+        title: "Go usage: toggle statusline",
+        value: "oc-go-usage-display.toggle-statusline",
+        category: "Go",
+        onSelect: () => toggleStatuslineCollapsed(),
+      },
+    ]);
+    if (typeof unregister === "function") unregisterToggleCommand = unregister;
+  } catch {
+    // Legacy command registration is optional; ignore failures.
+  }
 
-  const unsubscribeSession = api.event.on("session.updated", () => {
-    void refreshUsage();
-  });
-  const unsubscribeMessage = api.event.on("message.updated", () => {
-    void refreshUsage();
-  });
-  const pollTimer = setInterval(() => {
-    void refreshUsage();
-  }, POLL_INTERVAL_MS);
+  let unsubscribeSession: () => void = () => {};
+  let unsubscribeMessage: () => void = () => {};
+  try {
+    const unsubscribe = api.event.on("session.updated", () => refreshSafely());
+    if (typeof unsubscribe === "function") unsubscribeSession = unsubscribe;
+  } catch {
+    // Event subscription is additive; a failure must not abort the plugin.
+  }
+  try {
+    const unsubscribe = api.event.on("message.updated", () => refreshSafely());
+    if (typeof unsubscribe === "function") unsubscribeMessage = unsubscribe;
+  } catch {
+    // Event subscription is additive; a failure must not abort the plugin.
+  }
 
-  api.lifecycle.onDispose(() => {
-    clearInterval(pollTimer);
-    unsubscribeSession();
-    unsubscribeMessage();
-    unregisterToggleCommand();
-  });
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  try {
+    pollTimer = setInterval(() => refreshSafely(), POLL_INTERVAL_MS);
+  } catch {
+    // No poll timer: the on-demand refresh below still runs.
+  }
+
+  try {
+    api.lifecycle.onDispose(() => {
+      // Each teardown step is isolated: one throwing unsubscribe must not
+      // prevent the rest (or leak into the host's dispose pass).
+      if (pollTimer !== null) {
+        try {
+          clearInterval(pollTimer);
+        } catch {
+          // noop
+        }
+      }
+      for (const teardown of [unsubscribeSession, unsubscribeMessage, unregisterToggleCommand]) {
+        try {
+          teardown();
+        } catch {
+          // noop
+        }
+      }
+    });
+  } catch {
+    // Lifecycle registration is best-effort; never leak a timer into the host.
+    if (pollTimer !== null) {
+      try {
+        clearInterval(pollTimer);
+      } catch {
+        // noop
+      }
+    }
+  }
 
   await refreshUsage();
+}
+
+const goUsageTui: TuiPlugin = async (api, options) => {
+  try {
+    await initializeTui(api, options);
+  } catch {
+    // Best-effort only: never let initialization errors reject into the host.
+    await logUsageError(api, "Go usage TUI failed to initialize; continuing without display");
+  }
 };
 
 export default { id: "oc-go-usage-display", tui: goUsageTui } satisfies TuiPluginModule;

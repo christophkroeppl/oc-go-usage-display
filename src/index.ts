@@ -29,7 +29,7 @@
 //   5. none                       -> unavailable snapshot (literal-only error)
 // Snapshots are cached 60s in memory + on disk.
 
-import type { Plugin, PluginModule } from "@opencode-ai/plugin";
+import type { Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -42,6 +42,7 @@ import {
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
+  safeJoinPath,
   toFiniteNumber,
   toNonEmptyString,
   unavailableSnapshot,
@@ -56,7 +57,7 @@ const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-const DISK_CACHE_PATH = path.join(CONFIG_DIR, "oc-go-usage-display-cache.json");
+const DISK_CACHE_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display-cache.json");
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally)
@@ -402,23 +403,78 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
 // every export and invokes each as a plugin factory when the default is not a
 // `{ id, server }` module. Helpers live in `./helpers.js` for exactly that
 // reason. `server` returns the existing `{ tool: { go_usage } }` hook surface.
-const server: Plugin = async () => {
-  return {
-    tool: {
-      go_usage: tool({
-        description:
-          "Show OpenCode Go subscription usage: rolling 5h, weekly, and monthly windows. Takes no arguments.",
-        args: {},
-        execute: async () => {
-          const snapshot = await getUsageSnapshot().catch(() =>
-            unavailableSnapshot("request failed"),
-          );
-          const line = formatServerLine(snapshot);
-          return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
-        },
-      }),
-    },
-  };
+
+// A Hooks value is always a plain object. Drop nullish hook entries (and
+// nullish tool definitions) so the loader can never dereference
+// `hook.config` / `hook.provider` on a null value.
+function sanitizeHooks(hooks: unknown): Hooks {
+  if (!isRecord(hooks)) return {};
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(hooks)) {
+    if (value === null || value === undefined) continue;
+    if (key === "tool" && isRecord(value)) {
+      const tools: Record<string, unknown> = {};
+      for (const [name, definition] of Object.entries(value)) {
+        if (definition === null || definition === undefined) continue;
+        tools[name] = definition;
+      }
+      clean[key] = tools;
+      continue;
+    }
+    clean[key] = value;
+  }
+  return clean as Hooks;
+}
+
+type LogClient = {
+  app?: { log?: (input: { service: string; level: string; message: string }) => unknown };
+};
+
+// Best-effort initialization log. The client (or its `log` method) may be
+// absent on a malformed input, and logging must never rethrow into the factory.
+async function logServerInitError(input: unknown): Promise<void> {
+  try {
+    const client = (input as { client?: LogClient } | null | undefined)?.client;
+    await client?.app?.log?.({
+      service: "oc-go-usage-display",
+      level: "error",
+      message: "Go usage plugin failed to initialize; continuing without hooks",
+    });
+  } catch {
+    // Logging is best-effort; the factory must never throw.
+  }
+}
+
+// Fail-safe contract: OpenCode always starts, even if this plugin cannot. The
+// factory resolves to a valid Hooks object (never undefined/null) for any
+// input; on initialization failure it logs best-effort and resolves to `{}`.
+const server: Plugin = async (input, _options) => {
+  try {
+    return sanitizeHooks({
+      tool: {
+        go_usage: tool({
+          description:
+            "Show OpenCode Go subscription usage: rolling 5h, weekly, and monthly windows. Takes no arguments.",
+          args: {},
+          execute: async () => {
+            try {
+              const snapshot = await getUsageSnapshot().catch(() =>
+                unavailableSnapshot("request failed"),
+              );
+              const line = formatServerLine(snapshot);
+              return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
+            } catch {
+              // A tool invocation must never reject into the host.
+              return formatServerLine(unavailableSnapshot("request failed"));
+            }
+          },
+        }),
+      },
+    });
+  } catch {
+    await logServerInitError(input);
+    return {};
+  }
 };
 
 export default { id: "oc-go-usage-display", server } satisfies PluginModule;

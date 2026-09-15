@@ -12,11 +12,11 @@
 // test/unit/tui.test.js).
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import {
   CONFIG_DIR,
   formatResetDuration,
   isRecord,
+  safeJoinPath,
   toNonEmptyString,
 } from "./shared.js";
 import type { UsageSnapshot, UsageWindow } from "./shared.js";
@@ -52,7 +52,7 @@ export function formatServerLine(snapshot: UsageSnapshot): string {
 
 export type FileConfig = { workspaceId: string | null; authCookie: string | null };
 
-const FILE_CONFIG_PATH = path.join(CONFIG_DIR, "oc-go-usage-display.json");
+const FILE_CONFIG_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display.json");
 
 export function readFileConfig(): FileConfig {
   let raw: string;
