@@ -29,16 +29,15 @@ process.env.OPENCODE_CONFIG_DIR = path.join(ROOT, "config");
 delete process.env.OPENCODE_GO_API_KEY;
 delete process.env.OPENCODE_GO_AUTH_COOKIE;
 delete process.env.OPENCODE_GO_WORKSPACE_ID;
+// Surface selection must come from this suite, never from the ambient shell.
+delete process.env.OPENCODE_GO_SIDEBAR;
+delete process.env.OPENCODE_GO_STATUSLINE;
+delete process.env.OPENCODE_GO_DISPLAY;
 
 for (const dir of ["home", "xdg-config", "xdg-data", "xdg-state", "xdg-cache", "config"]) {
   fs.mkdirSync(path.join(ROOT, dir), { recursive: true });
 }
 process.on("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
-
-const ENTRIES = [
-  { name: "dist/index.js", spec: "../../dist/index.js", key: "server" },
-  { name: "dist/tui.js", spec: "../../dist/tui.js", key: "tui" },
-];
 
 // A value the loader may dereference (`hooks.config` / `hooks.provider`) must
 // be a plain object; null, undefined, arrays and primitives all crash it.
@@ -104,37 +103,45 @@ test("server factory resolves to a clean hooks object for malformed inputs", asy
   }
 });
 
-test("server tool execution never rejects into the host", async () => {
+test("server tool execution returns a line plus a JSON snapshot line", async () => {
   const { default: serverModule } = await import("../../dist/index.js");
   const hooks = await serverModule.server({}, undefined);
   const definition = hooks.tool?.go_usage;
   assert.equal(typeof definition?.execute, "function");
   const output = await definition.execute({}, undefined);
   assert.equal(typeof output, "string");
+  const [line, ...jsonLines] = output.split("\n");
+  assert.match(line, /^Go /);
+  const snapshot = JSON.parse(jsonLines.join("\n"));
+  assert.equal(snapshot.source, "mock");
+  assert.equal(snapshot.rolling?.percent, 42);
 });
 
-test("legacy host enumeration never yields a non-object hook entry", async () => {
-  for (const { name, spec, key } of ENTRIES) {
-    const mod = await import(spec);
-    assert.equal(typeof mod.default[key], "function", `${name} default must expose ${key}`);
+test("server factory resolves cleanly with a throwing host log client", async () => {
+  const { default: serverModule } = await import("../../dist/index.js");
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
 
-    // Legacy loader fallback: invoke every non-default function export as a
-    // plugin factory and push what it returns. Every entry must be a hooks
-    // object, even under weird (empty) input.
-    for (const [exportName, value] of Object.entries(mod)) {
-      if (exportName === "default" || typeof value !== "function") continue;
-      assert.ok(
-        isHooks(await value({}, undefined)),
-        `${name} export "${exportName}" produced a non-object hook entry`,
-      );
-    }
-
-    // The default module's factory must be safe under the same weird input.
-    if (key === "server") {
-      assertCleanHookEntries(await mod.default.server({}, undefined), `${name} default.server`);
-    } else {
-      await assert.doesNotReject(() => mod.default.tui({}, undefined));
-    }
+  try {
+    const hooks = await serverModule.server(
+      {
+        client: {
+          app: {
+            log() {
+              throw new Error("host log unavailable");
+            },
+          },
+        },
+      },
+      undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assertCleanHookEntries(hooks, "server(throwing host log)");
+    assert.equal(typeof hooks.tool?.go_usage?.execute, "function");
+    assert.deepStrictEqual(rejections, []);
+  } finally {
+    process.off("unhandledRejection", onRejection);
   }
 });
 

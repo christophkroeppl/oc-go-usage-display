@@ -6,13 +6,56 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import { buildUsageRows } from "../../dist/helpers.js";
 import {
+  errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
   formatResetDuration,
+  resolveConfigDir,
+  safeJoinPath,
   unavailableSnapshot,
 } from "../../dist/shared.js";
+
+// --- safeJoinPath / resolveConfigDir (module-level path construction) ---
+
+test("safeJoinPath joins normal segments like path.join", () => {
+  assert.equal(safeJoinPath("/base", "a", "b"), "/base/a/b");
+  assert.equal(safeJoinPath("/base"), "/base");
+  assert.equal(safeJoinPath("/base", "nested", "file.json"), path.join("/base", "nested", "file.json"));
+});
+
+test("safeJoinPath coerces non-string segments deterministically", () => {
+  assert.equal(safeJoinPath("/base", 5, null, undefined, true), "/base/5/null/undefined/true");
+  assert.equal(safeJoinPath("/base", { toString: () => "obj" }), "/base/obj");
+  // Unstringifiable values degrade to an empty segment instead of dropping the
+  // whole join or throwing.
+  assert.equal(safeJoinPath("/base", Object.create(null)), "/base");
+});
+
+test("resolveConfigDir joins home with .config/opencode", () => {
+  assert.equal(resolveConfigDir(() => "/home/tester"), "/home/tester/.config/opencode");
+});
+
+test("resolveConfigDir falls back to a relative path when home resolution throws", () => {
+  assert.equal(
+    resolveConfigDir(() => {
+      throw new Error("no home directory");
+    }),
+    ".config/opencode",
+  );
+});
+
+// --- errorMessage ---
+
+test("errorMessage extracts a usable message from arbitrary thrown values", () => {
+  assert.equal(errorMessage(new Error("boom")), "boom");
+  assert.equal(errorMessage(new Error("")), "Error");
+  assert.equal(errorMessage("plain failure"), "plain failure");
+  assert.equal(errorMessage(undefined), "unknown error");
+  assert.equal(errorMessage(Object.create(null)), "unknown error");
+});
 
 // --- formatResetDuration ---
 

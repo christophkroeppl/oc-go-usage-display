@@ -37,6 +37,7 @@ import { formatServerLine, hasMalformedAuthCookie, isMalformedAuthCookie, readFi
 import type { FileConfig } from "./helpers.js";
 import {
   CONFIG_DIR,
+  errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
   isRecord,
@@ -430,18 +431,19 @@ type LogClient = {
   app?: { log?: (input: { service: string; level: string; message: string }) => unknown };
 };
 
-// Best-effort initialization log. The client (or its `log` method) may be
-// absent on a malformed input, and logging must never rethrow into the factory.
-async function logServerInitError(input: unknown): Promise<void> {
+// Best-effort error log. The client (or its `log` method) may be absent or
+// throw on a malformed input, and logging must never rethrow into a caller or
+// delay plugin resolution: callers use `void logServerError(...)`.
+async function logServerError(input: unknown, message: string): Promise<void> {
   try {
     const client = (input as { client?: LogClient } | null | undefined)?.client;
     await client?.app?.log?.({
       service: "oc-go-usage-display",
       level: "error",
-      message: "Go usage plugin failed to initialize; continuing without hooks",
+      message,
     });
   } catch {
-    // Logging is best-effort; the factory must never throw.
+    // Logging is best-effort; callers must never fail because of it.
   }
 }
 
@@ -463,16 +465,26 @@ const server: Plugin = async (input, _options) => {
               );
               const line = formatServerLine(snapshot);
               return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
-            } catch {
-              // A tool invocation must never reject into the host.
-              return formatServerLine(unavailableSnapshot("request failed"));
+            } catch (error) {
+              // Same output shape as the success path (line + JSON tail); the
+              // failure is logged best-effort and the invocation still
+              // resolves so it can never reject into the host.
+              const snapshot = unavailableSnapshot("request failed");
+              void logServerError(
+                input,
+                `go_usage tool execution failed: ${errorMessage(error)}`,
+              );
+              return `${formatServerLine(snapshot)}\n${JSON.stringify(snapshot, null, 2)}`;
             }
           },
         }),
       },
     });
-  } catch {
-    await logServerInitError(input);
+  } catch (error) {
+    void logServerError(
+      input,
+      `Go usage plugin failed to initialize: ${errorMessage(error)}; continuing without hooks`,
+    );
     return {};
   }
 };

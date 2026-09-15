@@ -69,6 +69,7 @@ import {
 } from "./helpers.js";
 import type { SurfaceSelection } from "./helpers.js";
 import {
+  errorMessage,
   extractSnapshotFromApiPayload,
   isRecord,
   mockSnapshot,
@@ -472,9 +473,13 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 const goUsageTui: TuiPlugin = async (api, options) => {
   try {
     await initializeTui(api, options);
-  } catch {
-    // Best-effort only: never let initialization errors reject into the host.
-    await logUsageError(api, "Go usage TUI failed to initialize; continuing without display");
+  } catch (error) {
+    // Best-effort and non-blocking: never delay plugin resolution on the host
+    // log and never let an initialization error reject into the host.
+    void logUsageError(
+      api,
+      `Go usage TUI failed to initialize: ${errorMessage(error)}; continuing without display`,
+    );
   }
 };
 
