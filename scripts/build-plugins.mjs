@@ -30,9 +30,20 @@ const base = {
 };
 
 // Parse the trailing `export { ... }` / `export default ...` block(s) and
-// require the single export to alias `default`.
+// require the single export to alias `default`. Bare `export function|const|
+// class|let|var` declarations are rejected outright: the loader would invoke
+// them as plugin factories even though they never appear in an export block.
 function assertSingleDefaultExport(outfile) {
   const source = fs.readFileSync(outfile, "utf8");
+
+  const bareDeclarations = [
+    ...source.matchAll(/^\s*export\s+(?:async\s+)?(?:function|const|class|let|var)\b/gm),
+  ];
+  if (bareDeclarations.length > 0) {
+    const names = bareDeclarations.map((match) => match[0].trim()).join(", ");
+    throw new Error(`${outfile}: bare export declaration(s) not allowed (${names}); only the default export is allowed`);
+  }
+
   const exportBlocks = [...source.matchAll(/export\s*\{([^}]*)\}\s*;?/g)];
   const entries = exportBlocks.flatMap((match) =>
     match[1]

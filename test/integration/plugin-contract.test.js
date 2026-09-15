@@ -1,4 +1,4 @@
-// Plugin-loader contract regression test (no host required).
+// Integration tier: plugin-loader contract regression test (no host required).
 //
 // OpenCode's server loader enumerates every runtime export of a plugin entry
 // module and, when the default is not a `{ id, server }` module object,
@@ -16,8 +16,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const serverModule = await import("../dist/index.js");
-const tuiModule = await import("../dist/tui.js");
+const serverModule = await import("../../dist/index.js");
+const tuiModule = await import("../../dist/tui.js");
 
 const ENTRY_MODULES = [
   { name: "dist/index.js", mod: serverModule, key: "server" },

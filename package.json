@@ -53,10 +53,10 @@
     "build": "tsc -p tsconfig.json && npm run build:plugins",
     "build:plugins": "node scripts/build-plugins.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "npm run build",
-    "pretest": "npm run build",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "npm run build && npm run test:unit && npm run test:integration",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test:integration": "node --test test/integration/*.test.js",
     "test:npx": "bash scripts/test-npx.sh"
   },
   "peerDependencies": {
