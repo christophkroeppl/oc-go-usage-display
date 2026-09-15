@@ -15,7 +15,7 @@
 import {
   ensureServerEntry,
   ensureTuiEntry,
-  fail,
+  exitWithError,
   linkModeFromArgv,
   linkPluginFiles,
   openCodeDirFromArgv,
@@ -39,6 +39,5 @@ try {
   console.log(`server entry: ${server.present ? "present" : "missing"}`);
   console.log(`tui toggles: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }

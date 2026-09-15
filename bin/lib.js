@@ -17,6 +17,37 @@ export function fail(message) {
   throw new Error(`oc-go-usage-display: ${message}`);
 }
 
+// Format any thrown value as the single line the bin commands report, with the
+// `oc-go-usage-display: ` prefix applied exactly once. Pure and never throws.
+export function cliErrorMessage(error) {
+  let raw;
+  if (error instanceof Error) {
+    raw = error.message;
+  } else {
+    try {
+      raw = String(error);
+    } catch {
+      return "oc-go-usage-display: unknown error";
+    }
+  }
+  const message = raw.trim();
+  if (message.length === 0) return "oc-go-usage-display: unknown error";
+  if (message.startsWith("oc-go-usage-display: ")) return message;
+  return `oc-go-usage-display: ${message}`;
+}
+
+// Top-level error boundary shared by every bin: one clean line on stderr (no
+// stack trace, no rethrow) and exit 1. The synchronous fd write keeps the
+// message from being truncated by `process.exit` when stderr is a pipe (npx).
+export function exitWithError(error) {
+  try {
+    fs.writeSync(process.stderr.fd, `${cliErrorMessage(error)}\n`);
+  } catch {
+    // No writable stderr: the exit code still carries the failure.
+  }
+  process.exit(1);
+}
+
 export function repoDirFromArgv(argv) {
   const flagValue = readFlag(argv, "--repo");
   if (flagValue !== null) return path.resolve(flagValue);
@@ -160,6 +191,10 @@ export function linkPluginFiles(repoDir, configDir, mode) {
     if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run npm run build)`);
     if (mode === "copy") {
       const stat = safeLstat(target);
+      if (stat?.isDirectory()) {
+        // copyFileSync would fail with a raw EISDIR; fail fast with the fix.
+        fail(`cannot replace a directory with the plugin file: ${target} (remove it, then re-run)`);
+      }
       if (stat?.isSymbolicLink() || stat?.isFile()) fs.rmSync(target, { force: true });
       fs.copyFileSync(source, target);
       continue;

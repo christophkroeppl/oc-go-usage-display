@@ -9,7 +9,7 @@ import {
   TUI_PLUGIN_REL,
   SERVER_PLUGIN_REL,
   describeLink,
-  fail,
+  exitWithError,
   openCodeDirFromArgv,
   readJsonFile,
   readTuiSelection,
@@ -60,6 +60,5 @@ try {
     console.log(`secrets: env=${secrets.envPresent ? "set" : "unset"} file=${secrets.filePresent ? "present" : "absent"} (values never shown)`);
   }
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }

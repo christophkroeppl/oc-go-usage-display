@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  cliErrorMessage,
   ensureServerEntry,
   ensureTuiEntry,
   linkPluginFiles,
@@ -53,6 +54,18 @@ test("parseOptionalToggle parses flags and rejects invalid values", () => {
   assert.equal(parseOptionalToggle(["--sidebar=false"], "--sidebar"), false);
   assert.equal(parseOptionalToggle([], "--sidebar"), null);
   assert.throws(() => parseOptionalToggle(["--sidebar", "yes"], "--sidebar"), /invalid value for --sidebar/);
+});
+
+test("cliErrorMessage prefixes exactly once and never includes a stack", () => {
+  assert.equal(cliErrorMessage(new Error("boom")), "oc-go-usage-display: boom");
+  assert.equal(
+    cliErrorMessage(new Error("oc-go-usage-display: repo bundle missing")),
+    "oc-go-usage-display: repo bundle missing",
+  );
+  assert.equal(cliErrorMessage("plain failure"), "oc-go-usage-display: plain failure");
+  assert.equal(cliErrorMessage(new Error("")), "oc-go-usage-display: unknown error");
+  const stack = cliErrorMessage(new Error("boom"));
+  assert.ok(!stack.includes("\n"), "message must be a single line");
 });
 
 test("normalizeTuiEntry handles string, tuple, and invalid entries", () => {
@@ -124,6 +137,19 @@ test("removePluginFiles removes a copy (file) install and reruns idempotently", 
     const second = removePluginFiles(dir);
     assert.deepStrictEqual(second.removed, []);
     assert.deepStrictEqual(second.kept, []);
+  });
+});
+
+test("linkPluginFiles copy mode refuses a directory target with an actionable error", () => {
+  withTempDir((dir) => {
+    const directoryTarget = path.join(dir, "plugins", "oc-go-usage-display.ts");
+    fs.mkdirSync(directoryTarget, { recursive: true });
+    assert.throws(
+      () => linkPluginFiles(REPO_DIR, dir, "copy"),
+      /cannot replace a directory with the plugin file/,
+    );
+    // The directory survives (nothing destructive happened before the check).
+    assert.equal(fs.statSync(directoryTarget).isDirectory(), true);
   });
 });
 

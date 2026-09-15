@@ -211,15 +211,12 @@ export function mockSnapshot(): UsageSnapshot {
   };
 }
 
-export function unavailableSnapshot(
-  error: string,
-  source: UsageSnapshot["source"] = "unavailable",
-): UsageSnapshot {
+export function unavailableSnapshot(error: string): UsageSnapshot {
   return {
     rolling: null,
     weekly: null,
     monthly: null,
-    source,
+    source: "unavailable",
     fetchedAt: Date.now(),
     apiUnavailable: true,
     apiError: error,

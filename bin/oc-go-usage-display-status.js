@@ -11,7 +11,7 @@ import {
   SERVER_FILE_NAME,
   TUI_FILE_NAME,
   describeLink,
-  fail,
+  exitWithError,
   isDanglingSymlink,
   openCodeDirFromArgv,
   readJsonFile,
@@ -102,6 +102,5 @@ try {
     console.log(`OK: installed from ${repoDir} (sidebar=${tui.sidebar} statusline=${tui.statusline})`);
   }
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }

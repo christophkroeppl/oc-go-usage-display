@@ -35,6 +35,39 @@ function assertNoDanglingSymlinks(dir) {
   }
 }
 
+test("install-cli init fails cleanly when the plugin bundle is missing", () => {
+  const tmp = makeConfigDir();
+  try {
+    // A repo-shaped tree (bins, no dist/plugins) reproduces the missing-bundle
+    // path without touching the real repo's build output.
+    const fakeRepo = path.join(tmp.root, "repo");
+    fs.mkdirSync(path.join(fakeRepo, "bin"), { recursive: true });
+    for (const entry of fs.readdirSync(path.join(REPO_DIR, "bin"))) {
+      fs.copyFileSync(path.join(REPO_DIR, "bin", entry), path.join(fakeRepo, "bin", entry));
+    }
+
+    const result = runNode(
+      [
+        path.join(fakeRepo, "bin", "oc-go-usage-display-init.js"),
+        "--repo",
+        fakeRepo,
+        "--config-dir",
+        tmp.configDir,
+      ],
+      { root: tmp.root, cwd: REPO_DIR },
+    );
+
+    assert.equal(result.code, 1, `expected exit 1, got ${result.code}: ${result.stderr}`);
+    assert.match(result.stderr, /^oc-go-usage-display: /m);
+    assert.ok(!result.stderr.includes("Error:"), `stderr must not contain a stack: ${result.stderr}`);
+    assert.ok(!/\n\s+at /.test(result.stderr), `stderr must not contain frames: ${result.stderr}`);
+    // Fail-fast: nothing was registered before the bundle check.
+    assert.equal(fs.existsSync(path.join(tmp.configDir, "opencode.jsonc")), false);
+  } finally {
+    tmp.cleanup();
+  }
+});
+
 for (const mode of ["copy", "symlink"]) {
   test(`install-cli ${mode}: init -> show --json -> status -> remove`, () => {
     const tmp = makeConfigDir();

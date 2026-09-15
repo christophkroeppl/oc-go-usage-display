@@ -33,7 +33,13 @@ import type { Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatServerLine, hasMalformedAuthCookie, isMalformedAuthCookie, readFileConfig } from "./helpers.js";
+import {
+  formatServerLine,
+  hasMalformedAuthCookie,
+  isMalformedAuthCookie,
+  readFileConfig,
+  resolveAllowedRedirect,
+} from "./helpers.js";
 import type { FileConfig } from "./helpers.js";
 import {
   CONFIG_DIR,
@@ -57,6 +63,9 @@ import type { UsageSnapshot, UsageWindow } from "./shared.js";
 const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
+
+// Fetch redirect statuses (the cookie path handles them manually).
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 const DISK_CACHE_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display-cache.json");
 
@@ -309,43 +318,65 @@ function parseScrapedUsage(html: string): Partial<Record<"rolling" | "weekly" | 
 
 async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<UsageSnapshot> {
   const workspaceUrl = `https://opencode.ai/workspace/${encodeURIComponent(workspaceId)}/go`;
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(workspaceUrl, {
-      redirect: "follow",
-      headers: {
-        Cookie: `auth=${authCookie}`,
-        "User-Agent": "oc-go-usage-display-plugin",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-  } catch {
-    return unavailableSnapshot("request failed");
+  let currentUrl = workspaceUrl;
+  let hopsFollowed = 0;
+
+  // `redirect: "manual"`: Node's fetch keeps caller headers on cross-origin
+  // redirects, so following automatically would leak the auth cookie. Each hop
+  // is re-requested only after `resolveAllowedRedirect` approves the Location
+  // (allowlisted canonical HTTPS hosts, at most MAX_REDIRECT_HOPS hops).
+  for (;;) {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(currentUrl, {
+        redirect: "manual",
+        headers: {
+          Cookie: `auth=${authCookie}`,
+          "User-Agent": "oc-go-usage-display-plugin",
+          Accept: "text/html,application/xhtml+xml",
+        },
+      });
+    } catch {
+      return unavailableSnapshot("request failed");
+    }
+
+    if (REDIRECT_STATUSES.has(response.status)) {
+      const decision = resolveAllowedRedirect(
+        currentUrl,
+        response.headers.get("location"),
+        hopsFollowed,
+      );
+      if (!decision.follow) return unavailableSnapshot(decision.reason);
+      currentUrl = decision.url;
+      hopsFollowed += 1;
+      continue;
+    }
+
+    let html = "";
+    try {
+      html = await response.text();
+    } catch {
+      return unavailableSnapshot("request failed");
+    }
+    if (isLoginPage(currentUrl, html)) {
+      return unavailableSnapshot("login expired (refresh auth cookie)");
+    }
+    if (response.status !== 200) {
+      return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
+    }
+    const usages = parseScrapedUsage(html);
+    if (Object.keys(usages).length === 0) {
+      if (isNoSubscription(html)) return unavailableSnapshot("no OpenCode Go subscription");
+      return unavailableSnapshot("usage markup not recognized");
+    }
+    return {
+      rolling: usages.rolling ?? null,
+      weekly: usages.weekly ?? null,
+      monthly: usages.monthly ?? null,
+      source: "scrape",
+      fetchedAt: Date.now(),
+    };
   }
-  let html = "";
-  try {
-    html = await response.text();
-  } catch {
-    return unavailableSnapshot("request failed");
-  }
-  if (isLoginPage(response.url, html)) {
-    return unavailableSnapshot("login expired (refresh auth cookie)");
-  }
-  if (response.status !== 200) {
-    return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
-  }
-  const usages = parseScrapedUsage(html);
-  if (Object.keys(usages).length === 0) {
-    if (isNoSubscription(html)) return unavailableSnapshot("no OpenCode Go subscription");
-    return unavailableSnapshot("usage markup not recognized");
-  }
-  return {
-    rolling: usages.rolling ?? null,
-    weekly: usages.weekly ?? null,
-    monthly: usages.monthly ?? null,
-    source: "scrape",
-    fetchedAt: Date.now(),
-  };
 }
 
 // ---------------------------------------------------------------------------
