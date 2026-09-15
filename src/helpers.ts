@@ -8,7 +8,8 @@
 // accidental (a stray `export function` returning null used to crash
 // `Provider.list`).
 //
-// Unit-tested via `dist/helpers.js` (see test/helpers.test.js).
+// Unit-tested via `dist/helpers.js` (see test/unit/server.test.js and
+// test/unit/tui.test.js).
 
 import * as fs from "node:fs";
 import * as path from "node:path";

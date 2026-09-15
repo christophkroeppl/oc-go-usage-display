@@ -4,7 +4,7 @@
 // (--symlink is dev-only: edits apply after restart but dangle if the source
 // tree moves). Then registers the opencode.jsonc + tui.json entries (toggles
 // preserved). Run `npm run build` first so dist/plugins/* exists
-// (pretest/publish build it automatically).
+// (`npm test` and publish build it automatically).
 // Supported flows:
 //   npm install oc-go-usage-display@1.1.0 && npx oc-go-usage-display-init --copy
 //   (or declare "plugin": ["oc-go-usage-display@1.1.0"] in config instead).

@@ -4,7 +4,8 @@
 // inside the caller's tmp directory, plus `OPENCODE_GO_MOCK=1` (deterministic
 // snapshot, no network). The real `~/.config/opencode` and `~/.opencode` are
 // never reachable: the home/config/data/state/cache paths are explicit and
-// guarded to live under `root`, and credential env vars are stripped.
+// guarded to live under `root`, and credential plus behavior-toggle env vars
+// are stripped.
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -28,6 +29,15 @@ const SECRET_KEYS = [
   "OPENCODE_GO_WORKSPACE_ID",
 ];
 
+// Non-secret vars that silently change plugin behavior (surface selection).
+// Stripped from the inherited env so a TUI integration test gets the defaults
+// unless it opts in via an explicit `overrides` value.
+const BEHAVIOR_KEYS = [
+  "OPENCODE_GO_DISPLAY",
+  "OPENCODE_GO_SIDEBAR",
+  "OPENCODE_GO_STATUSLINE",
+];
+
 function assertUnderRoot(root, key, value) {
   const relative = path.relative(root, value);
   const inside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -39,8 +49,11 @@ function assertUnderRoot(root, key, value) {
 // Build (and create) a hermetic child env rooted at `root`. `overrides` may
 // adjust non-hermetic values; any hermetic key is re-checked to fail fast.
 export function isolatedEnv(root, overrides = {}) {
-  const env = {
-    ...process.env,
+  const env = { ...process.env };
+  // Strip inherited behavior toggles before appending explicit overrides: a
+  // caller that wants to exercise a toggle passes it in `overrides`.
+  for (const key of BEHAVIOR_KEYS) delete env[key];
+  Object.assign(env, {
     HOME: path.join(root, "home"),
     XDG_CONFIG_HOME: path.join(root, "xdg-config"),
     XDG_DATA_HOME: path.join(root, "xdg-data"),
@@ -48,8 +61,7 @@ export function isolatedEnv(root, overrides = {}) {
     XDG_CACHE_HOME: path.join(root, "xdg-cache"),
     OPENCODE_CONFIG_DIR: path.join(root, "config"),
     OPENCODE_GO_MOCK: "1",
-    ...overrides,
-  };
+  }, overrides);
   for (const key of SECRET_KEYS) delete env[key];
   for (const key of HERMETIC_KEYS) {
     assertUnderRoot(root, key, env[key]);

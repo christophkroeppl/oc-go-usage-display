@@ -3,6 +3,8 @@
 //
 // `OPENCODE_GO_MOCK=1` makes the plugin's refresh path return the mock snapshot
 // synchronously, so the factory resolves without touching auth.json or fetch.
+//
+// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -70,28 +72,36 @@ function registeredSlotNames(registration) {
 test("tui factory registers both surfaces at order 50 and wires dispose", async () => {
   const { api, slotRegistrations, disposers } = makeStubApi();
 
-  await tui(api, { sidebar: true, statusline: true });
+  try {
+    await tui(api, { sidebar: true, statusline: true });
 
-  assert.equal(tuiModule.default.id, "oc-go-usage-display");
-  assert.equal(slotRegistrations.length, 2);
-  for (const registration of slotRegistrations) {
-    assert.equal(registration.order, 50);
+    assert.equal(tuiModule.default.id, "oc-go-usage-display");
+    assert.equal(slotRegistrations.length, 2);
+    for (const registration of slotRegistrations) {
+      assert.equal(registration.order, 50);
+    }
+    const names = slotRegistrations.flatMap(registeredSlotNames).sort();
+    assert.deepStrictEqual(names, ["session_prompt_right", "sidebar_content"]);
+
+    assert.equal(disposers.length, 1);
+    assert.equal(typeof disposers[0], "function");
+  } finally {
+    // Always clear the 60s poll interval, even if an assertion above failed:
+    // a leaked interval keeps the test process alive.
+    for (const dispose of disposers) dispose();
   }
-  const names = slotRegistrations.flatMap(registeredSlotNames).sort();
-  assert.deepStrictEqual(names, ["session_prompt_right", "sidebar_content"]);
-
-  assert.equal(disposers.length, 1);
-  assert.equal(typeof disposers[0], "function");
-  disposers[0](); // clears the poll interval so the runner exits cleanly
 });
 
 test("tui factory registers only sidebar_content when statusline is off", async () => {
   const { api, slotRegistrations, disposers } = makeStubApi();
 
-  await tui(api, { sidebar: true, statusline: false });
+  try {
+    await tui(api, { sidebar: true, statusline: false });
 
-  assert.equal(slotRegistrations.length, 1);
-  assert.equal(slotRegistrations[0].order, 50);
-  assert.deepStrictEqual(registeredSlotNames(slotRegistrations[0]), ["sidebar_content"]);
-  disposers[0]();
+    assert.equal(slotRegistrations.length, 1);
+    assert.equal(slotRegistrations[0].order, 50);
+    assert.deepStrictEqual(registeredSlotNames(slotRegistrations[0]), ["sidebar_content"]);
+  } finally {
+    for (const dispose of disposers) dispose();
+  }
 });

@@ -3,6 +3,8 @@
 // Proves the published tarball ships the runtime bundles, the bin entry, and
 // the sources, and that the deployed plugin bundles are self-contained (no
 // relative `from "./..."` imports left) while still carrying the entry markers.
+//
+// Requires a prior `npm run build`: `npm pack` bundles dist/*.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
