@@ -6,10 +6,11 @@
 // preserved). Run `npm run build` first so dist/plugins/* exists
 // (`npm test` and publish build it automatically).
 // Supported flows:
-//   npm install oc-go-usage-display@1.1.0 && npx oc-go-usage-display-init --copy
-//   (or declare "plugin": ["oc-go-usage-display@1.1.0"] in config instead).
-//   npx -p oc-go-usage-display oc-go-usage-display-init --copy  (one-shot from the package cache)
-//   bunx -p oc-go-usage-display oc-go-usage-display-init --copy  (same, via Bun)
+//   npm install oc-go-usage-display@1.2.0 && npx oc-go-usage-display-init --copy
+//   (or declare "plugin": ["oc-go-usage-display@1.2.0"] in config instead).
+//   npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (one-shot from the package cache)
+//   bunx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (same, via Bun)
+// Copy-first needs the published 1.2.0+: 1.1.0 symlinks and ignores --copy.
 // Any source path is accepted; --repo only overrides the default repo root.
 
 import {

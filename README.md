@@ -19,17 +19,18 @@ time. Requires Node >= 22 and opencode >= 1.18.
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display@1.1.0 && npx oc-go-usage-display-init --copy` |
-| One-shot (npx) | `npx -p oc-go-usage-display oc-go-usage-display-init --copy` |
-| One-shot (bunx) | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy` |
-| Project scope | `npx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
+| Persistent (recommended) | `npm install oc-go-usage-display@1.2.0 && npx oc-go-usage-display-init --copy` |
+| One-shot (npx) | `npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy` |
+| One-shot (bunx) | `bunx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy` |
+| Project scope | `npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `oc-go-usage-display-init` copies `dist/plugins/*` into
 `<config-dir>/plugins/` and registers the `opencode.jsonc` (server) +
 `tui.json` (TUI) entries. Restart opencode afterwards. Pin the version
-(`@1.1.0`, not `@latest`) so installs stay reproducible. No secrets are
-touched. The package name differs from the bin names, so one-shot installs
-must select the package explicitly (`-p <package> <bin>`).
+(`@1.2.0`, not `@latest`) so installs stay reproducible. Copy-first installs
+require >= 1.2.0: the published 1.1.0 predates them (it symlinks and ignores
+`--copy`). No secrets are touched. The package name differs from the bin names,
+so one-shot installs must select the package explicitly (`-p <package> <bin>`).
 
 Alternative — no files to copy: declare the versioned package in config and
 let opencode resolve it at startup (its own package cache):
@@ -37,14 +38,14 @@ let opencode resolve it at startup (its own package cache):
 ```jsonc
 // opencode.jsonc — server target (go_usage tool)
 {
-  "plugin": ["oc-go-usage-display@1.1.0"]
+  "plugin": ["oc-go-usage-display@1.2.0"]
 }
 ```
 
 ```jsonc
 // tui.json — TUI target (Go Usage sidebar + statusline)
 {
-  "plugin": [["oc-go-usage-display@1.1.0", { "sidebar": true, "statusline": true }]]
+  "plugin": [["oc-go-usage-display@1.2.0", { "sidebar": true, "statusline": true }]]
 }
 ```
 
@@ -166,21 +167,22 @@ dirs, so the developer's real `~/.config/opencode` is never read or written.
 ### Dev install from CI
 
 `./install-dev.sh` requires an authenticated `gh`, node, and npm. It resolves
-the latest successful run on `develop` (or `--run-id`), downloads the
-`dev-tgz` artifact into `./tmp-dev`, snapshots the six OpenCode config paths
-(see below), installs the tarball with `npm install --no-save`, and runs
-`oc-go-usage-display-init --copy`. There is **no auto-restore**: the snapshot
-path, the restore command, and the published fallback are printed.
+the latest successful `dev-build.yml` run on `develop` (or `--run-id`),
+downloads the `dev-tgz` artifact into `./tmp-dev`, snapshots the six OpenCode
+config paths (see below), installs the tarball with `npm install --no-save`,
+and runs `oc-go-usage-display-init --copy`. There is **no auto-restore**: the
+snapshot path, the restore command, and the published fallback are printed.
 
-Useful flags: `--dry-run` (download + tarball sanity check only), `--branch`, `--workflow`,
-`--run-id`, `--dir`, `--force`/`--clean`, `--config-dir`, `--backup-dir`,
-`--sidebar`, `--statusline`.
+Useful flags: `--dry-run` (download + tarball sanity check only), `--branch`
+(default `develop`), `--workflow` (default `dev-build.yml`), `--run-id`,
+`--dir`, `--force`/`--clean`, `--config-dir`, `--backup-dir`, `--sidebar`,
+`--statusline`.
 
 ```sh
 # Restore the config that existed before the dev install
 scripts/dev-config-snapshot.sh restore --backup-dir <snapshot path>
 
-# Or go back to the published version
+# Or go back to the published version (copy-first needs >= 1.2.0)
 npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy
 ```
 

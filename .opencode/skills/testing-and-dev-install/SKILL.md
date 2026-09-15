@@ -51,8 +51,9 @@ Requires an authenticated `gh`, plus `node` and `npm`.
 
 Flow:
 
-1. resolve a run (`gh run list --branch develop --status success --limit 1`;
-   refine with `--workflow dev-build.yml`, `--branch`, or `--run-id`),
+1. resolve the latest successful `dev-build.yml` run on `develop`
+   (`gh run list --branch develop --workflow dev-build.yml --status success
+   --limit 1`; override with `--branch`, `--workflow`, or `--run-id`),
 2. download the `dev-tgz` artifact into `./tmp-dev` (override with `--dir`),
 3. sanity-check the tarball (`dist/index.js` and the init bin are present),
 4. fail closed: `scripts/dev-config-snapshot.sh save` snapshots the 6 config
@@ -78,8 +79,11 @@ paths are refused. Backups default to
 `${TMPDIR:-/tmp}/oc-go-usage-display-backup/<timestamp>-<pid>`
 (`--backup-dir` overrides; `--snapshot` aliases it). Fall back to the published
 package with
-`npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy`.
+`npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir <path>`
+(`--config-dir` only for project-scoped installs; `--copy` needs a published
+version >= 1.2.0 — 1.1.0 symlinks and ignores it).
 
-Flags: `--dry-run` (download + sanity check only), `--force` / `--clean`
-(replace a non-empty download dir), `--sidebar=0/1`, `--statusline=0/1`,
-`--config-dir`, `--backup-dir`.
+Flags: `--dry-run` (download + sanity check only), `--branch` (default
+`develop`), `--workflow` (default `dev-build.yml`), `--run-id`, `--dir`,
+`--force` / `--clean` (replace a non-empty download dir), `--sidebar=0/1`,
+`--statusline=0/1`, `--config-dir`, `--backup-dir`.
