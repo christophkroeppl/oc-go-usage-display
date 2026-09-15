@@ -246,7 +246,7 @@ print_reminder() {
   echo "To restore your previous OpenCode config:"
   echo "  $restore_cmd"
   echo "To return to the published version instead:"
-  echo "  npx -y oc-go-usage-display@latest init --copy"
+  echo "  npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
   printf '%s\n\n' "----------------------------------------------------------------"
 }
 
