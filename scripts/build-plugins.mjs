@@ -11,7 +11,14 @@
 // Output keeps the .ts/.tsx filenames so SERVER_PLUGIN_REL/TUI_PLUGIN_REL
 // (./plugins/oc-go-usage-display.{ts,tsx}) keep working; the content is
 // plain ESM JavaScript, which is valid TypeScript and loads as before.
+//
+// The emitted bundle MUST have exactly one export and it MUST be the default
+// `{ id, server | tui }` module. OpenCode's loader enumerates every export of
+// a plugin entry and invokes each as a plugin factory when the default is not
+// a module object; a stray named export (a helper returning null) crashed
+// `Provider.list`. This check fails the build before that can ship.
 
+import * as fs from "node:fs";
 import * as esbuild from "esbuild";
 
 const base = {
@@ -22,20 +29,51 @@ const base = {
   legalComments: "none",
 };
 
+// Parse the trailing `export { ... }` / `export default ...` block(s) and
+// require the single export to alias `default`.
+function assertSingleDefaultExport(outfile) {
+  const source = fs.readFileSync(outfile, "utf8");
+  const exportBlocks = [...source.matchAll(/export\s*\{([^}]*)\}\s*;?/g)];
+  const entries = exportBlocks.flatMap((match) =>
+    match[1]
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+  const defaultStatements = [...source.matchAll(/export\s+default\b/g)];
+  const total = entries.length + defaultStatements.length;
+
+  if (total !== 1) {
+    throw new Error(`${outfile}: expected exactly one export, found ${total}`);
+  }
+  const singleIsDefault =
+    defaultStatements.length === 1 || /(?:^|\s)as\s+default$/.test(entries[0] ?? "");
+  if (!singleIsDefault) {
+    throw new Error(`${outfile}: the single export must be the default export (found "${entries[0]}")`);
+  }
+}
+
+const serverOut = "dist/plugins/oc-go-usage-display.ts";
+const tuiOut = "dist/plugins/oc-go-usage-display.tsx";
+
 await esbuild.build({
   ...base,
   entryPoints: ["src/index.ts"],
-  outfile: "dist/plugins/oc-go-usage-display.ts",
+  outfile: serverOut,
   external: ["@opencode-ai/plugin", "@opencode-ai/plugin/*"],
 });
+assertSingleDefaultExport(serverOut);
 
 await esbuild.build({
   ...base,
   entryPoints: ["src/tui.tsx"],
-  outfile: "dist/plugins/oc-go-usage-display.tsx",
+  outfile: tuiOut,
   jsx: "automatic",
   jsxImportSource: "@opentui/solid",
   external: ["@opencode-ai/plugin", "@opencode-ai/plugin/*", "solid-js", "@opentui/*"],
 });
+assertSingleDefaultExport(tuiOut);
 
-console.log("bundled dist/plugins/oc-go-usage-display.ts + .tsx (self-contained, no ./shared import)");
+console.log(
+  "bundled dist/plugins/oc-go-usage-display.ts + .tsx (self-contained, default-only export)",
+);

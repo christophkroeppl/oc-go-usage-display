@@ -10,16 +10,16 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildUsageRows,
-  formatCompactLine as formatTuiLine,
-  formatResetDuration,
+  formatServerLine,
+  formatStatusline as formatTuiLine,
   isSnapshotEmpty,
   parseBooleanFlag,
   surfaceSelectionFromDisplayMode,
-} from "../dist/tui.js";
-import { formatCompactLine as formatServerLine } from "../dist/index.js";
+} from "../dist/helpers.js";
 import {
   extractSnapshotFromApiPayload,
   extractWindow,
+  formatResetDuration,
   unavailableSnapshot,
 } from "../dist/shared.js";
 import {
@@ -63,7 +63,7 @@ function assertDeployedSelfContained(pluginsDir, fileName, marker) {
   assert.ok(content.includes(marker), `${fileName} must contain ${marker}`);
 }
 
-// --- parseBooleanFlag (dist/tui.js) ---
+// --- parseBooleanFlag (dist/helpers.js) ---
 
 test("parseBooleanFlag passes booleans through", () => {
   assert.equal(parseBooleanFlag(true), true);
@@ -90,7 +90,7 @@ test("parseBooleanFlag returns null for anything else", () => {
   assert.equal(parseBooleanFlag({}), null);
 });
 
-// --- formatResetDuration (dist/tui.js) ---
+// --- formatResetDuration (dist/shared.js) ---
 
 test("formatResetDuration formats hours/minutes/seconds", () => {
   assert.equal(formatResetDuration(7543), "2h5m");
@@ -107,7 +107,7 @@ test("formatResetDuration returns null for null/negative/non-finite", () => {
   assert.equal(formatResetDuration(Number.POSITIVE_INFINITY), null);
 });
 
-// --- buildUsageRows (dist/tui.js) ---
+// --- buildUsageRows (dist/helpers.js) ---
 
 test("buildUsageRows renders all three windows with sidebar reset text", () => {
   assert.deepStrictEqual(buildUsageRows(tuiSnapshot()), [
@@ -133,7 +133,7 @@ test("buildUsageRows returns no rows for an empty snapshot", () => {
   assert.deepStrictEqual(buildUsageRows(empty), []);
 });
 
-// --- formatCompactLine statusline (dist/tui.js): 3 windows, no reset suffix ---
+// --- formatStatusline (dist/helpers.js): 3 windows, no reset suffix ---
 
 test("tui formatCompactLine shows 5h, 7d and 30d without reset text", () => {
   assert.equal(formatTuiLine(tuiSnapshot()), "Go 5h 42% | 7d 15% | 30d 61%");
@@ -146,7 +146,7 @@ test("tui formatCompactLine keeps n/a fallbacks per window", () => {
   assert.equal(formatTuiLine(empty), "Go 5h n/a | 7d n/a | 30d n/a");
 });
 
-// --- isSnapshotEmpty / surfaceSelectionFromDisplayMode (dist/tui.js) ---
+// --- isSnapshotEmpty / surfaceSelectionFromDisplayMode (dist/helpers.js) ---
 
 test("isSnapshotEmpty is true only when every window is missing", () => {
   assert.equal(isSnapshotEmpty(tuiSnapshot({ rolling: null, weekly: null, monthly: null })), true);
@@ -160,7 +160,7 @@ test("surfaceSelectionFromDisplayMode maps every display mode", () => {
   assert.deepStrictEqual(surfaceSelectionFromDisplayMode("statusline"), { sidebar: false, statusline: true });
 });
 
-// --- formatCompactLine server copy (dist/index.js) keeps its reset suffix ---
+// --- formatServerLine (dist/helpers.js) keeps its reset suffix ---
 
 test("server formatCompactLine keeps the rolling reset suffix", () => {
   const snapshot = {

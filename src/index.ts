@@ -29,15 +29,16 @@
 //   5. none                       -> unavailable snapshot (literal-only error)
 // Snapshots are cached 60s in memory + on disk.
 
-import type { Plugin } from "@opencode-ai/plugin";
+import type { Plugin, PluginModule } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatServerLine, hasMalformedAuthCookie, isMalformedAuthCookie, readFileConfig } from "./helpers.js";
+import type { FileConfig } from "./helpers.js";
 import {
   CONFIG_DIR,
   extractSnapshotFromApiPayload,
   extractWindow,
-  formatResetDuration,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
@@ -47,9 +48,6 @@ import {
 } from "./shared.js";
 import type { UsageSnapshot, UsageWindow } from "./shared.js";
 
-// Re-exported so `dist/index.js` keeps the helper surface used by tests.
-export { formatResetDuration };
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -58,7 +56,6 @@ const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-const FILE_CONFIG_PATH = path.join(CONFIG_DIR, "oc-go-usage-display.json");
 const DISK_CACHE_PATH = path.join(CONFIG_DIR, "oc-go-usage-display-cache.json");
 
 // ---------------------------------------------------------------------------
@@ -71,52 +68,9 @@ type Credentials =
   | { kind: "mock" }
   | { kind: "none" };
 
-function formatWindow(window: UsageWindow | null): string {
-  if (!window) return "n/a";
-  return `${window.percent}%`;
-}
-
-export function formatCompactLine(snapshot: UsageSnapshot): string {
-  if (snapshot.apiUnavailable || (!snapshot.rolling && !snapshot.weekly && !snapshot.monthly)) {
-    const reason = snapshot.apiError ?? "unknown error";
-    return `Go n/a (${reason})`;
-  }
-  const rollingReset =
-    formatResetDuration(snapshot.rolling?.resetInSec ?? null) ??
-    snapshot.rolling?.resetText ??
-    null;
-  const rollingText =
-    snapshot.rolling === null
-      ? "5h n/a"
-      : `5h ${snapshot.rolling.percent}%${rollingReset ? ` (reset ${rollingReset})` : ""}`;
-  return `Go ${rollingText} | 7d ${formatWindow(snapshot.weekly)} | 30d ${formatWindow(snapshot.monthly)}`;
-}
-
 // ---------------------------------------------------------------------------
 // Credentials (boundary: env + optional JSON file; never logged)
 // ---------------------------------------------------------------------------
-
-type FileConfig = { workspaceId: string | null; authCookie: string | null };
-
-function readFileConfig(): FileConfig {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(FILE_CONFIG_PATH, "utf8");
-  } catch {
-    return { workspaceId: null, authCookie: null };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { workspaceId: null, authCookie: null };
-  }
-  if (!isRecord(parsed)) return { workspaceId: null, authCookie: null };
-  return {
-    workspaceId: toNonEmptyString(parsed.workspaceId),
-    authCookie: toNonEmptyString(parsed.authCookie),
-  };
-}
 
 function resolveCredentials(fileConfig: FileConfig = readFileConfig()): Credentials {
   if (process.env.OPENCODE_GO_MOCK === "1") return { kind: "mock" };
@@ -137,19 +91,6 @@ function resolveCredentials(fileConfig: FileConfig = readFileConfig()): Credenti
   }
 
   return { kind: "none" };
-}
-
-function isMalformedAuthCookie(cookie: string): boolean {
-  // Reject CR/LF (header injection), separators that confuse cookie jars,
-  // plus tab, NUL, and double-quote (never valid in a cookie value).
-  return /[\r\n;,\t\0"]/.test(cookie);
-}
-
-export function hasMalformedAuthCookie(fileConfig: FileConfig = readFileConfig()): boolean {
-  const raw =
-    toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
-  if (!raw) return false;
-  return isMalformedAuthCookie(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +398,11 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
 // Plugin
 // ---------------------------------------------------------------------------
 
-export default (async () => {
+// The ONLY export must be the default module: OpenCode's loader enumerates
+// every export and invokes each as a plugin factory when the default is not a
+// `{ id, server }` module. Helpers live in `./helpers.js` for exactly that
+// reason. `server` returns the existing `{ tool: { go_usage } }` hook surface.
+const server: Plugin = async () => {
   return {
     tool: {
       go_usage: tool({
@@ -468,10 +413,12 @@ export default (async () => {
           const snapshot = await getUsageSnapshot().catch(() =>
             unavailableSnapshot("request failed"),
           );
-          const line = formatCompactLine(snapshot);
+          const line = formatServerLine(snapshot);
           return `${line}\n${JSON.stringify(snapshot, null, 2)}`;
         },
       }),
     },
   };
-}) satisfies Plugin;
+};
+
+export default { id: "oc-go-usage-display", server } satisfies PluginModule;

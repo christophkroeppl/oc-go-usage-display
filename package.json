@@ -46,7 +46,8 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "opencode": "^1.18.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:plugins",

@@ -60,8 +60,16 @@ import type {
 } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createSignal } from "solid-js";
 import {
+  buildUsageRows,
+  formatStatusline,
+  isDisplayMode,
+  isSnapshotEmpty,
+  parseBooleanFlag,
+  surfaceSelectionFromDisplayMode,
+} from "./helpers.js";
+import type { SurfaceSelection } from "./helpers.js";
+import {
   extractSnapshotFromApiPayload,
-  formatResetDuration,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
@@ -69,9 +77,6 @@ import {
   unavailableSnapshot,
 } from "./shared.js";
 import type { UsageSnapshot } from "./shared.js";
-
-// Re-exported so `dist/tui.js` keeps the helper surface used by tests.
-export { formatResetDuration };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -89,68 +94,9 @@ const LOG_SERVICE = "oc-go-usage-display";
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally; usage shapes
-// live in `./shared.js` so server and TUI parse identically)
+// live in `./shared.js` so server and TUI parse identically; display-mode
+// helpers live in `./helpers.js` to keep this entry module export-free)
 // ---------------------------------------------------------------------------
-
-type DisplayMode = "sidebar" | "statusline" | "both";
-
-type SurfaceSelection = {
-  sidebar: boolean;
-  statusline: boolean;
-};
-
-type UsageRow = {
-  label: string;
-  value: string;
-};
-
-// ---------------------------------------------------------------------------
-// Small pure helpers
-// ---------------------------------------------------------------------------
-
-function isDisplayMode(value: unknown): value is DisplayMode {
-  return value === "sidebar" || value === "statusline" || value === "both";
-}
-
-export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
-  return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
-}
-
-export function parseBooleanFlag(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (value === 1) return true;
-    if (value === 0) return false;
-    return null;
-  }
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "1" || normalized === "true") return true;
-  if (normalized === "0" || normalized === "false") return false;
-  return null;
-}
-
-export function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
-  return snapshot.rolling === null && snapshot.weekly === null && snapshot.monthly === null;
-}
-
-export function formatCompactLine(snapshot: UsageSnapshot): string {
-  const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
-  const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
-  const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
-  return `Go ${rolling} | ${weekly} | ${monthly}`;
-}
-
-export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
-  const rows: UsageRow[] = [];
-  if (snapshot.rolling !== null) {
-    const reset = formatResetDuration(snapshot.rolling.resetInSec) ?? snapshot.rolling.resetText;
-    rows.push({ label: "5h", value: `${snapshot.rolling.percent}%${reset ? ` · resets ${reset}` : ""}` });
-  }
-  if (snapshot.weekly !== null) rows.push({ label: "7d", value: `${snapshot.weekly.percent}%` });
-  if (snapshot.monthly !== null) rows.push({ label: "30d", value: `${snapshot.monthly.percent}%` });
-  return rows;
-}
 
 // ---------------------------------------------------------------------------
 // Settings boundary (new toggles > legacy display; tui.json options > env >
@@ -377,7 +323,7 @@ const goUsageTui: TuiPlugin = async (api, options) => {
       <Show when={usageSnapshot()} fallback={null}>
         {(snapshot) => {
           if (isSnapshotEmpty(snapshot())) return null;
-          return <text>{formatCompactLine(snapshot())}</text>;
+          return <text>{formatStatusline(snapshot())}</text>;
         }}
       </Show>
     );
