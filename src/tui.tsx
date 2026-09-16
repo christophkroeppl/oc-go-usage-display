@@ -85,6 +85,8 @@ import type { UsageSnapshot } from "./shared.js";
 
 const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const POLL_INTERVAL_MS = 60_000;
+const EVENT_TTL_MS = 15_000;
+const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const SLOT_ORDER = 50;
 const KV_DISPLAY_KEY = "display";
@@ -229,11 +231,18 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   );
 
   let cachedAt = 0;
+  let lastFetchAt = 0;
   let refreshInFlight = false;
 
-  async function refreshUsage(): Promise<void> {
+  async function refreshUsage(ttlOverride?: number): Promise<void> {
     if (refreshInFlight) return;
-    if (Date.now() - cachedAt < POLL_INTERVAL_MS && usageSnapshot() !== null) return;
+    const effectiveTtl = ttlOverride ?? POLL_INTERVAL_MS;
+    if (ttlOverride !== undefined) {
+      if (Date.now() - lastFetchAt < DEBOUNCE_MS) return;
+      if (Date.now() - cachedAt < effectiveTtl && usageSnapshot() !== null) return;
+    } else if (Date.now() - cachedAt < POLL_INTERVAL_MS && usageSnapshot() !== null) {
+      return;
+    }
     refreshInFlight = true;
     try {
       const snapshot = await loadUsageSnapshot();
@@ -248,14 +257,17 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     } catch {
       // Keep stale data; the panel simply shows the last known snapshot.
     } finally {
+      lastFetchAt = Date.now();
       refreshInFlight = false;
     }
   }
 
-  // Fire-and-forget refresh that cannot surface an unhandled rejection. The
-  // poll interval and every event callback funnel through here.
-  function refreshSafely(): void {
-    void refreshUsage().catch(() => {
+  // Fire-and-forget refresh that cannot surface an unhandled rejection.
+  // The background poll (ttlOverride undefined) keeps the 60s TTL guard;
+  // session.updated passes 0 to bypass the TTL entirely (debounce-only);
+  // message.updated passes EVENT_TTL_MS for a 15s effective window.
+  function refreshSafely(ttlOverride?: number): void {
+    void refreshUsage(ttlOverride).catch(() => {
       // refreshUsage already swallows failures; this guards a regression.
     });
   }
@@ -418,13 +430,13 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   let unsubscribeSession: () => void = () => {};
   let unsubscribeMessage: () => void = () => {};
   try {
-    const unsubscribe = api.event.on("session.updated", () => refreshSafely());
+    const unsubscribe = api.event.on("session.updated", () => refreshSafely(0));
     if (typeof unsubscribe === "function") unsubscribeSession = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
   }
   try {
-    const unsubscribe = api.event.on("message.updated", () => refreshSafely());
+    const unsubscribe = api.event.on("message.updated", () => refreshSafely(EVENT_TTL_MS));
     if (typeof unsubscribe === "function") unsubscribeMessage = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
