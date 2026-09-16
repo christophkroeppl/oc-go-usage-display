@@ -88,6 +88,7 @@ const POLL_INTERVAL_MS = 60_000;
 const EVENT_TTL_MS = 15_000;
 const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
+const GO_PROVIDER_ID = "opencode-go";
 const SLOT_ORDER = 50;
 const KV_DISPLAY_KEY = "display";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
@@ -159,6 +160,22 @@ function migrateLegacyCollapsedFlag(api: TuiPluginApi): void {
   } catch {
     // Collapse state is best-effort persistence only.
   }
+}
+
+function isGoUsageProvider(providerId: string | undefined): boolean {
+  return providerId === GO_PROVIDER_ID;
+}
+
+function resolveActiveProvider(api: TuiPluginApi): string | undefined {
+  try {
+    const modelString = api.state?.config?.model;
+    if (typeof modelString === "string" && modelString.length > 0) {
+      return modelString.split("/")[0];
+    }
+  } catch {
+    // State may not be ready.
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +250,17 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   let cachedAt = 0;
   let lastFetchAt = 0;
   let refreshInFlight = false;
+
+  const [activeProviderId, setActiveProviderId] = createSignal<string | undefined>(undefined);
+  try {
+    const modelString = api.state?.config?.model;
+    if (typeof modelString === "string" && modelString.length > 0) {
+      const providerPart = modelString.split("/")[0];
+      if (providerPart.length > 0) setActiveProviderId(providerPart);
+    }
+  } catch {
+    // State may not be ready; fall back to session.updated events.
+  }
 
   async function refreshUsage(ttlOverride?: number): Promise<void> {
     if (refreshInFlight) return;
@@ -366,6 +394,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
+              if (!isGoUsageProvider(activeProviderId())) return null;
               if (api.route.current.name !== "session") return null;
               if (isSidebarCollapsed()) return null;
               return <GoSidebarPanel theme={ctx.theme} />;
@@ -391,6 +420,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
+              if (!isGoUsageProvider(activeProviderId())) return null;
               if (isStatuslineCollapsed()) return null;
               return <GoStatusline />;
             } catch {
@@ -430,7 +460,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   let unsubscribeSession: () => void = () => {};
   let unsubscribeMessage: () => void = () => {};
   try {
-    const unsubscribe = api.event.on("session.updated", () => refreshSafely(0));
+    const unsubscribe = api.event.on("session.updated", (event) => {
+      const providerId = event?.properties?.info?.model?.providerID;
+      if (providerId !== undefined) setActiveProviderId(providerId);
+      refreshSafely(0);
+    });
     if (typeof unsubscribe === "function") unsubscribeSession = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
