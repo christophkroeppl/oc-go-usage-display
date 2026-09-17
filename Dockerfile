@@ -52,17 +52,21 @@ RUN curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh \
 ARG OPENCODE_VERSION=1.18.31
 RUN bun add -g "opencode-ai@${OPENCODE_VERSION}"
 
+# Ensure /home/node exists with correct ownership (in case the base image
+# differs).  bun writes temp files and its cache under HOME/TMPDIR.
+RUN mkdir -p /home/node && chown -R node:node /home/node
+
 ENV HOME=/home/node
+# Explicitly point bun at a writable temp dir; some slim base images ship
+# /tmp with permissions that confuse the non-root user.
+ENV TMPDIR=/tmp/bun-tmp
 # Never attempt a self-update inside the container.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
-# Bake the repository checkout into the image. compose.yml runs this exact
-# tree; the devcontainer overlays its bind-mounted workspace on top. The
-# checkout is owned by the non-root user and `bun install` runs as that user,
-# so node_modules is writable without any host UID mapping.
-RUN mkdir -p /workspaces/oc-go-usage-display \
-  && chown -R node:node /workspaces
+RUN mkdir -p /tmp/bun-tmp /workspaces/oc-go-usage-display \
+  && chown -R node:node /tmp/bun-tmp /workspaces
 WORKDIR /workspaces/oc-go-usage-display
 COPY --chown=node:node . .
+USER root
+RUN bun install && chown -R node:node .
 USER node
-RUN bun install
