@@ -59,11 +59,11 @@
     "opencode": "^1.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:plugins",
-    "build:plugins": "node scripts/build-plugins.mjs",
+    "build": "tsc -p tsconfig.json && bun run build:plugins",
+    "build:plugins": "bun run scripts/build-plugins.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "npm run build",
-    "test": "npm run build && npm run test:unit && npm run test:integration",
+    "prepublishOnly": "bun run build",
+    "test": "bun run build && bun run test:unit && bun run test:integration",
     "test:unit": "node --test test/unit/*.test.js",
     "test:integration": "node --test test/integration/*.test.js",
     "test:e2e": "node --test test/e2e/*.test.js"

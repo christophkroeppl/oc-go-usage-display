@@ -13,4 +13,4 @@ services:
   test:
     build: .
     working_dir: /workspaces/oc-go-usage-display
-    command: sh -lc "opencode --version && npm ci && npm run check && npm test && npm run test:e2e"
+    command: sh -lc "opencode --version && bun install && npm run check && npm test && npm run test:e2e"

@@ -6,5 +6,5 @@
   },
   "remoteUser": "node",
   "workspaceFolder": "/workspaces/oc-go-usage-display",
-  "postCreateCommand": "npm ci"
+  "postCreateCommand": "bun install"
 }

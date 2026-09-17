@@ -6,14 +6,14 @@
 #   - unit          : typecheck + build + unit/integration tests on Node 22.
 #   - container-e2e : the authoritative end-to-end gate. Builds the root
 #                     Dockerfile and runs the full containerized command
-#                     (npm ci && npm run check && npm test && npm run test:e2e),
-#                     which boots the real opencode server and asserts the
-#                     `go_usage` tool is registered. Hermetic: all
-#                     HOME/XDG/opencode paths live in container/tmp dirs.
+#                     (bun install && npm run check && npm test &&
+#                     npm run test:e2e), which boots the real opencode server
+#                     and asserts the `go_usage` tool is registered. Hermetic:
+#                     all HOME/XDG/opencode paths live in container/tmp dirs.
 #   - format-check  : secret-gated live usage-shape check, parser-backed by
 #                     dist/shared.js `extractSnapshotFromApiPayload`. Neutral
 #                     (exit 0) when the key is absent or no window is usable;
-#                     fails on malformed JSON or a missing percent in a
+#                     fails on malformed JSON or a missing percent within a
 #                     present window.
 #
 # Startup-safety rule: the secrets context must NOT appear in any conditional
@@ -53,8 +53,13 @@ jobs:
         with:
           node-version: 22
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          version: 1.4.2
+
       - name: Install dependencies
-        run: npm ci
+        run: bun install
 
       - name: Typecheck
         run: npm run check
@@ -74,9 +79,10 @@ jobs:
 
       - name: Run containerized test gate
         # Builds the root Dockerfile and runs the checkout baked into the
-        # image: opencode --version && npm ci && npm run check && npm test &&
-        # npm run test:e2e. No bind mount, so the gate is independent of the
-        # runner UID. `docker compose run` propagates the command's exit code.
+        # image: opencode --version && bun install && npm run check && npm
+        # test && npm run test:e2e. No bind mount, so the gate is independent
+        # of the runner UID. `docker compose run` propagates the command's
+        # exit code.
         run: docker compose run --rm --build test
 
   format-check:
@@ -96,6 +102,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          version: 1.4.2
+
       - name: Skip notice (no API key)
         if: env.OPENCODE_GO_API_KEY == ''
         run: |
@@ -103,7 +114,7 @@ jobs:
 
       - name: Install dependencies
         if: env.OPENCODE_GO_API_KEY != ''
-        run: npm ci
+        run: bun install
 
       - name: Build parser (dist/shared.js)
         if: env.OPENCODE_GO_API_KEY != ''
