@@ -12,12 +12,13 @@
 # /home/node. The real host ~/.config/opencode and ~/.opencode are never
 # copied into the image or referenced by the harness.
 #
-# NOTE: ghcr.io/bun/bun:1.4.2-bookworm is the preferred base (bun pre-installed),
-# but GHCR requires read:packages auth not available in all environments. When
-# the bun image is unreachable, fall back to node:22-bookworm-slim + the bun
-# installer script — still using `bun install` for deps and `node --test` for
-# tests (Bun's os.homedir() does not respect runtime HOME changes, so
-# bun test is not parity-compatible with node --test for hermeticity tests).
+# NOTE: oven/bun:1.4.2 (Docker Hub) ships bun + tar only — no Node.js, npm,
+# git, or util-linux.  Using it as the base would require installing all of
+# those anyway, so node:22-bookworm-slim (which ships Node.js, npm, git,
+# ca-certificates, and curl) is the practical base; bun is layered on top for
+# dependency installation only.  node --test is the test runner (not bun test)
+# because Bun's os.homedir() does not respect runtime HOME changes, so bun test
+# is not hermetic for the isolated test harness.
 FROM node:22-bookworm-slim
 
 # Runtime tooling:
@@ -47,26 +48,20 @@ RUN curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh \
   && bun --version
 
 # Pin the opencode CLI to the version this repo is tested against.
-# Try bun install -g first; fall back to npm install -g (Node.js is already
-# present in the base image).
 ARG OPENCODE_VERSION=1.18.31
 RUN bun add -g "opencode-ai@${OPENCODE_VERSION}"
 
-# Ensure /home/node exists with correct ownership (in case the base image
-# differs).  bun writes temp files and its cache under HOME/TMPDIR.
-RUN mkdir -p /home/node && chown -R node:node /home/node
-
 ENV HOME=/home/node
-# Explicitly point bun at a writable temp dir; some slim base images ship
-# /tmp with permissions that confuse the non-root user.
-ENV TMPDIR=/tmp/bun-tmp
 # Never attempt a self-update inside the container.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
-RUN mkdir -p /tmp/bun-tmp /workspaces/oc-go-usage-display \
-  && chown -R node:node /tmp/bun-tmp /workspaces
+# Bake the repository checkout into the image. compose.yml runs this exact
+# tree; the devcontainer overlays its bind-mounted workspace on top.  `bun
+# install` runs as root (bun writes temp files the non-root user can't reach
+# in the slim image), then ownership is handed back to `node` for runtime.
+RUN mkdir -p /workspaces/oc-go-usage-display \
+  && chown -R node:node /workspaces
 WORKDIR /workspaces/oc-go-usage-display
 COPY --chown=node:node . .
-USER root
 RUN bun install && chown -R node:node .
 USER node
