@@ -40,7 +40,7 @@ concurrency:
 jobs:
   unit:
     name: unit (typecheck + build + tests)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
     timeout-minutes: 20
@@ -69,7 +69,7 @@ jobs:
 
   container-e2e:
     name: container-e2e (docker compose)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read
     timeout-minutes: 25
