@@ -2,15 +2,15 @@
 #
 #   docker compose run --rm --build test
 #
-# Builds the root Dockerfile and runs the full gate (typecheck + build + unit +
-# integration + e2e) against the checkout baked into the image. There is no
-# bind mount, so the gate is identical to CI and never depends on the host
-# UID/GID. `opencode --version` fails the gate loudly if the binary is
-# missing, so the e2e tier can never silently skip. The harness redirects
-# HOME/XDG/opencode paths into tmp dirs, so the real host ~/.config/opencode
-# and ~/.opencode are never mounted or read.
+# Builds the root Dockerfile and runs the full gate (build + typecheck + all
+# tests: unit, integration, and e2e) against the checkout baked into the image.
+# There is no bind mount, so the gate is identical to CI and never depends on
+# the runner UID. `opencode --version` and `kilo --version` fail the gate
+# loudly if either binary is missing, so the e2e tier can never silently skip.
+# The harness redirects HOME/XDG/kilo paths into tmp dirs, so the real host
+# ~/.config/opencode and ~/.config/kilo are never mounted or read.
 services:
   test:
     build: .
     working_dir: /workspaces/oc-go-usage-display
-    command: sh -lc "opencode --version && bun install && npm run check && npm test && npm run test:e2e"
+    command: sh -c "opencode --version && kilo --version && bun install && bun run build && bun test"

@@ -62,7 +62,7 @@ export function openCodeDirFromArgv(argv) {
   if (flagValue !== null) return path.resolve(flagValue);
   const envValue = toNonEmptyString(process.env.OPENCODE_CONFIG_DIR);
   if (envValue !== null) return path.resolve(envValue);
-  return path.join(os.homedir(), ".config", "opencode");
+  return path.join(process.env.HOME || os.homedir(), ".config", "opencode");
 }
 
 export function linkModeFromArgv(argv) {

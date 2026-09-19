@@ -1,10 +1,10 @@
-// Integration tier: `npm pack` contents contract.
+// Integration tier: `bun pm pack` contents contract.
 //
 // Proves the published tarball ships the runtime bundles, the bin entry, and
 // the sources, and that the deployed plugin bundles are self-contained (no
 // relative `from "./..."` imports left) while still carrying the entry markers.
 //
-// Requires a prior `npm run build`: `npm pack` bundles dist/*.
+// Requires a prior `bun run build`: `bun pm pack` bundles dist/*.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -33,12 +33,12 @@ function assertDeployedSelfContained(pluginsDir, fileName, marker) {
   assert.ok(content.includes(marker), `${fileName} must contain ${marker}`);
 }
 
-test("npm pack ships runtime bundles, bins, and sources; bundles are self-contained", () => {
+test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-contained", () => {
   const tmp = makeTempDir();
   try {
     const packDir = path.join(tmp.dir, "pack");
     fs.mkdirSync(packDir, { recursive: true });
-    run("npm", ["pack", "--pack-destination", packDir], { cwd: REPO_DIR });
+    run("bun", ["pm", "pack", "--destination", packDir], { cwd: REPO_DIR });
 
     const tarballs = fs.readdirSync(packDir).filter((name) => name.endsWith(".tgz"));
     assert.equal(tarballs.length, 1, `expected exactly one tarball, saw ${tarballs.join(", ")}`);

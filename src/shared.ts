@@ -14,11 +14,23 @@ import * as path from "node:path";
 // Constants
 // ---------------------------------------------------------------------------
 
-// Path construction is best-effort. `os.homedir()` can throw when no home
+// Resolve the user home directory honoring a runtime HOME override.
+// Bun's `os.homedir()` caches the home directory at process startup and does
+// NOT respect runtime `process.env.HOME` changes, which breaks hermetic test
+// overrides that set HOME before dynamic imports. Reading `process.env.HOME`
+// directly (with `os.homedir()` fallback for when HOME is unset) makes path
+// resolution hermetic under both `node --test` and `bun test`.
+function resolveHomedir(): string {
+  const envHome = process.env.HOME;
+  if (envHome && envHome.length > 0) return envHome;
+  return os.homedir();
+}
+
+// Path construction is best-effort. `resolveHomedir()` can throw when no home
 // directory is resolvable, and a throwing top-level expression aborts the
 // host's plugin import; degrade to a relative config path instead. `homedir`
 // is injectable so the fallback is directly unit-testable.
-export function resolveConfigDir(homedir: () => string = os.homedir): string {
+export function resolveConfigDir(homedir: () => string = resolveHomedir): string {
   try {
     return path.join(homedir(), ".config", "opencode");
   } catch {
@@ -53,7 +65,7 @@ export function safeJoinPath(base: string, ...segments: unknown[]): string {
 export function dataShareAuthPath(): string {
   const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);
   if (xdgDataHome) return path.join(xdgDataHome, "opencode", "auth.json");
-  return path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
+  return path.join(resolveHomedir(), ".local", "share", "opencode", "auth.json");
 }
 
 export function authJsonPaths(): string[] {

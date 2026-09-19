@@ -4,7 +4,7 @@
     "dockerfile": "../Dockerfile",
     "context": ".."
   },
-  "remoteUser": "node",
+  "remoteUser": "root",
   "workspaceFolder": "/workspaces/oc-go-usage-display",
   "postCreateCommand": "bun install"
 }
