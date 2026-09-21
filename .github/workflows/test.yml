@@ -1,6 +1,8 @@
 # CI for oc-go-usage-display.
 #
-# Triggers: push + pull_request + weekly schedule (Mondays 06:00 UTC).
+# Triggers: push + pull_request (opened/synchronize/reopened/ready_for_review)
+# + weekly schedule (Mondays 06:00 UTC). The Docker gate (`container-e2e`) is
+# skipped on develop pushes and draft PRs.
 #
 # Jobs:
 #   - unit          : typecheck + build + READONLY unit tests on Node 22. The
@@ -25,6 +27,7 @@ name: test
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: "0 6 * * 1"
 
@@ -69,6 +72,12 @@ jobs:
 
   container-e2e:
     name: container-e2e (docker compose)
+    # Docker-heavy: run on main pushes, the weekly schedule, and non-draft PRs
+    # only — never on develop pushes or draft PRs.
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     # ubuntu-latest on purpose: the slim runner image has no Docker daemon.
     runs-on: ubuntu-latest
     permissions:
