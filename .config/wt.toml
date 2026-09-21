@@ -6,18 +6,20 @@
 
 # Worktrees live as subdirectories of the repo root (which holds the bare .git
 # database). e.g. develop/ -> /path/to/oc-go-usage-display/develop
-worktree-path = "{{ repo_path }}/{{ branch | sanitize }}"
+worktree-path = "{{ repo_path }}/../{{ branch | sanitize }}"
 
 # Copy-ignored excludes: never spill per-branch build output or caches into
 # other worktrees.
 [step.copy-ignored]
 exclude = ["node_modules/", "dist/"]
 
-[[pre-start]]
-install = "npm ci"
+[pre-start]
+copy = "wt step copy-ignored"
 
-[[pre-start]]
-build = "npm run build"
+[[post-start]]
+install = "bun install"
+[[post-start]]
+build = "bun run build"
 
 [pre-merge]
-test = "npm test"
+test = "bun run test"
