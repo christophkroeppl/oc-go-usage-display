@@ -1,19 +1,17 @@
 // Shared opencode harness for the e2e tier.
 //
-// One implementation of: locating the opencode binary, writing a plugin
-// config, booting `opencode serve`, waiting for its listening sentinel, and
-// querying the registered tool ids. The e2e test
-// (test/e2e/opencode-load.test.js) consumes this so the flow is not duplicated.
-// TUI display coverage lives in test/helpers/tui.js.
+// One implementation of: locating the opencode binary, booting `opencode
+// serve`, waiting for its listening sentinel, and querying the registered tool
+// ids. The e2e test (test/e2e/opencode-load.test.js) installs the plugin
+// through the real `oc-go-usage-display-init` CLI, so the install surface
+// (opencode.jsonc, `./plugins/...` resolution, the server bundle) is what gets
+// exercised. TUI display coverage lives in test/helpers/tui.js.
 //
 // The load check runs container-only against the container's disposable HOME
 // (`~/.config/opencode`). The TUI tests pass an env from test/helpers/run.js
 // instead, which redirects HOME/XDG into a tmp root.
 
 import { spawn, spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { CONFIG_OVERRIDE_KEYS } from "./run.js";
 
 // Behavior toggles the load check needs. Deliberately omits OPENCODE_PURE /
@@ -44,30 +42,6 @@ export function findOpencodeBinary() {
   if (found.status !== 0) return null;
   const binary = (found.stdout ?? "").trim();
   return binary.length > 0 ? binary : null;
-}
-
-// Write the two config files opencode reads: opencode.json points the server
-// at dist/index.js; tui.json points the TUI at dist/tui.js and enables both
-// surfaces. `pathToFileURL` percent-encodes the spec so a repo path containing
-// spaces still resolves. Plain `file://` specs deliberately exercise the
-// post-build entry modules (the bundled dist/plugins/* copies are validated
-// elsewhere).
-export function writePluginConfig(configDir, repoDir) {
-  fs.mkdirSync(configDir, { recursive: true });
-  const serverPlugin = pathToFileURL(path.join(repoDir, "dist", "index.js")).href;
-  const tuiPlugin = pathToFileURL(path.join(repoDir, "dist", "tui.js")).href;
-  fs.writeFileSync(
-    path.join(configDir, "opencode.json"),
-    `${JSON.stringify({ $schema: "https://opencode.ai/config.json", plugin: [serverPlugin] }, null, 2)}\n`,
-  );
-  fs.writeFileSync(
-    path.join(configDir, "tui.json"),
-    `${JSON.stringify(
-      { $schema: "https://opencode.ai/tui.json", plugin: [tuiPlugin], sidebar: true, statusline: true },
-      null,
-      2,
-    )}\n`,
-  );
 }
 
 // Spawn `opencode serve` and resolve once the listening sentinel is seen.

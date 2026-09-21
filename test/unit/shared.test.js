@@ -9,13 +9,16 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { buildUsageRows } from "../../dist/helpers.js";
 import {
+  authJsonPaths,
   errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
   formatResetDuration,
   resolveConfigDir,
+  resolveHostRoots,
   safeJoinPath,
   unavailableSnapshot,
+  usageHostFromEnv,
 } from "../../dist/shared.js";
 
 // --- safeJoinPath / resolveConfigDir (module-level path construction) ---
@@ -45,6 +48,73 @@ test("resolveConfigDir falls back to a relative path when home resolution throws
     }),
     ".config/opencode",
   );
+});
+
+// --- host roots: opencode vs Kilo (no fs access, injected env) ---
+
+test("usageHostFromEnv only recognizes the explicit kilo marker", () => {
+  assert.equal(usageHostFromEnv({ OC_GO_USAGE_HOST: "kilo" }), "kilo");
+  assert.equal(usageHostFromEnv({ OC_GO_USAGE_HOST: "KILO" }), "opencode");
+  assert.equal(usageHostFromEnv({ OC_GO_USAGE_HOST: "opencode" }), "opencode");
+  assert.equal(usageHostFromEnv({}), "opencode");
+  assert.equal(usageHostFromEnv(undefined), "opencode");
+});
+
+test("resolveHostRoots gives each host its own default config/data roots", () => {
+  assert.deepStrictEqual(resolveHostRoots("opencode", {}, () => "/home/tester"), {
+    configDir: "/home/tester/.config/opencode",
+    dataDir: "/home/tester/.local/share/opencode",
+  });
+  assert.deepStrictEqual(resolveHostRoots("kilo", {}, () => "/home/tester"), {
+    configDir: "/home/tester/.config/kilo",
+    dataDir: "/home/tester/.local/share/kilo",
+  });
+});
+
+test("resolveHostRoots honors XDG roots for both hosts", () => {
+  const env = { XDG_CONFIG_HOME: "/xdg/config", XDG_DATA_HOME: "/xdg/data" };
+  assert.deepStrictEqual(resolveHostRoots("opencode", env, () => "/home/tester"), {
+    configDir: "/xdg/config/opencode",
+    dataDir: "/xdg/data/opencode",
+  });
+  assert.deepStrictEqual(resolveHostRoots("kilo", env, () => "/home/tester"), {
+    configDir: "/xdg/config/kilo",
+    dataDir: "/xdg/data/kilo",
+  });
+});
+
+test("resolveHostRoots honors KILO_CONFIG_DIR for the Kilo config root only", () => {
+  assert.deepStrictEqual(resolveHostRoots("kilo", { KILO_CONFIG_DIR: "/custom/kilo" }, () => "/home/tester"), {
+    configDir: "/custom/kilo",
+    dataDir: "/home/tester/.local/share/kilo",
+  });
+  // The opencode host never reads Kilo's override.
+  assert.deepStrictEqual(resolveHostRoots("opencode", { KILO_CONFIG_DIR: "/custom/kilo" }, () => "/home/tester"), {
+    configDir: "/home/tester/.config/opencode",
+    dataDir: "/home/tester/.local/share/opencode",
+  });
+});
+
+test("authJsonPaths reads the selected host's data store before its config dir", () => {
+  assert.deepStrictEqual(authJsonPaths("kilo", {}, () => "/home/tester"), [
+    "/home/tester/.local/share/kilo/auth.json",
+    "/home/tester/.config/kilo/auth.json",
+  ]);
+  assert.deepStrictEqual(authJsonPaths("opencode", {}, () => "/home/tester"), [
+    "/home/tester/.local/share/opencode/auth.json",
+    "/home/tester/.config/opencode/auth.json",
+  ]);
+});
+
+test("resolveHostRoots never throws when home resolution fails", () => {
+  const roots = resolveHostRoots(
+    "kilo",
+    {},
+    () => {
+      throw new Error("no home directory");
+    },
+  );
+  assert.deepStrictEqual(roots, { configDir: ".config/kilo", dataDir: ".local/share/kilo" });
 });
 
 // --- errorMessage ---

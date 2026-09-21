@@ -10,12 +10,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  checkHostInstall,
   cliErrorMessage,
   ensureServerEntry,
   ensureTuiEntry,
   linkPluginFiles,
   normalizeTuiEntry,
   parseOptionalToggle,
+  parseTargetChoice,
+  parseTargetList,
   readTuiSelection,
   removePluginFiles,
   removeServerEntry,
@@ -179,6 +182,63 @@ test("removePluginFiles keeps directories and removes only files", () => {
     assert.deepStrictEqual(result.kept, ["oc-go-usage-display.ts"]);
     assert.equal(fs.statSync(path.join(pluginsDir, "oc-go-usage-display.ts")).isDirectory(), true);
   });
+});
+
+// --- host-aware install helpers (Kilo layout) ---
+
+test("kilo install round-trips through its own bundles and plain tui entry", () => {
+  withTempDir((dir) => {
+    linkPluginFiles(REPO_DIR, dir, "copy", "kilo");
+    const pluginsDir = path.join(dir, "plugins");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.kilo.ts", "go_usage");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.kilo.tsx", "sidebar_content");
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.ts")), false);
+
+    const server = ensureServerEntry(dir, { host: "kilo" });
+    assert.equal(server.present, true);
+    assert.equal(fs.existsSync(path.join(dir, "kilo.json")), true);
+    assert.equal(fs.existsSync(path.join(dir, "opencode.jsonc")), false);
+    const kiloConfig = JSON.parse(fs.readFileSync(path.join(dir, "kilo.json"), "utf8"));
+    // Kilo does not resolve `./...` against its config dir, so the entry is the
+    // absolute installed path.
+    assert.deepStrictEqual(kiloConfig.plugin, [path.join(dir, "plugins", "oc-go-usage-display.kilo.ts")]);
+
+    const tui = ensureTuiEntry(dir, { host: "kilo" });
+    assert.equal(tui.entry, true);
+    assert.equal(tui.sidebar, null);
+    const tuiConfig = JSON.parse(fs.readFileSync(path.join(dir, "tui.json"), "utf8"));
+    assert.deepStrictEqual(tuiConfig.plugin, [path.join(dir, "plugins", "oc-go-usage-display.kilo.tsx")]);
+
+    const report = checkHostInstall("kilo", dir, REPO_DIR);
+    assert.deepStrictEqual(report.problems, []);
+
+    const removed = removePluginFiles(dir, "kilo");
+    assert.deepStrictEqual([...removed.removed].sort(), [
+      "oc-go-usage-display.kilo.ts",
+      "oc-go-usage-display.kilo.tsx",
+    ]);
+    assert.equal(removeServerEntry(dir, { host: "kilo" }).changed, true);
+    assert.equal(removeTuiEntry(dir, "kilo").changed, true);
+  });
+});
+
+test("kilo tui.json rejects sidebar/statusline options with a clear error", () => {
+  withTempDir((dir) => {
+    assert.throws(() => ensureTuiEntry(dir, { host: "kilo", sidebar: true }), /do not apply to kilo/);
+    assert.throws(() => ensureTuiEntry(dir, { host: "kilo", statusline: false }), /do not apply to kilo/);
+  });
+});
+
+test("parseTargetList and parseTargetChoice resolve target selections", () => {
+  assert.deepStrictEqual(parseTargetList("kilo"), ["kilo"]);
+  assert.deepStrictEqual(parseTargetList("all"), ["opencode", "kilo"]);
+  assert.deepStrictEqual(parseTargetList("kilo,opencode"), ["kilo", "opencode"]);
+  assert.throws(() => parseTargetList("vim"), /unknown target/);
+  assert.deepStrictEqual(parseTargetChoice("", ["opencode", "kilo"]), ["opencode", "kilo"]);
+  assert.deepStrictEqual(parseTargetChoice("2", ["opencode", "kilo"]), ["kilo"]);
+  assert.deepStrictEqual(parseTargetChoice("1,2", ["opencode", "kilo"]), ["opencode", "kilo"]);
+  assert.throws(() => parseTargetChoice("3", ["opencode", "kilo"]), /invalid selection/);
+  assert.throws(() => parseTargetChoice("nope", ["opencode", "kilo"]), /invalid selection/);
 });
 
 test("removeServerEntry removes the entry and preserves comments on no-op rerun", () => {

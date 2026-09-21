@@ -24,13 +24,16 @@ function run(command, args, options = {}) {
 
 // The deployed bundles inline src/shared.ts, so no relative import may remain
 // and the entry markers must be present (proves the shared helpers resolved in).
-function assertDeployedSelfContained(pluginsDir, fileName, marker) {
+// The host banner is the same marker scripts/verify-bundles.mjs checks, so the
+// tarball proves both hosts shipped, not just one.
+function assertDeployedSelfContained(pluginsDir, fileName, marker, banner) {
   const content = fs.readFileSync(path.join(pluginsDir, fileName), "utf8");
   assert.ok(!content.includes('from "./shared'), `${fileName} must not import from "./shared"`);
   assert.ok(!content.includes("from './shared"), `${fileName} must not import from './shared'`);
   assert.ok(!content.includes('from "./'), `${fileName} must have no relative imports`);
   assert.ok(!content.includes("from './"), `${fileName} must have no relative imports`);
   assert.ok(content.includes(marker), `${fileName} must contain ${marker}`);
+  assert.ok(content.includes(banner), `${fileName} must carry the banner "${banner}"`);
 }
 
 test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-contained", () => {
@@ -49,7 +52,12 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
       "package/dist/shared.js",
       "package/dist/index.js",
       "package/dist/tui.js",
+      "package/dist/tui.kilo.js",
       "package/dist/helpers.js",
+      "package/dist/plugins/oc-go-usage-display.ts",
+      "package/dist/plugins/oc-go-usage-display.kilo.ts",
+      "package/dist/plugins/oc-go-usage-display.tsx",
+      "package/dist/plugins/oc-go-usage-display.kilo.tsx",
       "package/bin/oc-go-usage-display-init.js",
       "package/src/shared.ts",
     ]) {
@@ -61,8 +69,15 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
     run("tar", ["-xzf", tarball, "-C", extractDir]);
 
     const pluginsDir = path.join(extractDir, "package", "dist", "plugins");
-    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.ts", "go_usage");
-    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.tsx", "sidebar_content");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.ts", "go_usage", "opencode server plugin bundle");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.kilo.ts", "go_usage", "kilo server plugin bundle");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.tsx", "sidebar_content", "opencode tui plugin bundle");
+    assertDeployedSelfContained(
+      pluginsDir,
+      "oc-go-usage-display.kilo.tsx",
+      "sidebar_content",
+      "kilo tui plugin bundle",
+    );
   } finally {
     tmp.cleanup();
   }

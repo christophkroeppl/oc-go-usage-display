@@ -19,7 +19,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { isolatedEnv } from "./run.js";
 import { OPENCODE_LOAD_ENV } from "./opencode.js";
 
@@ -201,18 +200,38 @@ export async function createSessionWithModel({ url, directory, model, title }) {
 
 // Write the host's two config files:
 //   opencode: $OPENCODE_CONFIG_DIR/{opencode.json,tui.json}
-//   kilo:     $XDG_CONFIG_HOME/kilo/{opencode.json,tui.json}
+//   kilo:     $XDG_CONFIG_HOME/kilo/{kilo.json,tui.json}
 // Kilo rejects `sidebar`/`statusline` keys in tui.json (invalidates the whole
 // file, so the plugin never loads), and the surface defaults are both on.
+//
+// For kilo the bundles are copied into `<configDir>/plugins/` and referenced by
+// absolute path, exactly like `oc-go-usage-display-init --target kilo` (Kilo
+// does not resolve `./...` against its config dir), so the e2e proves the
+// deployed copy resolves the host-provided solid-js/@opentui modules.
 export function writeTuiHostConfig({ host, repoDir, env, model }) {
   const configDir = host === "kilo" ? path.join(env.XDG_CONFIG_HOME, "kilo") : env.OPENCODE_CONFIG_DIR;
   fs.mkdirSync(configDir, { recursive: true });
-  const serverSpec = pathToFileURL(path.join(repoDir, "dist", "index.js")).href;
-  const tuiEntry =
-    host === "kilo" ? path.join(repoDir, "dist", "plugins", "oc-go-usage-display.kilo.tsx") : path.join(repoDir, "dist", "tui.js");
-  const tuiSpec = pathToFileURL(tuiEntry).href;
+  let serverSpec;
+  let tuiSpec;
+  if (host === "kilo") {
+    const pluginsDir = path.join(configDir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.kilo.ts", "oc-go-usage-display.kilo.tsx"]) {
+      fs.copyFileSync(path.join(repoDir, "dist", "plugins", fileName), path.join(pluginsDir, fileName));
+    }
+    serverSpec = path.join(pluginsDir, "oc-go-usage-display.kilo.ts");
+    tuiSpec = path.join(pluginsDir, "oc-go-usage-display.kilo.tsx");
+  } else {
+    const pluginsDir = path.join(configDir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.ts", "oc-go-usage-display.tsx"]) {
+      fs.copyFileSync(path.join(repoDir, "dist", "plugins", fileName), path.join(pluginsDir, fileName));
+    }
+    serverSpec = "./plugins/oc-go-usage-display.ts";
+    tuiSpec = "./plugins/oc-go-usage-display.tsx";
+  }
   fs.writeFileSync(
-    path.join(configDir, "opencode.json"),
+    path.join(configDir, host === "kilo" ? "kilo.json" : "opencode.json"),
     `${JSON.stringify({ $schema: "https://opencode.ai/config.json", model, plugin: [serverSpec] }, null, 2)}\n`,
   );
   fs.writeFileSync(

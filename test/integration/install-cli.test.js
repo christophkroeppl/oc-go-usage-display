@@ -20,8 +20,8 @@ const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const SERVED_SERVER = path.join(REPO_DIR, "dist", "plugins", "oc-go-usage-display.ts");
 const SERVED_TUI = path.join(REPO_DIR, "dist", "plugins", "oc-go-usage-display.tsx");
 
-function runCli(name, args, root) {
-  return runNode([path.join(REPO_DIR, "bin", name), ...args], { root, cwd: REPO_DIR });
+function runCli(name, args, root, env = {}) {
+  return runNode([path.join(REPO_DIR, "bin", name), ...args], { root, cwd: REPO_DIR, env });
 }
 
 function assertNoDanglingSymlinks(dir) {
@@ -63,6 +63,83 @@ test("install-cli init fails cleanly when the plugin bundle is missing", () => {
     assert.ok(!/\n\s+at /.test(result.stderr), `stderr must not contain frames: ${result.stderr}`);
     // Fail-fast: nothing was registered before the bundle check.
     assert.equal(fs.existsSync(path.join(tmp.configDir, "opencode.jsonc")), false);
+  } finally {
+    tmp.cleanup();
+  }
+});
+
+test("install-cli kilo target installs only the kilo layout", () => {
+  const tmp = makeConfigDir();
+  try {
+    const { root } = tmp;
+    const kiloConfigDir = path.join(root, "kilo-config");
+    const installedServer = path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts");
+    const installedTui = path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.tsx");
+
+    const init = runCli(
+      "oc-go-usage-display-init.js",
+      ["--repo", REPO_DIR, "--kilo-config-dir", kiloConfigDir, "--copy"],
+      root,
+    );
+    assert.equal(init.code, 0, init.stderr);
+    assert.equal(fs.lstatSync(installedServer).isFile(), true);
+    assert.equal(fs.lstatSync(installedTui).isFile(), true);
+    // The kilo target never touches the opencode config, and registers
+    // absolute plugin paths (Kilo ignores `./...` relative specs).
+    assert.equal(fs.existsSync(path.join(tmp.configDir, "opencode.jsonc")), false);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(kiloConfigDir, "kilo.json"), "utf8")).plugin,
+      [path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts")],
+    );
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(kiloConfigDir, "tui.json"), "utf8")).plugin,
+      [path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.tsx")],
+    );
+
+    const status = runCli(
+      "oc-go-usage-display-status.js",
+      ["--repo", REPO_DIR, "--kilo-config-dir", kiloConfigDir],
+      root,
+    );
+    assert.equal(status.code, 0, status.stderr || status.stdout);
+
+    const remove = runCli("oc-go-usage-display-remove.js", ["--kilo-config-dir", kiloConfigDir], root);
+    assert.equal(remove.code, 0, remove.stderr);
+    assert.equal(fs.existsSync(installedServer), false);
+    assert.equal(fs.existsSync(installedTui), false);
+  } finally {
+    tmp.cleanup();
+  }
+});
+
+test("install-cli --target all installs both hosts, remove clears both", () => {
+  const tmp = makeConfigDir();
+  try {
+    const { root, configDir } = tmp;
+    const kiloConfigDir = path.join(root, "kilo-config");
+    const init = runCli(
+      "oc-go-usage-display-init.js",
+      ["--repo", REPO_DIR, "--target", "all", "--copy"],
+      root,
+      { KILO_CONFIG_DIR: kiloConfigDir },
+    );
+    assert.equal(init.code, 0, init.stderr);
+
+    for (const file of [
+      path.join(configDir, "plugins", "oc-go-usage-display.ts"),
+      path.join(configDir, "plugins", "oc-go-usage-display.tsx"),
+      path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts"),
+      path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.tsx"),
+    ]) {
+      assert.equal(fs.existsSync(file), true, `missing ${file}`);
+    }
+
+    const remove = runCli("oc-go-usage-display-remove.js", ["--target", "all"], root, {
+      KILO_CONFIG_DIR: kiloConfigDir,
+    });
+    assert.equal(remove.code, 0, remove.stderr);
+    assert.equal(fs.existsSync(path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display.ts")), false);
   } finally {
     tmp.cleanup();
   }
