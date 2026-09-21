@@ -37,17 +37,17 @@ jobs:
         run: bun install
 
       - name: Typecheck
-        run: npm run check
+        run: bun run check
 
-      - name: Test (build + unit + integration)
-        run: npm test
+      - name: Test (build + readonly unit)
+        run: bun run test
 
       - name: Pack dev tarball
         run: |
           set -euo pipefail
           rm -rf ./tmp-dev-pack
           mkdir -p ./tmp-dev-pack
-          npm pack --pack-destination ./tmp-dev-pack
+          bun pm pack --destination ./tmp-dev-pack
           ls -la ./tmp-dev-pack
 
       - name: Upload dev tarball

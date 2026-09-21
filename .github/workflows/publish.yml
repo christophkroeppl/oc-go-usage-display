@@ -103,25 +103,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Setup Node 22 with npm registry
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-          # setup-node defaults always-auth to true, which writes the
-          # deprecated `always-auth` key into the runner .npmrc and breaks
-          # npm v11+ ("Unknown user config always-auth"). OIDC trusted
-          # publishing needs no static auth, so disable it explicitly.
-          always-auth: false
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run check
-
-      - name: Test (build + unit + integration)
-        run: npm test
+      - name: Run containerized test gate
+        # Rebuilds and retests the exact ref inside the pinned image
+        # (integration + e2e, incl. the real opencode/kilo TUI display checks
+        # via tmux). Same authoritative gate as test.yml container-e2e. The
+        # release job installs its own Node/npm for publishing below.
+        run: docker compose run --rm --build test
 
   version-bump:
     name: version bump (conventional commits)
@@ -330,17 +317,25 @@ jobs:
           # See gate job: OIDC trusted publishing needs no static auth.
           always-auth: false
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.2
+
       - name: Install dependencies
-        run: npm ci
+        # No package-lock.json (bun.lock is the lockfile), so `npm ci` cannot work.
+        run: bun install
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
       - name: Pack release tarball
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/npm-tarball"
           rm -f "$RUNNER_TEMP/npm-tarball/"*.tgz
+          # npm pack here on purpose: the release asset mirrors the tarball
+          # `npm publish` will build for the registry below.
           npm pack --pack-destination "$RUNNER_TEMP/npm-tarball/"
           ls -la "$RUNNER_TEMP/npm-tarball/"
 

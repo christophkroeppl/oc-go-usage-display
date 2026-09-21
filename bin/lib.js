@@ -184,13 +184,13 @@ export function linkPluginFiles(repoDir, configDir, mode) {
   const pluginsDir = path.join(configDir, "plugins");
   fs.mkdirSync(pluginsDir, { recursive: true });
   // Bundled self-contained outputs (no `./shared` import, no shared file):
-  // `npm run build` produces dist/plugins/*, which is what gets installed.
+  // `bun run build` produces dist/plugins/*, which is what gets installed.
   const pairs = [
     [path.join(repoDir, "dist", "plugins", SERVER_FILE_NAME), path.join(pluginsDir, SERVER_FILE_NAME)],
     [path.join(repoDir, "dist", "plugins", TUI_FILE_NAME), path.join(pluginsDir, TUI_FILE_NAME)],
   ];
   for (const [source, target] of pairs) {
-    if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run npm run build)`);
+    if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run bun run build)`);
     if (mode === "copy") {
       const stat = safeLstat(target);
       if (stat?.isDirectory()) {

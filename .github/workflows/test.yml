@@ -3,22 +3,20 @@
 # Triggers: push + pull_request + weekly schedule (Mondays 06:00 UTC).
 #
 # Jobs:
-#   - unit          : typecheck + build + unit/integration tests on Node 22.
-#   - container-e2e : the authoritative end-to-end gate. Builds the root
-#                     Dockerfile and runs the full containerized command
-#                     (bun install && npm run check && npm test &&
-#                     npm run test:e2e), which boots the real opencode server
-#                     and asserts the `go_usage` tool is registered. Hermetic:
-#                     all HOME/XDG/opencode paths live in container/tmp dirs.
-#   - format-check  : secret-gated live usage-shape check, parser-backed by
-#                     dist/shared.js `extractSnapshotFromApiPayload`. Neutral
-#                     (exit 0) when the key is absent or no window is usable;
-#                     fails on malformed JSON or a missing percent within a
-#                     present window.
+#   - unit          : typecheck + build + READONLY unit tests on Node 22. The
+#                     live usage shape check lives in test/unit/live-usage.test.js
+#                     and runs when OPENCODE_GO_API_KEY is available (skips
+#                     neutrally otherwise). Unit tests never write to the host.
+#   - container-e2e : the authoritative gate. Builds the root Dockerfile and
+#                     runs the full containerized suite (integration + e2e,
+#                     including the real opencode/kilo TUI display checks via
+#                     tmux). Hermetic: all HOME/XDG/opencode paths and tmux
+#                     sockets live in container/tmp dirs. OPENCODE_GO_API_KEY is
+#                     forwarded when present; the live variants skip otherwise.
 #
 # Startup-safety rule: the secrets context must NOT appear in any conditional
-# expression (job-level or step-level). The job maps the secret once via
-# job-level `env:`, then gates steps via the env value.
+# expression (job-level or step-level). Each job maps the secret once via
+# job-level `env:`.
 #
 # Concurrency: one run per ref; a new push cancels the previous in-flight run.
 
@@ -39,11 +37,13 @@ concurrency:
 
 jobs:
   unit:
-    name: unit (typecheck + build + tests)
+    name: unit (typecheck + build + readonly tests)
     runs-on: ubuntu-slim
     permissions:
       contents: read
     timeout-minutes: 20
+    env:
+      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,132 +62,28 @@ jobs:
         run: bun install
 
       - name: Typecheck
-        run: npm run check
+        run: bun run check
 
-      - name: Test (build + unit + integration)
-        run: npm test
+      - name: Test (build + unit)
+        run: bun run test
 
   container-e2e:
     name: container-e2e (docker compose)
     runs-on: ubuntu-slim
     permissions:
       contents: read
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run containerized test gate
-        # Builds the root Dockerfile and runs the checkout baked into the
-        # image: opencode --version && bun install && npm run check && npm
-        # test && npm run test:e2e. No bind mount, so the gate is independent
-        # of the runner UID. `docker compose run` propagates the command's
-        # exit code.
-        run: docker compose run --rm --build test
-
-  format-check:
-    name: format-check (usage API shape)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 10
+    timeout-minutes: 40
     env:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          version: 1.4.2
-
-      - name: Skip notice (no API key)
-        if: env.OPENCODE_GO_API_KEY == ''
-        run: |
-          echo "::notice::OPENCODE_GO_API_KEY not set — skipping live usage shape check (neutral, not a failure)."
-
-      - name: Install dependencies
-        if: env.OPENCODE_GO_API_KEY != ''
-        run: bun install
-
-      - name: Build parser (dist/shared.js)
-        if: env.OPENCODE_GO_API_KEY != ''
-        run: npm run build
-
-      - name: Validate usage JSON shape
-        if: env.OPENCODE_GO_API_KEY != ''
-        run: |
-          set -euo pipefail
-          echo "::add-mask::$OPENCODE_GO_API_KEY"
-          response="$(curl -sS --fail-with-body -m 20 \
-            -H "Accept: application/json" \
-            -H "Authorization: Bearer $OPENCODE_GO_API_KEY" \
-            https://opencode.ai/zen/go/v1/usage)"
-          # Never print the raw body: it may contain account identifiers.
-          printf '%s' "$response" | node --input-type=module -e '
-            import { extractSnapshotFromApiPayload } from "./dist/shared.js";
-            let data = "";
-            process.stdin.on("data", (chunk) => { data += chunk; });
-            process.stdin.on("end", () => {
-              let payload;
-              try {
-                payload = JSON.parse(data);
-              } catch {
-                console.error("FAIL: usage endpoint did not return valid JSON");
-                process.exit(1);
-              }
-              // Present windows must be well-formed even when the overall
-              // payload has no usable window (no Go subscription).
-              const shapeError = validatePresentWindows(payload);
-              if (shapeError) {
-                console.error("FAIL: " + shapeError);
-                process.exit(1);
-              }
-              const snapshot = extractSnapshotFromApiPayload(payload);
-              if (!snapshot) {
-                console.log("::notice::usage API returned no usable windows (no Go subscription) — skipping shape check (neutral, not a failure).");
-                process.exit(0);
-              }
-              const windows = ["rolling", "weekly", "monthly"].filter((key) => snapshot[key] !== null).length;
-              console.log("PASS: usage shape OK (" + windows + "/3 windows parsed by extractSnapshotFromApiPayload)");
-            });
-
-            function validatePresentWindows(payload) {
-              const candidates = [payload];
-              for (const key of ["usage", "data", "go"]) {
-                if (payload && typeof payload[key] === "object" && payload[key] !== null) {
-                  candidates.push(payload[key]);
-                }
-              }
-              const aliases = {
-                rolling: ["rolling", "rollingUsage", "5h"],
-                weekly: ["weekly", "weeklyUsage", "7d"],
-                monthly: ["monthly", "monthlyUsage", "30d"],
-              };
-              for (const container of candidates) {
-                if (typeof container !== "object" || container === null || Array.isArray(container)) continue;
-                for (const [name, keys] of Object.entries(aliases)) {
-                  const window = keys.map((k) => container[k]).find((v) => v !== undefined && v !== null);
-                  if (window === undefined) continue;
-                  if (typeof window !== "object" || Array.isArray(window)) {
-                    return name + " is not an object";
-                  }
-                  const percent = window.percent
-                    ?? window.usagePercent ?? window.usedPercent ?? window.value ?? window.usage;
-                  if (typeof percent !== "number" || !Number.isFinite(percent)) {
-                    return name + ".percent missing or non-numeric";
-                  }
-                  if (window.status !== undefined && window.status !== null && typeof window.status !== "string") {
-                    return name + ".status is not a string";
-                  }
-                }
-              }
-              return null;
-            }
-          '
+      - name: Run containerized test gate
+        # Builds the root Dockerfile and runs the checkout baked into the
+        # image: opencode --version && kilo --version && bun install && bun
+        # run build && bun run test:integration && bun run test:e2e. No bind
+        # mount, so the gate is independent of the runner UID. compose.yml
+        # forwards OPENCODE_GO_API_KEY from this job env. `docker compose run`
+        # propagates the command's exit code.
+        run: docker compose run --rm --build test

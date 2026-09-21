@@ -4,12 +4,12 @@
 # ~/.config/opencode/plugins/* and registers the
 # opencode.jsonc + tui.json entries (existing toggles are preserved).
 # When dist/plugins/* is missing, the bundles are built automatically if the
-# repo looks buildable (`npm run build`); otherwise the script fails with a
+# repo looks buildable (`bun run build`); otherwise the script fails with a
 # hint instead of a raw "repo bundle missing" error.
 #
 # Usage:
 #   ./install.sh                  # copy (default, self-contained; preferred for prod)
-#   ./install.sh --symlink        # symlink (dev-only; run `npm run build` after
+#   ./install.sh --symlink        # symlink (dev-only; run `bun run build` after
 #                                 # source edits so dist/plugins/* stays current)
 #   ./install.sh --sidebar=0 --statusline=1
 #
@@ -27,14 +27,18 @@ SERVER_BUNDLE="$REPO_DIR/dist/plugins/oc-go-usage-display.ts"
 TUI_BUNDLE="$REPO_DIR/dist/plugins/oc-go-usage-display.tsx"
 if [[ ! -f "$SERVER_BUNDLE" || ! -f "$TUI_BUNDLE" ]]; then
   if [[ -f "$REPO_DIR/package.json" && -f "$REPO_DIR/tsconfig.json" && -f "$REPO_DIR/src/index.ts" ]]; then
-    echo "dist/plugins/* missing; building local bundles (npm run build)" >&2
-    if ! (cd "$REPO_DIR" && npm run build); then
-      echo "error: npm run build failed; run 'npm install' in $REPO_DIR and retry" >&2
+    if ! command -v bun >/dev/null 2>&1; then
+      echo "error: bun is required to build the bundles (https://bun.sh)" >&2
+      exit 1
+    fi
+    echo "dist/plugins/* missing; building local bundles (bun run build)" >&2
+    if ! (cd "$REPO_DIR" && bun run build); then
+      echo "error: bun run build failed; run 'bun install' in $REPO_DIR and retry" >&2
       exit 1
     fi
   else
     echo "error: dist/plugins/* missing and $REPO_DIR does not look like the source repo" >&2
-    echo "hint: run 'npm run build' in the source repo first, or install the published package" >&2
+    echo "hint: run 'bun run build' in the source repo first, or install the published package" >&2
     exit 1
   fi
 fi
