@@ -69,11 +69,10 @@ Release commit format:
 Three workflows:
 
 - `test.yml` (`test`): runs on `push` + `pull_request` + weekly schedule (Mondays 06:00 UTC).
-  - `unit`: always runs (no secrets needed) — `npm ci`, `npm run check`, `npm test` on Node 22.
-  - `container-e2e`: authoritative end-to-end gate — `docker compose run --rm --build test` builds the root Dockerfile and runs `opencode --version && npm ci && npm run check && npm test && npm run test:e2e` against the baked-in checkout (no bind mount, hermetic tmp HOME/XDG).
-  - `format-check`: secret-gated live usage-shape check (`OPENCODE_GO_API_KEY`). Skips neutral (exit 0) when the key is absent or when the API returns no usable windows (no subscription); still fails on malformed JSON or a missing percent within a present window.
-- `dev-build.yml` (`dev-build`): runs on `push` to `develop` + manual dispatch. `npm ci`, `npm run check`, `npm test`, then `npm pack` uploads the `dev-tgz` artifact (90-day retention). `install-dev.sh` consumes it.
-- `publish.yml` (`publish`): `test` gate -> `version-bump` -> `publish` (OIDC provenance). Rebuilds + retests the exact ref being released.
+  - `unit`: always runs on Node 22 — `bun install`, `bun run check`, `bun run test` (build + READONLY unit tier). `OPENCODE_GO_API_KEY` is mapped at job level; the live usage shape test (`test/unit/live-usage.test.js`) runs when present and skips neutrally otherwise. Unit tests must never write to the host (enforced by `scripts/check-unit-purity.mjs`).
+  - `container-e2e`: authoritative gate — `docker compose run --rm --build test` builds the root Dockerfile and runs `opencode --version && kilo --version && bun install && bun run build && bun run test:integration && bun run test:e2e` against the baked-in checkout (no bind mount, hermetic tmp HOME/XDG). Includes the real opencode/kilo TUI display checks (tmux). `OPENCODE_GO_API_KEY` is forwarded; the live TUI variants skip neutrally without it.
+- `dev-build.yml` (`dev-build`): runs on `push` to `develop` + manual dispatch. `bun install`, `bun run check`, `bun run test` (build + unit), then `bun pm pack` uploads the `dev-tgz` artifact (90-day retention). `install-dev.sh` consumes it.
+- `publish.yml` (`publish`): `test` gate -> `version-bump` -> `publish` (OIDC provenance). The gate runs the same containerized suite as `container-e2e`, rebuilding + retesting the exact ref being released.
 
 What must pass:
 
@@ -82,9 +81,11 @@ What must pass:
 
 ## 5. Testing
 
-- `npm test` builds, then runs unit + integration (`node:test`).
-- `npm run test:unit` / `npm run test:integration` skip the build — run `npm run build` first (or use `npm test`).
-- `npm run test:e2e` needs the `opencode` binary and a prior build; it skips cleanly without the binary. It boots a real `opencode serve` in an isolated tmp root and asserts `go_usage` is registered.
+Two tiers:
+
+- **unit** (host + CI, readonly): `bun run test:unit` runs `scripts/check-unit-purity.mjs` (no fs writes, not even tmp, no child processes, no sockets) and then `bun test test/unit/*.test.js`. Pure helper tests plus the live usage shape test (network read, skips without `OPENCODE_GO_API_KEY`). `bun run test` builds first (`dist/*` is what the unit tests import).
+- **integration + e2e** (Docker only): `bun run test:docker` (`docker compose run --rm --build test`). Never point these at the host: integration drives the real bins/snapshot/pack flows, and e2e boots real `opencode`/`kilo` servers and TUIs.
+- `test/e2e/tui-display.{opencode,kilo}.test.js` boot the real TUI in tmux (200x50), render `OPENCODE_GO_MOCK=1` usage, and assert the sidebar (`Go Usage`, `5h 42% · resets 2h5m`) plus the statusline (`Go 5h 42% | 7d 15% | 30d 61%`) text. Live variants use `OPENCODE_GO_API_KEY`. Models are discovered at runtime from `<binary> models opencode-go` (never hardcoded); hosts older than the Dockerfile pins skip with a clear reason.
 - `docker compose run --rm --build test` is the isolation boundary and the authoritative gate; the devcontainer (`.devcontainer/`) uses the same image with a bind mount.
 - Hermeticity is mandatory: never point a plugin test at the real config. `test/helpers/run.js` redirects HOME/XDG/`OPENCODE_CONFIG_DIR` into a tmp root, forces `OPENCODE_GO_MOCK=1`, and strips credentials; the e2e tier additionally fails if `opencode debug paths` escapes the tmp root.
 

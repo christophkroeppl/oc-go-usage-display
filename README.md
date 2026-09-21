@@ -52,14 +52,14 @@ let opencode resolve it at startup (its own package cache):
 `--copy` is the default and self-contained, so the installed files keep
 working after the package-manager cache is pruned. `--symlink` is dev-only:
 it points at the extracted source tree (dangles if that tree moves or the
-cache is cleaned), and repo edits apply only after `npm run build` + restart.
+cache is cleaned), and repo edits apply only after `bun run build` + restart.
 Prefer `--copy` for any install you want to keep.
 
 ### From a checkout
 
 ```sh
 ./install.sh              # copy install (same as init --copy)
-./install.sh --symlink    # dev-only; re-run npm run build after edits
+./install.sh --symlink    # dev-only; re-run bun run build after edits
 ./install-dev.sh          # latest develop dev-tgz + config snapshot/restore
 ```
 
@@ -147,22 +147,28 @@ are never written to the cache.
 ## Development
 
 ```sh
-npm install
-npm run build     # tsc -> dist/ + esbuild -> dist/plugins/* (self-contained)
-npm run check     # typecheck only
+bun install
+bun run build     # tsc -> dist/ + esbuild -> dist/plugins/* (self-contained)
+bun run check     # typecheck only
 ```
 
 | Test command | Tier |
 | ------------ | ---- |
-| `npm test` | build + unit + integration |
-| `npm run test:unit` | `node:test` unit suite (requires a prior build) |
-| `npm run test:integration` | bin CLI, snapshot, and `npm pack` contract (requires a prior build) |
-| `npm run test:e2e` | real opencode load check; skips without the `opencode` binary |
-| `docker compose run --rm --build test` | authoritative containerized gate (build + all tiers) |
+| `bun run test` | build + READONLY unit tier (host/CI) |
+| `bun run test:unit` | pure helper tests + live usage shape check (requires a prior build; skips without `OPENCODE_GO_API_KEY`) |
+| `bun run test:docker` | `docker compose run --rm --build test` — authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks |
+| `bun run test:integration` | container-only: bin CLI, snapshot, `pack` contract, fail-safe, redirect wiring |
+| `bun run test:e2e` | container-only: real hosts — `go_usage` registration plus tmux TUI display assertions |
 
-The devcontainer (`.devcontainer/`) builds the same image with a bind-mounted
-workspace. Tests are hermetic: all config/auth paths are redirected into temp
-dirs, so the developer's real `~/.config/opencode` is never read or written.
+The unit tier is readonly by construction (`scripts/check-unit-purity.mjs`
+rejects fs writes, tmp usage, child processes and sockets): no local state is
+touched, not even tmp. Integration and e2e tests run only inside the container
+image — `docker compose run --rm --build test` bakes the checkout in (no bind
+mount) and installs the pinned `opencode`/`kilo` binaries plus tmux. The
+devcontainer (`.devcontainer/`) builds the same image with a bind-mounted
+workspace. Tests are hermetic: all config/auth paths and tmux sockets are
+redirected into temp dirs, so the developer's real `~/.config/opencode` is
+never read or written.
 
 ### Dev install from CI
 
@@ -195,9 +201,9 @@ Snapshotted paths: `opencode.jsonc`, `tui.json`,
 
 | Workflow | Trigger | Jobs |
 | -------- | ------- | ---- |
-| `test.yml` | push, pull_request, weekly (Mon 06:00 UTC) | `unit` (typecheck + build + tests), `container-e2e` (`docker compose run --rm --build test`), `format-check` (secret-gated live usage shape) |
-| `dev-build.yml` | push to `develop`, manual | builds + tests, packs `dev-tgz` artifact (90 days) |
-| `publish.yml` | push to `main`, tag `v*`, manual | test gate, conventional-commit version bump, OIDC provenance publish |
+| `test.yml` | push, pull_request, weekly (Mon 06:00 UTC) | `unit` (typecheck + build + readonly tests, incl. live usage shape when the key is set), `container-e2e` (`docker compose run --rm --build test`: integration + real TUI display checks) |
+| `dev-build.yml` | push to `develop`, manual | builds + readonly unit tests, packs `dev-tgz` artifact (90 days) |
+| `publish.yml` | push to `main`, tag `v*`, manual | containerized test gate, conventional-commit version bump, OIDC provenance publish |
 
 ## Troubleshooting
 
