@@ -7,9 +7,10 @@ lowercase, no trailing period). `scope` is required for `sidebar`, `statusline`,
 
 ## Architecture
 
-- **server** — `src/index.ts` -> `dist/index.js` / bundle `dist/plugins/oc-go-usage-display.ts`. Registers only the `go_usage` tool.
-- **tui** — `src/tui.tsx` -> `dist/tui.js` / bundle `dist/plugins/oc-go-usage-display.tsx` (opencode). `src/tui.kilo.tsx` -> `dist/plugins/oc-go-usage-display.kilo.tsx` (Kilo). Additive `sidebar_content` + `session_prompt_right` slots only, never `single_winner`.
-- **shared** — `src/shared.ts` + `src/helpers.ts` are inlined into the bundles; `dist/plugins/*` have no relative imports.
+- **server** — `src/index.ts` -> `dist/index.js` / bundles `dist/plugins/oc-go-usage-display.ts` (opencode) and `dist/plugins/oc-go-usage-display.kilo.ts` (Kilo; same source, host baked in with an esbuild define). Registers only the `go_usage` tool.
+- **tui** — `src/tui.tsx` -> `dist/tui.js` / bundle `dist/plugins/oc-go-usage-display.tsx` (opencode). `src/tui.kilo.tsx` -> `dist/tui.kilo.js` / bundle `dist/plugins/oc-go-usage-display.kilo.tsx` (Kilo). Additive `sidebar_content` + `session_prompt_right` slots only, never `single_winner`.
+- **host roots** — every entry reads only its own host's stores: opencode `~/.config/opencode` + `$XDG_DATA_HOME/opencode`; Kilo `$KILO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kilo` + `$XDG_DATA_HOME/kilo`. Kilo's `tui.json` rejects `sidebar`/`statusline` options, and Kilo does not resolve `./...` against its config dir, so kilo install entries are absolute paths (opencode keeps `./plugins/...`).
+- **shared** — `src/shared.ts` + `src/helpers.ts` are inlined into the bundles; `dist/plugins/*` have no relative imports. `bun run build` fails unless all four bundles are present, self-contained and default-export-only (`scripts/verify-bundles.mjs`); `scripts/verify-tarball.mjs` checks packed tarballs.
 - Each entry module exports exactly one thing: the default `{ id, server | tui }` module. Extra exports are invoked by the loader as plugin factories and can crash startup. Importing never throws; factories and renders are fail-safe.
 - Secrets are never logged; tests never touch the real `~/.config/opencode` or credentials. Details: `.agents/skills/plugin-contract`, `.agents/skills/testing-and-dev-install`.
 - Install surfaces: `bin/` CLIs, package `exports` (`./server`, `./tui`, `./kilo-tui`), `install.sh`, `install-dev.sh`.
@@ -26,7 +27,7 @@ lowercase, no trailing period). `scope` is required for `sidebar`, `statusline`,
 
 - `test.yml`: `unit` (typecheck + build + readonly tests) on push/PR/schedule; `container-e2e` (Docker: integration + e2e, real opencode/kilo TUI in tmux) on `main` pushes, the weekly schedule, and non-draft PRs — never on `develop` pushes or draft PRs.
 - `dev-build.yml`: `develop` push -> `dev-tgz` artifact (90 days), consumed by `install-dev.sh`.
-- `publish.yml`: `main` push -> `test` gate -> `release-please` -> OIDC npm publish when a Release PR just merged.
+- `publish.yml`: `main` push -> `test` gate -> `release-please` -> OIDC npm publish when a Release PR just merged; release assets carry the tarball, the four plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish.
 
 ## Testing
 

@@ -53,11 +53,12 @@ Tests must never read or write the developer's real config:
 - The plugin-contract suite redirects HOME/XDG before importing `dist/*` and
   fails loudly if `CONFIG_DIR` / auth paths escape the tmp root.
 - The container-only load checks (`test/e2e/{opencode,kilo}-load.test.js`) are
-  the exception: they run only when compose sets `OC_GO_TEST_CONTAINER=1` and
-  use the disposable container HOME (`~/.config/{opencode,kilo}`) on purpose —
-  the container is the isolation boundary there.
+  the exception: they run only when compose sets `OC_GO_TEST_CONTAINER=1`,
+  install through the real `oc-go-usage-display-init` CLI, and use the
+  disposable container HOME (`~/.config/{opencode,kilo}`) on purpose — the
+  container is the isolation boundary there.
 - Hand checks must do the same (tmp HOME/XDG or the container). Never run
-  `bin/*` against the default `~/.config/opencode`.
+  `bin/*` against the default `~/.config/opencode` or `~/.config/kilo`.
 
 ## Dev install (`install-dev.sh`)
 
@@ -101,4 +102,6 @@ version >= 1.2.0 — 1.1.0 symlinks and ignores it).
 Flags: `--dry-run` (download + sanity check only), `--branch` (default
 `develop`), `--workflow` (default `dev-build.yml`), `--run-id`, `--dir`,
 `--force` / `--clean` (replace a non-empty download dir), `--sidebar=0/1`,
-`--statusline=0/1`, `--config-dir`, `--backup-dir`.
+`--statusline=0/1`, `--config-dir`, `--backup-dir`. The npm-init surface also
+takes `--target opencode|kilo|all` and `--kilo-config-dir` (Kilo entries are
+absolute paths: Kilo does not resolve `./...` against its config dir).

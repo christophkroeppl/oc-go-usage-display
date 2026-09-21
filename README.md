@@ -8,9 +8,12 @@ OpenCode Go subscription usage for [opencode](https://opencode.ai) and Kilo:
 | ------ | ------------- | ------- |
 | server | `dist/plugins/oc-go-usage-display.ts` | `go_usage` tool (`Go 5h 42% (reset 3h12m) \| 7d 15% \| 30d 61%`) |
 | tui | `dist/plugins/oc-go-usage-display.tsx` | `Go Usage` sidebar + `session_prompt_right` statusline (opencode) |
+| server (kilo) | `dist/plugins/oc-go-usage-display.kilo.ts` | `go_usage` tool for Kilo; reads Kilo's own auth store |
 | tui (kilo) | `dist/plugins/oc-go-usage-display.kilo.tsx` | same TUI surfaces for Kilo |
 
 `shared.ts` is inlined at build time. Requires Node >= 22 and opencode >= 1.18.
+All four bundles ship in the one npm package and one version; the build fails if
+either host's bundle is missing.
 
 ![Go Usage sidebar and statusline](docs/screenshot.png)
 
@@ -36,9 +39,23 @@ resolve it at startup:
 { "plugin": [["oc-go-usage-display@1.2.0", { "sidebar": true, "statusline": true }]] }
 ```
 
-From a checkout: `./install.sh` (copy install), `./install.sh --symlink`
-(dev-only), `./install-dev.sh` (latest `develop` dev-tgz + config snapshot;
-there is no auto-restore — it prints the restore command).
+From a checkout: `./install.sh` (copy install; add `--target kilo` for Kilo),
+`./install.sh --symlink` (dev-only), `./install-dev.sh` (latest `develop`
+dev-tgz + config snapshot; there is no auto-restore — it prints the restore
+command).
+
+### Kilo
+
+Kilo is a separate target: `npx oc-go-usage-display-init --target kilo` copies
+`oc-go-usage-display.kilo.{ts,tsx}` into `$KILO_CONFIG_DIR` /
+`$XDG_CONFIG_HOME/kilo` / `~/.config/kilo` and registers `kilo.json` +
+`tui.json`. Kilo's `tui.json` rejects `sidebar`/`statusline`, so its entry is a
+plain plugin spec (both surfaces default on), and Kilo does not resolve
+`./...` against its config dir, so the entries are absolute paths to the
+installed copies. Without `--target`, hosts are detected by binary on PATH or
+config dir, so brew/npm/curl/source installs all count: one detected host
+installs silently, two or more offer a numbered multiselect, and nothing
+detected installs both.
 
 ## Commands
 
@@ -47,15 +64,16 @@ After `npm install` the names below are on PATH; from a checkout use
 
 | Command | What it does |
 | ------- | ------------ |
-| `oc-go-usage-display-init` | install (copy) + register entries; `--symlink` for dev |
+| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: detected hosts, else all) |
 | `oc-go-usage-display-remove` | uninstall files + config entries (secrets untouched) |
-| `oc-go-usage-display-show` | print effective install; `--json` for machine output |
+| `oc-go-usage-display-show` | print effective install per host; `--json` for machine output |
 | `oc-go-usage-display-status` | health check; exit 0 healthy, 1 with reasons |
 | `oc-go-usage-display-update` | re-install + `git pull --ff-only` when a remote exists |
 
-Flags: `--config-dir <path>` (all; default `$OPENCODE_CONFIG_DIR` or
-`~/.config/opencode`), `--repo <path>`, `--copy`/`--symlink`,
-`--sidebar=0/1`, `--statusline=0/1`, `--json` (show).
+Flags: `--config-dir <path>` (opencode; default `$OPENCODE_CONFIG_DIR` or
+`~/.config/opencode`), `--kilo-config-dir <path>` (default `$KILO_CONFIG_DIR`
+or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
+`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show).
 
 ## Display toggles
 
@@ -72,35 +90,42 @@ Environment variables and the legacy `display` option apply only when the
 
 ## Auth and config
 
-First match wins (secrets are never logged):
+First match wins (secrets are never logged); each host reads only its own
+credential store:
 
 | # | Source | Behavior |
 | - | ------ | -------- |
 | 1 | `OPENCODE_GO_MOCK=1` | deterministic mock snapshot (never cached) |
 | 2 | `OPENCODE_GO_API_KEY` | `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <key>` |
-| 3 | `auth.json` | same Bearer path; `opencode-go` key, else `opencode` |
-| 4 | workspace + cookie | scrape `GET https://opencode.ai/workspace/{workspaceId}/go` with the `auth` cookie |
+| 3 | provider `auth.json` | same Bearer path; `opencode-go` key, else `opencode`. opencode: `$XDG_DATA_HOME/opencode/auth.json` (`~/.local/share/opencode/auth.json`), then `~/.config/opencode/auth.json`. Kilo: the same files under `kilo` (`$KILO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kilo`) |
+| 4 | workspace + cookie | scrape `GET https://opencode.ai/workspace/{workspaceId}/go` with the `auth` cookie; file config from the host's config dir |
 | 5 | none | unavailable snapshot (`not configured (set OPENCODE_GO_API_KEY)`) |
 
-File config (`~/.config/opencode/oc-go-usage-display.json`):
+File config (`oc-go-usage-display.json` in the host's config dir, e.g.
+`~/.config/opencode` or `~/.config/kilo`):
 
 ```jsonc
 { "workspaceId": "...", "authCookie": "..." }
 ```
 
-Successful snapshots cache 60s (memory + `oc-go-usage-display-cache.json`);
-failures are never cached. Key env vars: `OPENCODE_GO_API_KEY`,
-`OPENCODE_GO_WORKSPACE_ID`, `OPENCODE_GO_AUTH_COOKIE`, `OPENCODE_GO_MOCK`,
-`OPENCODE_GO_SIDEBAR` / `OPENCODE_GO_STATUSLINE` (`0/1`),
-`OPENCODE_GO_DISPLAY` (legacy), `OPENCODE_CONFIG_DIR` (install CLIs).
+Successful snapshots cache 60s (memory + `oc-go-usage-display-cache.json` in
+the host's config dir); failures are never cached. Key env vars:
+`OPENCODE_GO_API_KEY`, `OPENCODE_GO_WORKSPACE_ID`, `OPENCODE_GO_AUTH_COOKIE`,
+`OPENCODE_GO_MOCK`, `OPENCODE_GO_SIDEBAR` / `OPENCODE_GO_STATUSLINE` (`0/1`),
+`OPENCODE_GO_DISPLAY` (legacy), `OPENCODE_CONFIG_DIR` / `KILO_CONFIG_DIR`
+(install CLIs).
 
 ## Development
 
 ```sh
 bun install
-bun run build     # tsc -> dist/ + esbuild -> dist/plugins/* (self-contained)
+bun run build     # tsc -> dist/ + esbuild -> dist/plugins/* (both hosts)
 bun run check     # typecheck only
 ```
+
+`bun run build` fails unless all four bundles exist, are self-contained and
+export only the default module (`scripts/verify-bundles.mjs`); packed tarballs
+can be checked with `node scripts/verify-tarball.mjs <file.tgz>`.
 
 | Test command | Tier |
 | ------------ | ---- |
@@ -120,7 +145,7 @@ inside the container image; host-runnable tests redirect HOME/XDG and force
 | -------- | ------- | ---- |
 | `test.yml` | push, PR, weekly (Mon 06:00 UTC) | `unit` always; `container-e2e` (Docker gate) only on `main` pushes, the schedule, and non-draft PRs |
 | `dev-build.yml` | push to `develop` | `dev-tgz` artifact (90 days), used by `install-dev.sh` |
-| `publish.yml` | push to `main` | gate -> release-please Release PR -> OIDC provenance publish |
+| `publish.yml` | push to `main` | gate -> release-please Release PR -> OIDC provenance publish; the release carries the tarball, all four plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish |
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please):
 merging `develop` into `main` opens/updates a `chore(main): release X.Y.Z` PR
@@ -133,11 +158,16 @@ footer to a commit merged to `main`.
 ## Troubleshooting
 
 - **Plugin didn't load**: check `npx oc-go-usage-display-show` / `status`, then
-  restart opencode (`opencode debug config` shows the resolved plugin list;
+  restart the host (`opencode debug config` shows the resolved plugin list;
   `opencode --pure` skips plugins, so it is not a valid check).
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
-  `OPENCODE_GO_API_KEY`, sign in through the `opencode-go` provider, or
-  configure workspace + cookie.
+  `OPENCODE_GO_API_KEY` (works for both hosts), sign in through the
+  `opencode-go` provider in the host you are running, or configure workspace +
+  cookie. Each host reads only its own `auth.json`, so a Kilo login does not
+  feed the opencode plugin and vice versa.
+- **Kilo only**: `npx oc-go-usage-display-init --target kilo`; Kilo ignores
+  `sidebar`/`statusline` options, so toggle surfaces with the command palette
+  instead.
 - **Stale copy install**: copy installs never auto-update; re-run
   `npx oc-go-usage-display-init --copy` and restart.
 
@@ -148,6 +178,7 @@ npx oc-go-usage-display-remove
 npm uninstall oc-go-usage-display
 ```
 
-Removes the plugin files and the `opencode.jsonc` (server) + `tui.json` (TUI)
-entries. Secrets are never touched: env vars, `auth.json`, and
+Removes the plugin files and the server + `tui.json` entries from every
+installed host (`--target` or `--config-dir`/`--kilo-config-dir` narrows it).
+Secrets are never touched: env vars, `auth.json`, and
 `oc-go-usage-display.json` stay in place.
