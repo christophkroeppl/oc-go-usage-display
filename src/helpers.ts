@@ -13,13 +13,13 @@
 
 import * as fs from "node:fs";
 import {
-  CONFIG_DIR,
+  resolveHostRoots,
   formatResetDuration,
   isRecord,
   safeJoinPath,
   toNonEmptyString,
 } from "./shared.js";
-import type { UsageSnapshot, UsageWindow } from "./shared.js";
+import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Server: compact one-line snapshot summary (keeps the rolling reset suffix)
@@ -52,12 +52,14 @@ export function formatServerLine(snapshot: UsageSnapshot): string {
 
 export type FileConfig = { workspaceId: string | null; authCookie: string | null };
 
-const FILE_CONFIG_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display.json");
+export function fileConfigPath(host: UsageHost = "opencode"): string {
+  return safeJoinPath(resolveHostRoots(host).configDir, "oc-go-usage-display.json");
+}
 
-export function readFileConfig(): FileConfig {
+export function readFileConfig(host: UsageHost = "opencode"): FileConfig {
   let raw: string;
   try {
-    raw = fs.readFileSync(FILE_CONFIG_PATH, "utf8");
+    raw = fs.readFileSync(fileConfigPath(host), "utf8");
   } catch {
     return { workspaceId: null, authCookie: null };
   }

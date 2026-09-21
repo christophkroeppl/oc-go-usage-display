@@ -12,22 +12,26 @@
 // only (one tool). No transcript injection, no TUI
 // footer slot (unstable API).
 //
-// Auth (first match wins, secrets are never logged):
+// Auth (first match wins, secrets are never logged), host-specific stores:
 //   1. OPENCODE_GO_MOCK=1         -> deterministic mock snapshot (for testing)
 //   2. OPENCODE_GO_API_KEY        -> GET https://opencode.ai/zen/go/v1/usage
 //                                    (Authorization: Bearer <key>)
-//   3. Provider auth.json key     -> same Bearer path as (2), no paste needed:
-//                                    $XDG_DATA_HOME/opencode/auth.json (or
-//                                    ~/.local/share/opencode/auth.json), fallback
-//                                    ~/.config/opencode/auth.json (legacy).
-//                                    Uses `opencode-go` key, else `opencode` key.
+//   3. Provider auth.json key     -> same Bearer path as (2), no paste needed.
+//                                    opencode bundle: $XDG_DATA_HOME/opencode/
+//                                    auth.json (~/.local/share/opencode/auth.json),
+//                                    fallback $XDG_CONFIG_HOME/opencode/auth.json
+//                                    (~/.config/opencode/auth.json); uses the
+//                                    `opencode-go` key, else `opencode`.
+//                                    Kilo bundle (oc-go-usage-display.kilo.ts):
+//                                    the same files under the `kilo` roots, so
+//                                    a Kilo-only login works.
 //   4. OPENCODE_GO_WORKSPACE_ID + OPENCODE_GO_AUTH_COOKIE (env), or
-//      ~/.config/opencode/oc-go-usage-display.json
+//      <host config dir>/oc-go-usage-display.json
 //      ({ "workspaceId": "...", "authCookie": "..." })
 //                                   -> GET https://opencode.ai/workspace/{id}/go
 //                                    (scraped rolling/weekly/monthly)
 //   5. none                       -> unavailable snapshot (literal-only error)
-// Snapshots are cached 60s in memory + on disk.
+// Snapshots are cached 60s in memory + on disk (host config dir).
 
 import type { Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
@@ -42,19 +46,20 @@ import {
 } from "./helpers.js";
 import type { FileConfig } from "./helpers.js";
 import {
-  CONFIG_DIR,
   errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
+  resolveHostRoots,
+  resolveUsageHost,
   safeJoinPath,
   toFiniteNumber,
   toNonEmptyString,
   unavailableSnapshot,
 } from "./shared.js";
-import type { UsageSnapshot, UsageWindow } from "./shared.js";
+import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,7 +72,15 @@ const FETCH_TIMEOUT_MS = 10_000;
 // Fetch redirect statuses (the cookie path handles them manually).
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-const DISK_CACHE_PATH = safeJoinPath(CONFIG_DIR, "oc-go-usage-display-cache.json");
+// Host this bundle serves: "kilo" only when baked in by the build (see
+// scripts/build-plugins.mjs); every other case is opencode. Credentials, file
+// config and the disk cache always resolve from this host's own roots.
+const HOST: UsageHost = resolveUsageHost();
+
+const DISK_CACHE_PATH = safeJoinPath(
+  resolveHostRoots(HOST).configDir,
+  "oc-go-usage-display-cache.json",
+);
 
 // ---------------------------------------------------------------------------
 // Trusted types (parsed at the boundary, trusted internally)
@@ -83,13 +96,13 @@ type Credentials =
 // Credentials (boundary: env + optional JSON file; never logged)
 // ---------------------------------------------------------------------------
 
-function resolveCredentials(fileConfig: FileConfig = readFileConfig()): Credentials {
+function resolveCredentials(fileConfig: FileConfig = readFileConfig(HOST)): Credentials {
   if (process.env.OPENCODE_GO_MOCK === "1") return { kind: "mock" };
 
   const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY);
   if (apiKey) return { kind: "apiKey", apiKey };
 
-  const authJsonKey = readAuthJsonApiKey();
+  const authJsonKey = readAuthJsonApiKey(HOST);
   if (authJsonKey) return { kind: "apiKey", apiKey: authJsonKey };
 
   const workspaceId = toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
@@ -432,7 +445,7 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
     return diskCached;
   }
 
-  const fileConfig = readFileConfig();
+  const fileConfig = readFileConfig(HOST);
   const credentials = resolveCredentials(fileConfig);
   if (credentials.kind === "mock") {
     return mockSnapshot();

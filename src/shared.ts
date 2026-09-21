@@ -38,7 +38,72 @@ export function resolveConfigDir(homedir: () => string = resolveHomedir): string
   }
 }
 
-export const CONFIG_DIR = resolveConfigDir();
+// ---------------------------------------------------------------------------
+// Host roots (opencode vs its Kilo fork): each host keeps its own config and
+// data stores, and each entry module must read the credentials of the host it
+// runs under. opencode: `$XDG_DATA_HOME/opencode/auth.json` (or
+// `~/.local/share/opencode/auth.json`), then its config dir. Kilo:
+// `$XDG_DATA_HOME/kilo/auth.json` (or `~/.local/share/kilo/auth.json`), then
+// `$KILO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kilo` (or `~/.config/kilo`).
+// ---------------------------------------------------------------------------
+
+export type UsageHost = "opencode" | "kilo";
+
+export type HostRoots = { configDir: string; dataDir: string };
+
+// Pure host selection: only the explicit "kilo" marker selects the Kilo
+// stores; every other value (including unset) means opencode.
+export function usageHostFromEnv(env: NodeJS.ProcessEnv | undefined): UsageHost {
+  return env?.OC_GO_USAGE_HOST === "kilo" ? "kilo" : "opencode";
+}
+
+// Runtime host for the entry module. The Kilo server bundle is built with
+// `process.env.OC_GO_USAGE_HOST` replaced by the literal "kilo"
+// (scripts/build-plugins.mjs), so dist/index.js stays opencode while
+// dist/plugins/oc-go-usage-display.kilo.ts is deterministic. The kilocode TUI
+// entry passes its host explicitly instead.
+export function resolveUsageHost(): UsageHost {
+  return process.env.OC_GO_USAGE_HOST === "kilo" ? "kilo" : "opencode";
+}
+
+// `resolveHomedir` can throw when no home directory is resolvable; plugin
+// entry modules build these paths at import time, so degrade to an empty
+// segment instead of throwing.
+function homedirOrEmpty(homedir: () => string): string {
+  try {
+    return homedir();
+  } catch {
+    return "";
+  }
+}
+
+// Host config/data roots. Both hosts are XDG-based: `$XDG_CONFIG_HOME` /
+// `$XDG_DATA_HOME` win with `~/.config` / `~/.local/share` as fallbacks, and
+// Kilo additionally honors `KILO_CONFIG_DIR` (its documented config override).
+// Never throws.
+export function resolveHostRoots(
+  host: UsageHost,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveHomedir,
+): HostRoots {
+  const home = homedirOrEmpty(homedir);
+  const configRoot = toNonEmptyString(env.XDG_CONFIG_HOME) ?? safeJoinPath(home, ".config");
+  const dataRoot = toNonEmptyString(env.XDG_DATA_HOME) ?? safeJoinPath(home, ".local", "share");
+  if (host === "kilo") {
+    return {
+      configDir: toNonEmptyString(env.KILO_CONFIG_DIR) ?? safeJoinPath(configRoot, "kilo"),
+      dataDir: safeJoinPath(dataRoot, "kilo"),
+    };
+  }
+  return {
+    configDir: safeJoinPath(configRoot, "opencode"),
+    dataDir: safeJoinPath(dataRoot, "opencode"),
+  };
+}
+
+// Legacy opencode config dir (no XDG): kept as an exported constant because
+// the hermeticity tests assert every runtime path stays inside their tmp root.
+export const CONFIG_DIR = resolveHostRoots("opencode").configDir;
 
 // Coerce any runtime value into a path segment deterministically: strings pass
 // through, every other value uses its string form, and only an object with a
@@ -62,14 +127,21 @@ export function safeJoinPath(base: string, ...segments: unknown[]): string {
   return path.join(toPathSegment(base), ...segments.map(toPathSegment));
 }
 
-export function dataShareAuthPath(): string {
-  const xdgDataHome = toNonEmptyString(process.env.XDG_DATA_HOME);
-  if (xdgDataHome) return path.join(xdgDataHome, "opencode", "auth.json");
-  return path.join(resolveHomedir(), ".local", "share", "opencode", "auth.json");
+export function dataShareAuthPath(
+  host: UsageHost = "opencode",
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveHomedir,
+): string {
+  return safeJoinPath(resolveHostRoots(host, env, homedir).dataDir, "auth.json");
 }
 
-export function authJsonPaths(): string[] {
-  return [dataShareAuthPath(), path.join(CONFIG_DIR, "auth.json")];
+export function authJsonPaths(
+  host: UsageHost = "opencode",
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveHomedir,
+): string[] {
+  const roots = resolveHostRoots(host, env, homedir);
+  return [safeJoinPath(roots.dataDir, "auth.json"), safeJoinPath(roots.configDir, "auth.json")];
 }
 
 // ---------------------------------------------------------------------------
@@ -140,8 +212,12 @@ export function formatResetDuration(totalSec: number | null): string | null {
 // Credentials boundary (auth.json; secrets never logged)
 // ---------------------------------------------------------------------------
 
-export function readAuthJsonApiKey(): string | null {
-  for (const authPath of authJsonPaths()) {
+export function readAuthJsonApiKey(
+  host: UsageHost = "opencode",
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveHomedir,
+): string | null {
+  for (const authPath of authJsonPaths(host, env, homedir)) {
     let raw: string;
     try {
       raw = fs.readFileSync(authPath, "utf8");
