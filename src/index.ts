@@ -271,12 +271,13 @@ function extractUsageBlock(html: string, key: string): string | null {
 
 function parseIntField(block: string, field: string): number | null {
   const match = new RegExp(`${escapeRegex(field)}\\s*:\\s*(-?\\d+)`).exec(block);
-  return match ? Number.parseInt(match[1], 10) : null;
+  const digits = match?.[1];
+  return digits === undefined ? null : Number.parseInt(digits, 10);
 }
 
 function parseStrField(block: string, field: string): string | null {
   const match = new RegExp(`${escapeRegex(field)}\\s*:\\s*"([^"]*)"`).exec(block);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function parseInlineUsage(html: string): Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> {
@@ -312,18 +313,23 @@ function parseDomUsage(html: string): Partial<Record<"rolling" | "weekly" | "mon
     if (match.index !== undefined) itemStarts.push(match.index);
   }
   for (let idx = 0; idx < DOM_ORDER.length; idx++) {
-    if (idx >= itemStarts.length) break;
-    const segment = html.slice(itemStarts[idx], idx + 1 < itemStarts.length ? itemStarts[idx + 1] : itemStarts[idx] + 800);
+    const window = DOM_ORDER[idx];
+    const start = itemStarts[idx];
+    if (window === undefined || start === undefined) break;
+    const nextStart = itemStarts[idx + 1];
+    const segment = html.slice(start, nextStart !== undefined ? nextStart : start + 800);
     const valueMatch =
       /data-slot="usage-value">\s*(?:<!--[\s\S]*?-->)?\s*(\d+)/s.exec(segment) ??
       /width:\s*(\d+)%/.exec(segment);
-    if (!valueMatch) continue;
+    const percent = valueMatch?.[1];
+    if (percent === undefined) continue;
     const resetMatch = /data-slot="reset-time">\s*([\s\S]*?)<\/span>/.exec(segment);
-    result[DOM_ORDER[idx]] = {
-      percent: Number.parseInt(valueMatch[1], 10),
+    const resetText = resetMatch?.[1];
+    result[window] = {
+      percent: Number.parseInt(percent, 10),
       resetInSec: null,
       status: null,
-      resetText: resetMatch ? cleanResetText(resetMatch[1]) : null,
+      resetText: resetText !== undefined ? cleanResetText(resetText) : null,
     };
   }
   return result;

@@ -166,18 +166,6 @@ function isGoUsageProvider(providerId: string | undefined): boolean {
   return providerId === GO_PROVIDER_ID;
 }
 
-function resolveActiveProvider(api: TuiPluginApi): string | undefined {
-  try {
-    const modelString = api.state?.config?.model;
-    if (typeof modelString === "string" && modelString.length > 0) {
-      return modelString.split("/")[0];
-    }
-  } catch {
-    // State may not be ready.
-  }
-  return undefined;
-}
-
 // ---------------------------------------------------------------------------
 // Data boundary (auth.json -> Bearer usage fetch; throws nothing)
 // ---------------------------------------------------------------------------
@@ -256,7 +244,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     const modelString = api.state?.config?.model;
     if (typeof modelString === "string" && modelString.length > 0) {
       const providerPart = modelString.split("/")[0];
-      if (providerPart.length > 0) setActiveProviderId(providerPart);
+      if (providerPart !== undefined && providerPart.length > 0) setActiveProviderId(providerPart);
     }
   } catch {
     // State may not be ready; fall back to session.updated events.
