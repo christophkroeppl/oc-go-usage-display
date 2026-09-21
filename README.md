@@ -207,7 +207,15 @@ Snapshotted paths: `opencode.jsonc`, `tui.json`,
 | -------- | ------- | ---- |
 | `test.yml` | push, pull_request, weekly (Mon 06:00 UTC) | `unit` (typecheck + build + readonly tests, incl. live usage shape when the key is set), `container-e2e` (`docker compose run --rm --build test`: integration + real TUI display checks) |
 | `dev-build.yml` | push to `develop`, manual | builds + readonly unit tests, packs `dev-tgz` artifact (90 days) |
-| `publish.yml` | push to `main`, tag `v*`, manual | containerized test gate, conventional-commit version bump, OIDC provenance publish |
+| `publish.yml` | push to `main` | containerized test gate, release-please Release PR, OIDC provenance publish when a release is cut |
+
+Releases are cut by [release-please](https://github.com/googleapis/release-please):
+merging `develop` into `main` opens/updates a `chore(main): release X.Y.Z` PR
+(`feat` -> minor, `fix` -> patch, breaking change -> major; `chore`/`docs`/`ci`/
+`test`/`refactor`/`style`/`build`/`perf` never cut a release on their own).
+Merging that PR tags `vX.Y.Z`, creates the GitHub release, and publishes to npm
+with provenance after the containerized gate. To force a version, add a
+`Release-As: X.Y.Z` footer to a commit merged to `main`.
 
 ## Troubleshooting
 

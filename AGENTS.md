@@ -23,7 +23,7 @@ Examples for this repo:
 - `chore(ci): tighten test gate`
 - `docs: clarify tui toggles`
 
-A non-conventional message defaults to patch and may mistrigger versioning — so format correctly.
+A non-conventional message is ignored by the release tool: it never cuts a version and never appears in the changelog — so format correctly.
 
 ## 2. Architecture
 
@@ -45,24 +45,21 @@ Invariants (see `.opencode/skills/plugin-contract`):
 
 ## 3. Versioning
 
-Bump mapping (pipeline `version-bump` in `publish.yml` parses `git log <lastTag>..HEAD`):
+Bump mapping (release-please parses Conventional Commits merged to `main`):
 
 - `feat` -> minor
-- `fix`, `perf` -> patch
+- `fix`, visible `deps`/`revert` -> patch
 - `BREAKING CHANGE` in body or `!` after type/scope (e.g. `feat!:`) -> major
-- `chore`, `docs`, `ci` (and anything else) -> patch
+- `chore`, `docs`, `ci`, `test`, `refactor`, `style`, `build`, `perf` -> no release on their own; they ride along in the next release
 
 How it works:
 
-- `LAST_TAG` is resolved via `git describe --tags --abbrev=0` (empty on first release).
-- Range is `$LAST_TAG..HEAD`, or `HEAD` when no tag exists.
-- The job dumps `git log "$RANGE" --pretty='%s%n%b'` and picks the highest bump: major beats minor beats patch.
-- On a `main` push it then runs `npm version <bump> -m "chore(release): %s"`, which bumps `package.json` (+ lockfile) and creates the release commit + `vX.Y.Z` tag itself — no manual `git tag` needed.
-
-Release commit format:
-
-- `chore(release): X.Y.Z` (written by the pipeline, no skip trailer).
-- Intentionally contains NO `[skip ci]` — GitHub suppresses tag-push runs for commits carrying it, so the release would be cut but never published. The loop guard matches the `chore(release):` prefix instead.
+- `release-please-config.json` + `.release-please-manifest.json` drive release-please on every `main` push. It maintains a Release PR titled `chore(main): release X.Y.Z` containing the generated `CHANGELOG.md` entry and the `package.json` bump.
+- Merging the Release PR is the only way the version increases: release-please creates the `vX.Y.Z` tag + GitHub release, and the `publish` job in the same workflow run (after the gate) publishes to npm.
+- A `main` push containing only hidden types leaves everything untouched: no Release PR, no version, no publish. That is how docs/chore/CI changes land without a release — no skip trailer needed.
+- Forcing a version: add a `Release-As: X.Y.Z` footer to a commit body merged to `main` (an empty `chore: release X.Y.Z` commit works). release-please pins the next Release PR to exactly that version. There is deliberately no manual bump/release dispatch path.
+- `last-release-sha` in the config bounds the first scan to the `v1.1.0` commit; remove it once the first Release PR has merged.
+- Release PRs contain only bot-generated `CHANGELOG.md` + `package.json` changes. They do not run `test.yml` (PRs created with the default `GITHUB_TOKEN` do not trigger workflows), but the `publish` run's gate rebuilds and retests the released SHA before npm.
 
 ## 4. CI
 
@@ -72,12 +69,12 @@ Three workflows:
   - `unit`: always runs on Node 22 — `bun install`, `bun run check`, `bun run test` (build + READONLY unit tier). `OPENCODE_GO_API_KEY` is mapped at job level; the live usage shape test (`test/unit/live-usage.test.js`) runs when present and skips neutrally otherwise. Unit tests must never write to the host (enforced by `scripts/check-unit-purity.mjs`).
   - `container-e2e`: authoritative gate — `docker compose run --rm --build test` builds the root Dockerfile and runs `opencode --version && kilo --version && bun install && bun run build && bun run test:integration && bun run test:e2e` against the baked-in checkout (no bind mount, hermetic tmp HOME/XDG). Includes the real opencode/kilo TUI display checks (tmux). `OPENCODE_GO_API_KEY` is forwarded; the live TUI variants skip neutrally without it.
 - `dev-build.yml` (`dev-build`): runs on `push` to `develop` + manual dispatch. `bun install`, `bun run check`, `bun run test` (build + unit), then `bun pm pack` uploads the `dev-tgz` artifact (90-day retention). `install-dev.sh` consumes it.
-- `publish.yml` (`publish`): `test` gate -> `version-bump` -> `publish` (OIDC provenance). The gate runs the same containerized suite as `container-e2e`, rebuilding + retesting the exact ref being released.
+- `publish.yml` (`publish`): runs on `push` to `main` only — `test` gate -> `release-please` (updates/opens the Release PR) -> `publish` (OIDC provenance) when a Release PR was just merged. The gate runs the same containerized suite as `container-e2e`, rebuilding + retesting the exact ref being released.
 
 What must pass:
 
-- `test` must pass before `version-bump`; `publish` runs only after bump (tag push re-enters workflow).
-- A force-pushed tag can never publish broken code because the gate rebuilds the release ref.
+- `test` must pass before `release-please` runs and before `publish`; `publish` is skipped unless release-please reported `release_created=true`.
+- The release tag + GitHub release are created with the default `GITHUB_TOKEN`, which does not trigger another workflow run, so npm publish happens in the same run (after the gate) on the released SHA.
 
 ## 5. Testing
 
@@ -92,17 +89,9 @@ Two tiers:
 
 ## 6. Action publishing
 
-- Branch pushes never publish. Only tag pushes (`v*`) and manual dispatches reach the `publish` job — each version publishes exactly once.
-- Triggers in `publish.yml`:
-  - `push` to `main`: auto-bump path (`test` -> `version-bump`; the resulting tag push then flows through the release path).
-  - `push` tags `v*`: release path (gate -> GitHub release -> npm).
-  - `workflow_run` (`test` completed on `main`): audit-only re-validation; never cuts a release or publishes.
-  - `workflow_dispatch`: manual release; optional `tag` input selects an existing tag, otherwise npm-only.
-- Auth: OIDC trusted publishing (`id-token: write`, `registry-url: https://registry.npmjs.org`, `always-auth: false`). No long-lived npm token; `npm publish --provenance --access public` runs last and skips idempotently if the version is already on npm.
-- GitHub release: tarball from `npm pack` is attached via `gh release create` / `upload`; dispatch without a tag publishes to npm only (no GitHub release).
-
-Avoiding a version cut:
-
-- On a `main` push (docs-only, CI-only, meta changes): add `[skip release]` (or `[no release]` / `skip-release:true`) anywhere in the commit subject or body. The `version-bump` job reads the full `%B` case-insensitively and passes through with no bump — the `test` gate still runs.
-- On manual dispatch: `workflow_dispatch` input `release` (`true`/`false`, default `false`). `false` stays npm-publish-only; `true` lets a dispatch cut a version bump like a `main` push. Complement to the `[skip release]` trailer (pushes opt out, dispatches opt in).
-- Never use `[skip ci]` for this — it suppresses ALL runs for the push, including the tag-push run that performs the publish. Never add `[skip ci]` anywhere.
+- Branch pushes never publish. `publish.yml` runs only on `main` pushes: `test` gate, then `release-please`, then — only when a Release PR was just merged — `publish`. Each version publishes exactly once.
+- `release-please` opens/updates the Release PR (requires the repo setting "Allow GitHub Actions to create and approve pull requests"). Only `feat`/`fix`/breaking (plus visible `deps`/`revert`) commits can open one; hidden types (`chore`, `docs`, `ci`, `test`, `refactor`, `style`, `build`, `perf`) cannot trigger a release.
+- Merging the Release PR creates the `vX.Y.Z` tag + GitHub release; the `publish` job then attaches the `npm pack` tarball (`gh release upload --clobber`) and runs `npm publish --provenance --access public`.
+- Auth: OIDC trusted publishing (`id-token: write`, `registry-url: https://registry.npmjs.org`, `always-auth: false`). No long-lived npm token. The npm step is idempotent (skips an already-published version); recovery is GitHub's "Re-run failed jobs" on the same run.
+- Forced versions use the `Release-As: X.Y.Z` footer (see Versioning). There is no `[skip release]` trailer and no manual release dispatch.
+- Never use `[skip ci]`: it suppresses the `publish` run, so a release could be tagged without ever publishing.
