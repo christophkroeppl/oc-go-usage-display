@@ -69,7 +69,8 @@ jobs:
 
   container-e2e:
     name: container-e2e (docker compose)
-    runs-on: ubuntu-slim
+    # ubuntu-latest on purpose: the slim runner image has no Docker daemon.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 40
