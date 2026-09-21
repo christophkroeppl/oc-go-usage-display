@@ -18,8 +18,8 @@
       "types": "./dist/tui.d.ts"
     },
     "./kilo-tui": {
-      "import": "./dist/kilo-tui.js",
-      "types": "./dist/kilo-tui.d.ts"
+      "import": "./dist/tui.kilo.js",
+      "types": "./dist/tui.kilo.d.ts"
     },
     "./package.json": "./package.json"
   },
@@ -59,8 +59,10 @@
     "opencode": "^1.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && bun run build:plugins",
+    "build": "tsc -p tsconfig.json && bun run build:plugins && bun run verify:bundles",
     "build:plugins": "bun run scripts/build-plugins.mjs",
+    "verify:bundles": "node scripts/verify-bundles.mjs",
+    "verify:tarball": "node scripts/verify-tarball.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "bun run build",
     "test": "bun run build && bun run test:unit",

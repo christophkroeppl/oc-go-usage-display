@@ -50,6 +50,9 @@ jobs:
           bun pm pack --destination ./tmp-dev-pack
           ls -la ./tmp-dev-pack
 
+      - name: Verify the dev tarball ships both hosts
+        run: node scripts/verify-tarball.mjs ./tmp-dev-pack/*.tgz
+
       - name: Upload dev tarball
         uses: actions/upload-artifact@v4
         with:

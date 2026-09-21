@@ -19,10 +19,13 @@
 #   publish        - runs only when a Release PR was just merged. release-please
 #                    has already created the tag + GitHub release (with the
 #                    default GITHUB_TOKEN, which does not trigger another
-#                    workflow run), so this job attaches the `npm pack` tarball
-#                    and publishes. The npm step skips idempotently when the
-#                    version already exists; recovery is GitHub's "Re-run
-#                    failed jobs" on the same run.
+#                    workflow run), so this job verifies the packed tarball
+#                    ships BOTH hosts (opencode + kilo bundles), attaches the
+#                    tarball, the four plugin bundles and SHA256SUMS to the
+#                    release, and publishes. The npm step skips idempotently
+#                    when the version already exists; after publishing (or
+#                    skipping) the registry tarball is re-verified. Recovery is
+#                    GitHub's "Re-run failed jobs" on the same run.
 #
 # Repo setting: "Allow GitHub Actions to create and approve pull requests" must
 # be enabled for release-please to open its PR.
@@ -117,11 +120,12 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Pack tarball, attach to release, publish to npm
+      - name: Pack, verify, attach to release, publish to npm
+        # One package/version carries all four bundles; the tarball contract is
+        # verified before anything is uploaded and again against the registry
+        # copy after publish, so a Kilo-less release can never ship silently.
         # Idempotent re-runs: the npm step skips a version that is already
         # published (retried runs, or a release tag that was pushed twice).
-        # Publishing is the last step by design: reached only if the gate,
-        # release-please, build and tarball upload all succeeded.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -132,11 +136,30 @@ jobs:
           # npm pack here on purpose: the release asset mirrors the tarball
           # `npm publish` will build for the registry below.
           npm pack --pack-destination "$RUNNER_TEMP/npm-tarball/"
-          gh release upload "$TAG" "$RUNNER_TEMP/npm-tarball/"*.tgz --repo "$GITHUB_REPOSITORY" --clobber
+          TARBALL="$(ls "$RUNNER_TEMP/npm-tarball/"*.tgz)"
+          node scripts/verify-tarball.mjs "$TARBALL"
+          (
+            cd dist/plugins
+            sha256sum oc-go-usage-display.ts oc-go-usage-display.tsx \
+              oc-go-usage-display.kilo.ts oc-go-usage-display.kilo.tsx
+          ) > "$RUNNER_TEMP/SHA256SUMS"
+          ( cd "$RUNNER_TEMP/npm-tarball" && sha256sum *.tgz ) >> "$RUNNER_TEMP/SHA256SUMS"
+          gh release upload "$TAG" "$TARBALL" \
+            dist/plugins/oc-go-usage-display.ts \
+            dist/plugins/oc-go-usage-display.tsx \
+            dist/plugins/oc-go-usage-display.kilo.ts \
+            dist/plugins/oc-go-usage-display.kilo.tsx \
+            "$RUNNER_TEMP/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" --clobber
           NAME="$(node -p "require('./package.json').name")"
           VER="$(node -p "require('./package.json').version")"
           if npm view "$NAME@$VER" version >/dev/null 2>&1; then
             echo "::notice::$NAME@$VER is already on npm — skipping publish (idempotent re-run)."
-            exit 0
+          else
+            npm publish --provenance --access public
           fi
-          npm publish --provenance --access public
+          # npm versions are immutable, so this proves (rather than repairs)
+          # that the registry copy ships both hosts.
+          URL="$(npm view "$NAME@$VER" dist.tarball)"
+          curl -fsSL "$URL" -o "$RUNNER_TEMP/published.tgz"
+          node scripts/verify-tarball.mjs "$RUNNER_TEMP/published.tgz"
