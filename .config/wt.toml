@@ -1,0 +1,25 @@
+# Worktrunk project hooks for oc-go-usage-display.
+# Checked into git so every worktree gets the same lifecycle automation.
+# Pre-start runs once when a new worktree is created (blocking); pre-merge
+# runs the test gate before merging. Worktree deps/node_modules are per-branch
+# (not shared), so each worktree needs its own install + build.
+
+# Worktrees live as subdirectories of the repo root (which holds the bare .git
+# database). e.g. develop/ -> /path/to/oc-go-usage-display/develop
+worktree-path = "{{ repo_path }}/../{{ branch | sanitize }}"
+
+# Copy-ignored excludes: never spill per-branch build output or caches into
+# other worktrees.
+[step.copy-ignored]
+exclude = ["node_modules/", "dist/"]
+
+[pre-start]
+copy = "wt step copy-ignored"
+
+[[post-start]]
+install = "bun install"
+[[post-start]]
+build = "bun run build"
+
+[pre-merge]
+test = "bun run test:docker"

@@ -1,0 +1,31 @@
+# Containerized test entrypoint.
+#
+#   docker compose run --rm --build test
+#
+# Builds the root Dockerfile and runs the full gate (build + typecheck +
+# integration + e2e, including the real opencode/kilo TUI display checks)
+# against the checkout baked into the image. There is no bind mount, so the
+# gate is identical to CI and never depends on the runner UID.
+# `opencode --version` and `kilo --version` fail the gate loudly if either
+# binary is missing, so the e2e tier can never silently skip. tmux drives the
+# real TUIs (see the Dockerfile).
+#
+# OC_GO_TEST_CONTAINER marks the disposable container HOME: the load checks
+# write the plugin config to the real ~/.config/{opencode,kilo} here and skip
+# outside. The TUI display tests still redirect HOME/XDG into tmp dirs, so a
+# local `bun run test:e2e` never touches the developer's real config.
+#
+# OPENCODE_GO_API_KEY is forwarded from the host when set; the live TUI/usage
+# tests run only then and skip neutrally otherwise.
+services:
+  test:
+    build: .
+    working_dir: /workspaces/oc-go-usage-display
+    # Hard 3GB cap (RAM + swap): opencode/kilo can leak memory, and the
+    # container is disposable — an OOM kill is better than the host swapping.
+    mem_limit: 3g
+    memswap_limit: 3g
+    environment:
+      - OPENCODE_GO_API_KEY
+      - OC_GO_TEST_CONTAINER=1
+    command: sh -c "opencode --version && kilo --version && bun install && bun run build && bun run test:integration && bun run test:e2e"

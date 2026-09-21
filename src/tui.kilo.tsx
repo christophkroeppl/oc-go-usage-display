@@ -39,25 +39,27 @@
 // both new keys are set true, then the legacy key is cleared) and ignored
 // afterwards.
 //
-// Data: auth.json (dataShare ~/.local/share/opencode/auth.json, then legacy
-// ~/.config/opencode/auth.json, `opencode-go` key else `opencode` key) as
-// Bearer for GET https://opencode.ai/zen/go/v1/usage, refreshed on a 60s poll
-// plus `session.updated` / `message.updated` events. Failures keep stale data
-// and never break the host; errors go to api.client.app.log (never console).
-// Secrets are never logged.
+// Data: Kilo's own auth.json (dataShare ~/.local/share/kilo/auth.json or
+// $XDG_DATA_HOME/kilo/auth.json, then $KILO_CONFIG_DIR / ~/.config/kilo,
+// `opencode-go` key else `opencode` key) as Bearer for
+// GET https://opencode.ai/zen/go/v1/usage, refreshed on a 60s poll plus
+// `session.updated` / `message.updated` events. The opencode bundle reads the
+// opencode stores instead; each host reads only its own. Failures keep stale
+// data and never break the host; errors go to api.client.app.log (never
+// console). Secrets are never logged.
 //
 // Coexistence: the server plugin `src/index.ts` (`go_usage` tool only)
 // stays as the headless/Desktop fallback. This module exports
 // only `tui` (never `server`) under id `oc-go-usage-display`.
 
-import type { PluginOptions } from "@opencode-ai/plugin";
+import type { PluginOptions } from "@kilocode/plugin";
 import type {
   TuiPlugin,
   TuiPluginApi,
   TuiPluginModule,
   TuiSlotContext,
   TuiTheme,
-} from "@opencode-ai/plugin/tui";
+} from "@kilocode/plugin/tui";
 import { For, Show, createEffect, createSignal } from "solid-js";
 import {
   buildUsageRows,
@@ -195,7 +197,7 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
 async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
   if (process.env.OPENCODE_GO_MOCK === "1") return mockSnapshot();
 
-  const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY) ?? readAuthJsonApiKey();
+  const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY) ?? readAuthJsonApiKey("kilo");
   if (apiKey === null) return null;
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);

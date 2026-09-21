@@ -5,6 +5,10 @@
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
     "./server": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
@@ -13,11 +17,16 @@
       "import": "./dist/tui.js",
       "types": "./dist/tui.d.ts"
     },
+    "./kilo-tui": {
+      "import": "./dist/tui.kilo.js",
+      "types": "./dist/tui.kilo.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "oc-plugin": [
     "server",
-    "tui"
+    "tui",
+    "kilo-tui"
   ],
   "bin": {
     "oc-go-usage-display-init": "bin/oc-go-usage-display-init.js",
@@ -38,32 +47,55 @@
     "url": "git+https://github.com/christophkroeppl/oc-go-usage-display.git"
   },
   "keywords": [
-    "opencode-plugin",
     "opencode",
     "opencode-go",
-    "usage",
-    "tui"
+    "kilocode",
+    "plugin",
+    "usage"
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "opencode": "^1.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && bun run build:plugins && bun run verify:bundles",
+    "build:plugins": "bun run scripts/build-plugins.mjs",
+    "verify:bundles": "node scripts/verify-bundles.mjs",
+    "verify:tarball": "node scripts/verify-tarball.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test \"test/**/*.test.js\""
+    "prepublishOnly": "bun run build",
+    "test": "bun run build && bun run test:unit",
+    "test:unit": "bun run check-unit-purity && bun test test/unit/*.test.js",
+    "check-unit-purity": "node scripts/check-unit-purity.mjs",
+    "test:integration": "node scripts/run-test-files.mjs test/integration",
+    "test:e2e": "node scripts/run-test-files.mjs test/e2e",
+    "test:docker": "docker compose run --rm --build test"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.4.0"
-  },
-  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.0",
+    "@kilocode/plugin": "^7.4.0",
     "@opentui/solid": "0.5.11",
     "solid-js": "1.9.12"
   },
+  "peerDependenciesMeta": {
+    "@kilocode/plugin": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.4.0",
+    "@opencode-ai/plugin": "^1.18.31",
+    "@kilocode/plugin": "^7.7.5",
+    "@opentui/solid": "0.5.11",
     "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "esbuild": "^0.28.2",
+    "solid-js": "1.9.15",
+    "typescript": "^6.0.3"
   }
 }

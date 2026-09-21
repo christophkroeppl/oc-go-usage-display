@@ -1,77 +1,36 @@
 # AGENTS.md
 
-AI and human contributors: every commit must use Conventional Commits.
+Every commit must use Conventional Commits: `type(scope): subject` (imperative,
+lowercase, no trailing period). `scope` is required for `sidebar`, `statusline`,
+`server`, `ci`, `docs`; `release` is reserved for release-please. See
+[Versioning](#versioning-release-please) for what actually releases.
 
-Format: `type(scope?): subject` — see https://www.conventionalcommits.org/
+## Architecture
 
-## 1. Project commits
+- **server** — `src/index.ts` -> `dist/index.js` / bundles `dist/plugins/oc-go-usage-display.ts` (opencode) and `dist/plugins/oc-go-usage-display.kilo.ts` (Kilo; same source, host baked in with an esbuild define). Registers only the `go_usage` tool.
+- **tui** — `src/tui.tsx` -> `dist/tui.js` / bundle `dist/plugins/oc-go-usage-display.tsx` (opencode). `src/tui.kilo.tsx` -> `dist/tui.kilo.js` / bundle `dist/plugins/oc-go-usage-display.kilo.tsx` (Kilo). Additive `sidebar_content` + `session_prompt_right` slots only, never `single_winner`.
+- **host roots** — every entry reads only its own host's stores: opencode `~/.config/opencode` + `$XDG_DATA_HOME/opencode`; Kilo `$KILO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kilo` + `$XDG_DATA_HOME/kilo`. Kilo's `tui.json` rejects `sidebar`/`statusline` options, and Kilo does not resolve `./...` against its config dir, so kilo install entries are absolute paths (opencode keeps `./plugins/...`).
+- **shared** — `src/shared.ts` + `src/helpers.ts` are inlined into the bundles; `dist/plugins/*` have no relative imports. `bun run build` fails unless all four bundles are present, self-contained and default-export-only (`scripts/verify-bundles.mjs`); `scripts/verify-tarball.mjs` checks packed tarballs.
+- Each entry module exports exactly one thing: the default `{ id, server | tui }` module. Extra exports are invoked by the loader as plugin factories and can crash startup. Importing never throws; factories and renders are fail-safe.
+- Secrets are never logged; tests never touch the real `~/.config/opencode` or credentials. Details: `.agents/skills/plugin-contract`, `.agents/skills/testing-and-dev-install`.
+- Install surfaces: `bin/` CLIs, package `exports` (`./server`, `./tui`, `./kilo-tui`), `install.sh`, `install-dev.sh`.
 
-Format: `type(scope): subject`
+## Versioning (release-please)
 
-- `type` is required — never commit without a `type` (never empty type).
-- `scope` is required for `sidebar`, `statusline`, `server`, `ci`, `docs` changes. `release` scope is reserved for the pipeline (see Versioning).
-- Known scopes: `sidebar`, `statusline`, `server`, `ci`, `docs`, `release`.
-- Keep subject imperative, lowercase, no trailing period.
+- `feat` -> minor; `fix` (and visible `deps`/`revert`) -> patch; `BREAKING CHANGE`/`!` -> major.
+- `chore`, `docs`, `ci`, `test`, `refactor`, `style`, `build`, `perf` -> no release on their own.
+- `main` pushes maintain a `chore(main): release X.Y.Z` PR; merging it creates the tag + GitHub release, and then `publish` runs the gate and publishes to npm (OIDC, no token).
+- Force a version with a `Release-As: X.Y.Z` footer on a commit merged to `main`. Never add `[skip ci]` to a release commit.
+- `release-please-config.json` + `.release-please-manifest.json` drive it; `CHANGELOG.md` is generated. Remove `last-release-sha` after the first Release PR merges.
 
-Examples for this repo:
+## CI
 
-- `feat(sidebar): add weekly usage row`
-- `fix(statusline): handle missing percent`
-- `feat!: drop node 18 support`
-- `fix(server): redact api key in show output`
-- `chore(ci): tighten test gate`
-- `docs: clarify tui toggles`
+- `test.yml`: `unit` (typecheck + build + readonly tests) on push/PR/schedule; `container-e2e` (Docker: integration + e2e, real opencode/kilo TUI in tmux) on `main` pushes, the weekly schedule, and non-draft PRs — never on `develop` pushes or draft PRs.
+- `dev-build.yml`: `develop` push -> `dev-tgz` artifact (90 days), consumed by `install-dev.sh`.
+- `publish.yml`: `main` push -> `test` gate -> `release-please` -> OIDC npm publish when a Release PR just merged; release assets carry the tarball, the four plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish.
 
-A non-conventional message defaults to patch and may mistrigger versioning — so format correctly.
+## Testing
 
-## 2. Versioning
-
-Bump mapping (pipeline `version-bump` in `publish.yml` parses `git log <lastTag>..HEAD`):
-
-- `feat` -> minor
-- `fix`, `perf` -> patch
-- `BREAKING CHANGE` in body or `!` after type/scope (e.g. `feat!:`) -> major
-- `chore`, `docs`, `ci` (and anything else) -> patch
-
-How it works:
-
-- `LAST_TAG` is resolved via `git describe --tags --abbrev=0` (empty on first release).
-- Range is `$LAST_TAG..HEAD`, or `HEAD` when no tag exists.
-- The job dumps `git log "$RANGE" --pretty='%s%n%b'` and picks the highest bump: major beats minor beats patch.
-- On a `main` push it then runs `npm version <bump> -m "chore(release): %s"`, which bumps `package.json` (+ lockfile) and creates the release commit + `vX.Y.Z` tag itself — no manual `git tag` needed.
-
-Release commit format:
-
-- `chore(release): X.Y.Z` (written by the pipeline, no skip trailer).
-- Intentionally contains NO `[skip ci]` — GitHub suppresses tag-push runs for commits carrying it, so the release would be cut but never published. The loop guard matches the `chore(release):` prefix instead.
-
-## 3. CI
-
-Two workflows:
-
-- `test.yml` (`test`): runs on `push` + `pull_request` + weekly schedule (Mondays 06:00 UTC).
-  - `format-check`: validates the live usage JSON shape (`rolling` / `weekly` / `monthly` with numeric `percent` + optional string `status`). Skips neutral (exit 0) when `OPENCODE_GO_API_KEY` is absent or when the API returns no usable windows (no subscription); still fails on malformed JSON or a missing percent within a present window.
-  - `tui-screenshot`: best-effort headless check — installs deps, builds (`npm run check` + `npm run build`), installs the plugin in an isolated config, compares `show --json` output to a direct API fetch. Pixel/TUI steps are `continue-on-error` with redacted output; the authoritative signal is health check + percent match.
-- `publish.yml` test gate (`test` job inside `publish.yml`): rebuilds + retests the exact ref being released (`npm ci`, `npm run check`, `npm run build`, `npm test --if-present`).
-
-What must pass:
-
-- `test` must pass before `version-bump`; `publish` runs only after bump (tag push re-enters workflow).
-- A force-pushed tag can never publish broken code because the gate rebuilds the release ref.
-
-## 4. Action publishing
-
-- Branch pushes never publish. Only tag pushes (`v*`) and manual dispatches reach the `publish` job — each version publishes exactly once.
-- Triggers in `publish.yml`:
-  - `push` to `main`: auto-bump path (`test` -> `version-bump`; the resulting tag push then flows through the release path).
-  - `push` tags `v*`: release path (gate -> GitHub release -> npm).
-  - `workflow_run` (`test` completed on `main`): audit-only re-validation; never cuts a release or publishes.
-  - `workflow_dispatch`: manual release; optional `tag` input selects an existing tag, otherwise npm-only.
-- Auth: OIDC trusted publishing (`id-token: write`, `registry-url: https://registry.npmjs.org`, `always-auth: false`). No long-lived npm token; `npm publish --provenance --access public` runs last and skips idempotently if the version is already on npm.
-- GitHub release: tarball from `npm pack` is attached via `gh release create` / `upload`; dispatch without a tag publishes to npm only (no GitHub release).
-
-Avoiding a version cut:
-
-- On a `main` push (docs-only, CI-only, meta changes): add `[skip release]` (or `[no release]` / `skip-release:true`) anywhere in the commit subject or body. The `version-bump` job reads the full `%B` case-insensitively and passes through with no bump — the `test` gate still runs.
-- On manual dispatch: `workflow_dispatch` input `release` (`true`/`false`, default `false`). `false` stays npm-publish-only; `true` lets a dispatch cut a version bump like a `main` push. Complement to the `[skip release]` trailer (pushes opt out, dispatches opt in).
-- Never use `[skip ci]` for this — it suppresses ALL runs for the push, including the tag-push run that performs the publish. Never add `[skip ci]` anywhere.
+- **unit** (host/CI, readonly): `bun run test:unit`, purity-checked — no fs writes, not even tmp, no child processes, no sockets. `bun run test` = build + unit.
+- **integration + e2e** (Docker only): `bun run test:docker` (`docker compose run --rm --build test`). Never point these at the host config.
+- Host-runnable tests redirect HOME/XDG/`OPENCODE_CONFIG_DIR` into temp dirs and force `OPENCODE_GO_MOCK=1`; container-only tests use the disposable container HOME (`OC_GO_TEST_CONTAINER=1`).

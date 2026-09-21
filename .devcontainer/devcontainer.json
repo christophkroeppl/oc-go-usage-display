@@ -1,0 +1,10 @@
+{
+  "name": "oc-go-usage-display",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "root",
+  "workspaceFolder": "/workspaces/oc-go-usage-display",
+  "postCreateCommand": "bun install"
+}
