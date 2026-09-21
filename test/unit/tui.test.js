@@ -1,7 +1,7 @@
 // Unit tier: `dist/helpers.js` TUI helpers — display-mode selection, flag
 // parsing, sidebar rows, and the compact statusline.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

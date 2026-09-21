@@ -1,7 +1,7 @@
 // Unit tier: `dist/helpers.js` server helper — the compact one-line summary
 // keeps the rolling reset suffix and reports unavailable snapshots verbatim.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

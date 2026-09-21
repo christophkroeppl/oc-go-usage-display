@@ -13,7 +13,7 @@
 // The deployed bundles (dist/plugins/*.ts[x]) are validated by
 // scripts/build-plugins.mjs, which fails the build on the same contract.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js
 // output below.
 
 import { test } from "node:test";

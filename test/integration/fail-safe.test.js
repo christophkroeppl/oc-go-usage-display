@@ -6,7 +6,7 @@
 // that keep OpenCode bootable even when this plugin's initialization, host API
 // surface, or inputs are hostile.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

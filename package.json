@@ -63,10 +63,12 @@
     "build:plugins": "bun run scripts/build-plugins.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "bun run build",
-    "test": "bun run build && bun run test:unit && bun run test:integration",
-    "test:unit": "bun test test/unit/*.test.js",
-    "test:integration": "bun test test/integration/*.test.js",
-    "test:e2e": "bun test test/e2e/*.test.js"
+    "test": "bun run build && bun run test:unit",
+    "test:unit": "bun run check-unit-purity && bun test test/unit/*.test.js",
+    "check-unit-purity": "node scripts/check-unit-purity.mjs",
+    "test:integration": "node scripts/run-test-files.mjs test/integration",
+    "test:e2e": "node scripts/run-test-files.mjs test/e2e",
+    "test:docker": "docker compose run --rm --build test"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.18.0",

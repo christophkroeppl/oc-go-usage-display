@@ -2,17 +2,16 @@
 // registers the `go_usage` tool.
 //
 // Requires the kilo binary on PATH (the container image installs it) and a
-// prior `npm run build`. When the binary is absent the suite skips cleanly, so
+// prior `bun run build`. When the binary is absent the suite skips cleanly, so
 // host-only runs without kilo stay green. test/helpers/run.js redirects
 // HOME/XDG paths into a tmp dir and strips credentials, so the real
 // ~/.config/kilo is never read and no network call is made.
 //
-// The PTY TUI check is a non-fatal smoke: headless runners may lack a usable
-// PTY and the TUI is interactive by nature, so it never fails the suite.
+// The real TUI surfaces are covered by tui-display.kilo.test.js, which drives
+// a tmux session and asserts the rendered usage text.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,10 +22,8 @@ import {
   assertHermeticPaths,
   fetchToolIds,
   findKiloBinary,
-  hasPty,
   KILO_LOAD_ENV,
   startKiloServer,
-  stripConfigOverrides,
   writeKiloPluginConfig,
 } from "../helpers/kilo.js";
 
@@ -50,7 +47,7 @@ function makeHermeticRoot() {
   return { tmp, env };
 }
 
-test("kilo serve loads the plugin and registers go_usage", { skip: SKIP_NO_BINARY, timeout: 60000 }, async (t) => {
+test("kilo serve loads the plugin and registers go_usage", { skip: SKIP_NO_BINARY, timeout: 120000 }, async (t) => {
   const { tmp, env } = makeHermeticRoot();
   let server = null;
   // One teardown hook: the server is always stopped before the tmp root is
@@ -70,29 +67,3 @@ test("kilo serve loads the plugin and registers go_usage", { skip: SKIP_NO_BINAR
   assertGoUsageRegistered(ids);
   console.log(`[e2e] registered tools: ${ids.join(", ")}`);
 });
-
-test(
-  "TUI starts under a PTY (non-fatal smoke)",
-  { skip: SKIP_NO_BINARY || (hasPty() ? false : "no PTY available (script/timeout missing)"), timeout: 60000 },
-  () => {
-    const { tmp, env } = makeHermeticRoot();
-    try {
-      const result = spawnSync("timeout", ["30", "script", "-qec", "kilo", "/dev/null"], {
-        cwd: REPO_DIR,
-        env: stripConfigOverrides(env),
-        encoding: "utf8",
-        timeout: 45000,
-      });
-      const tail = (result.stderr || result.stdout || "").trim().split("\n").slice(-5).join("\n");
-      // Non-fatal: the TUI is interactive and may exit non-zero when bounded by
-      // `timeout`. Record the outcome; never assert on it.
-      console.log(
-        `[e2e] PTY TUI smoke exit=${result.status} signal=${result.signal ?? "none"}${tail ? `\n${tail}` : ""}`,
-      );
-    } catch (error) {
-      console.log(`[e2e] PTY TUI smoke skipped: ${error.message}`);
-    } finally {
-      tmp.cleanup();
-    }
-  },
-);

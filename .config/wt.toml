@@ -22,4 +22,4 @@ install = "bun install"
 build = "bun run build"
 
 [pre-merge]
-test = "bun run test"
+test = "bun run test:docker"

@@ -13,6 +13,12 @@
 
 FROM oven/bun:1.4.2-debian
 
+# tmux is required by the e2e TUI display tests: they drive a real opencode/kilo
+# TUI in a detached session and assert on `capture-pane` plain text.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tmux \
+  && rm -rf /var/lib/apt/lists/*
+
 # Pin global CLI versions
 ARG OPENCODE_VERSION=1.18.31
 ARG KILO_VERSION=7.7.5

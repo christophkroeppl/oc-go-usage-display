@@ -6,7 +6,7 @@
 // inside a mkdtemp root and `OPENCODE_GO_MOCK=1`, so the real
 // `~/.config/opencode` is never touched and no network call is made.
 //
-// Requires a prior `npm run build`: the bins serve dist/plugins/*.
+// Requires a prior `bun run build`: the bins serve dist/plugins/*.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

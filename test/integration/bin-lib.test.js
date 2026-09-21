@@ -2,7 +2,7 @@
 // tui entry normalization, config-entry round-trips, plugin file removal).
 // Temp dirs come from `test/helpers/tmp.js`; the real config dir is never used.
 //
-// Requires a prior `npm run build`: the plugin-file tests read dist/plugins/*.
+// Requires a prior `bun run build`: the plugin-file tests read dist/plugins/*.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -1,9 +1,10 @@
 // Shared kilo harness for the e2e tier.
 //
 // One implementation of: locating the kilo binary, writing a hermetic plugin
-// config, booting `kilo serve`, waiting for its listening sentinel, querying
-// the registered tool ids, and checking for a usable PTY. The e2e test
+// config, booting `kilo serve`, waiting for its listening sentinel, and
+// querying the registered tool ids. The e2e test
 // (test/e2e/kilo-load.test.js) consumes this so the flow is not duplicated.
+// TUI display coverage lives in test/helpers/tui.js.
 //
 // Every caller must pass an env produced by test/helpers/run.js (or the shell
 // equivalent), so HOME/XDG paths resolve inside a tmp dir. Kilo resolves its
@@ -22,7 +23,6 @@ import {
   assertGoUsageRegistered,
   assertHermeticPaths,
   fetchToolIds,
-  hasPty,
   stripConfigOverrides,
 } from "./opencode.js";
 
@@ -31,7 +31,6 @@ export {
   assertGoUsageRegistered,
   assertHermeticPaths,
   fetchToolIds,
-  hasPty,
   stripConfigOverrides,
 };
 
@@ -66,6 +65,10 @@ export function findKiloBinary() {
 // build). `pathToFileURL` percent-encodes the spec so a repo path containing
 // spaces still resolves. Plain `file://` specs deliberately exercise the
 // post-build entry modules.
+//
+// Kilo's tui.json schema rejects `sidebar`/`statusline` (it skips the whole
+// file as invalid, so the TUI plugin would never load); the plugin defaults to
+// both surfaces, so the keys are omitted here too.
 export function writeKiloPluginConfig(configDir, repoDir) {
   fs.mkdirSync(configDir, { recursive: true });
   const serverPlugin = pathToFileURL(path.join(repoDir, "dist", "index.js")).href;
@@ -79,7 +82,7 @@ export function writeKiloPluginConfig(configDir, repoDir) {
   fs.writeFileSync(
     path.join(configDir, "tui.json"),
     `${JSON.stringify(
-      { $schema: "https://opencode.ai/tui.json", plugin: [kiloTuiPlugin], sidebar: true, statusline: true },
+      { $schema: "https://opencode.ai/tui.json", plugin: [kiloTuiPlugin] },
       null,
       2,
     )}\n`,

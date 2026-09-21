@@ -1,7 +1,7 @@
 // Unit tier: `dist/shared.js` — the pure cross-surface helpers used by both the
 // server and the TUI (auth path resolution, tolerant API parsing, snapshot
-// builders, formatting primitives). Requires a prior `npm run build`: this tier
-// imports the compiled dist/*.js (`npm test` builds first, `npm run test:unit`
+// builders, formatting primitives). Requires a prior `bun run build`: this tier
+// imports the compiled dist/*.js (`bun run test` builds first, `bun run test:unit`
 // does not).
 
 import { test } from "node:test";

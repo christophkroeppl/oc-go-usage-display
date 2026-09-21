@@ -4,7 +4,7 @@
 // `OPENCODE_GO_MOCK=1` makes the plugin's refresh path return the mock snapshot
 // synchronously, so the factory resolves without touching auth.json or fetch.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

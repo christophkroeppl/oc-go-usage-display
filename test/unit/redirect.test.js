@@ -6,7 +6,7 @@
 // hop decision to these pure helpers. The tests pin the allowlist,
 // relative-resolution, and hop-limit behavior.
 //
-// Requires a prior `npm run build`: this tier imports the compiled dist/*.js.
+// Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

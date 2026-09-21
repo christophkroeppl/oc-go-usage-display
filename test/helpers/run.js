@@ -22,8 +22,10 @@ const HERMETIC_KEYS = [
 ];
 
 // Secret-bearing vars are removed so an ambient developer shell can never leak
-// credentials into (or be observed by) a test child.
+// credentials into (or be observed by) a test child. Only an explicit
+// `allowSecrets` opt-in re-admits a key for the live usage/TUI tests.
 const SECRET_KEYS = [
+  "OPENCODE_API_KEY",
   "OPENCODE_GO_API_KEY",
   "OPENCODE_GO_AUTH_COOKIE",
   "OPENCODE_GO_WORKSPACE_ID",
@@ -61,7 +63,9 @@ function assertUnderRoot(root, key, value) {
 
 // Build (and create) a hermetic child env rooted at `root`. `overrides` may
 // adjust non-hermetic values; any hermetic key is re-checked to fail fast.
-export function isolatedEnv(root, overrides = {}) {
+// `allowSecrets` names SECRET_KEYS that may survive (from `overrides` or the
+// ambient env) — reserved for the READONLY live usage/TUI tests. Default: none.
+export function isolatedEnv(root, overrides = {}, { allowSecrets = [] } = {}) {
   const env = { ...process.env };
   // Strip inherited behavior toggles before appending explicit overrides: a
   // caller that wants to exercise a toggle passes it in `overrides`.
@@ -75,7 +79,10 @@ export function isolatedEnv(root, overrides = {}) {
     OPENCODE_CONFIG_DIR: path.join(root, "config"),
     OPENCODE_GO_MOCK: "1",
   }, overrides);
-  for (const key of [...SECRET_KEYS, ...CONFIG_OVERRIDE_KEYS]) delete env[key];
+  for (const key of SECRET_KEYS) {
+    if (!allowSecrets.includes(key)) delete env[key];
+  }
+  for (const key of CONFIG_OVERRIDE_KEYS) delete env[key];
   for (const key of HERMETIC_KEYS) {
     assertUnderRoot(root, key, env[key]);
     fs.mkdirSync(env[key], { recursive: true });
@@ -85,13 +92,13 @@ export function isolatedEnv(root, overrides = {}) {
 
 // Run a node script to completion and capture stdout/stderr/exit code.
 // `root` is required so every child is hermetic by construction.
-export function runNode(args, { root, cwd, env = {}, input } = {}) {
+export function runNode(args, { root, cwd, env = {}, input, allowSecrets = [] } = {}) {
   if (typeof root !== "string" || root.length === 0) {
     throw new Error("runNode requires an explicit { root } tmp directory");
   }
   const result = spawnSync(process.execPath, args, {
     cwd,
-    env: isolatedEnv(root, env),
+    env: isolatedEnv(root, env, { allowSecrets }),
     encoding: "utf8",
     input,
   });

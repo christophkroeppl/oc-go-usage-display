@@ -2,8 +2,9 @@
 //
 // One implementation of: locating the opencode binary, writing a hermetic
 // plugin config, booting `opencode serve`, waiting for its listening sentinel,
-// querying the registered tool ids, and checking for a usable PTY. The e2e test
+// and querying the registered tool ids. The e2e test
 // (test/e2e/opencode-load.test.js) consumes this so the flow is not duplicated.
+// TUI display coverage lives in test/helpers/tui.js.
 //
 // Every caller must pass an env produced by test/helpers/run.js (or the shell
 // equivalent), so HOME/XDG/opencode paths resolve inside a tmp dir.
@@ -42,15 +43,6 @@ export function findOpencodeBinary() {
   if (found.status !== 0) return null;
   const binary = (found.stdout ?? "").trim();
   return binary.length > 0 ? binary : null;
-}
-
-export function hasPty() {
-  // util-linux `script` provides the PTY; `timeout` bounds the interactive run.
-  for (const command of ["timeout", "script"]) {
-    if (spawnSync("which", [command], { encoding: "utf8" }).status !== 0) return false;
-  }
-  const probe = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf8" });
-  return probe.status === 0;
 }
 
 // Hermeticity tripwire: before any server is booted, every path
