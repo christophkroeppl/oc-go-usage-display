@@ -52,8 +52,10 @@ Tests must never read or write the developer's real config:
   `capture-pane -p`; models come from `<binary> models opencode-go` at runtime.
 - The plugin-contract suite redirects HOME/XDG before importing `dist/*` and
   fails loudly if `CONFIG_DIR` / auth paths escape the tmp root.
-- The e2e harness (`test/helpers/opencode.js`) runs `opencode debug paths`
-  first and fails if any path escapes the tmp root.
+- The container-only load checks (`test/e2e/{opencode,kilo}-load.test.js`) are
+  the exception: they run only when compose sets `OC_GO_TEST_CONTAINER=1` and
+  use the disposable container HOME (`~/.config/{opencode,kilo}`) on purpose —
+  the container is the isolation boundary there.
 - Hand checks must do the same (tmp HOME/XDG or the container). Never run
   `bin/*` against the default `~/.config/opencode`.
 

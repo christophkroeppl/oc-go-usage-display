@@ -8,9 +8,12 @@
 # gate is identical to CI and never depends on the runner UID.
 # `opencode --version` and `kilo --version` fail the gate loudly if either
 # binary is missing, so the e2e tier can never silently skip. tmux drives the
-# real TUIs (see the Dockerfile). The harness redirects HOME/XDG/kilo paths
-# into tmp dirs, so the real host ~/.config/opencode and ~/.config/kilo are
-# never mounted or read.
+# real TUIs (see the Dockerfile).
+#
+# OC_GO_TEST_CONTAINER marks the disposable container HOME: the load checks
+# write the plugin config to the real ~/.config/{opencode,kilo} here and skip
+# outside. The TUI display tests still redirect HOME/XDG into tmp dirs, so a
+# local `bun run test:e2e` never touches the developer's real config.
 #
 # OPENCODE_GO_API_KEY is forwarded from the host when set; the live TUI/usage
 # tests run only then and skip neutrally otherwise.
@@ -20,4 +23,5 @@ services:
     working_dir: /workspaces/oc-go-usage-display
     environment:
       - OPENCODE_GO_API_KEY
+      - OC_GO_TEST_CONTAINER=1
     command: sh -c "opencode --version && kilo --version && bun install && bun run build && bun run test:integration && bun run test:e2e"

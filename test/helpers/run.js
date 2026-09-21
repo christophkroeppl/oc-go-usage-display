@@ -11,6 +11,15 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+// Marker set by compose.yml. Container-only tests (the load checks) skip
+// elsewhere: inside the image the container's own HOME is disposable, so they
+// exercise the real config paths instead of a tmp root.
+export const CONTAINER_MARKER = "OC_GO_TEST_CONTAINER";
+
+export function inTestContainer() {
+  return process.env[CONTAINER_MARKER] === "1";
+}
+
 // Vars that must resolve inside the tmp root, never to the real user home.
 const HERMETIC_KEYS = [
   "HOME",

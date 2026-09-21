@@ -166,9 +166,13 @@ touched, not even tmp. Integration and e2e tests run only inside the container
 image — `docker compose run --rm --build test` bakes the checkout in (no bind
 mount) and installs the pinned `opencode`/`kilo` binaries plus tmux. The
 devcontainer (`.devcontainer/`) builds the same image with a bind-mounted
-workspace. Tests are hermetic: all config/auth paths and tmux sockets are
-redirected into temp dirs, so the developer's real `~/.config/opencode` is
-never read or written.
+workspace.
+
+Container beacons: the load checks are container-only (compose sets
+`OC_GO_TEST_CONTAINER=1`) and use the container's disposable `~/.config`,
+while the host-runnable TUI display tests redirect HOME/XDG/tmux sockets into
+temp dirs — a local `bun run test:e2e` never reads or writes the developer's
+real `~/.config/opencode`.
 
 ### Dev install from CI
 

@@ -1,13 +1,14 @@
 // Shared opencode harness for the e2e tier.
 //
-// One implementation of: locating the opencode binary, writing a hermetic
-// plugin config, booting `opencode serve`, waiting for its listening sentinel,
-// and querying the registered tool ids. The e2e test
+// One implementation of: locating the opencode binary, writing a plugin
+// config, booting `opencode serve`, waiting for its listening sentinel, and
+// querying the registered tool ids. The e2e test
 // (test/e2e/opencode-load.test.js) consumes this so the flow is not duplicated.
 // TUI display coverage lives in test/helpers/tui.js.
 //
-// Every caller must pass an env produced by test/helpers/run.js (or the shell
-// equivalent), so HOME/XDG/opencode paths resolve inside a tmp dir.
+// The load check runs container-only against the container's disposable HOME
+// (`~/.config/opencode`). The TUI tests pass an env from test/helpers/run.js
+// instead, which redirects HOME/XDG into a tmp root.
 
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -43,39 +44,6 @@ export function findOpencodeBinary() {
   if (found.status !== 0) return null;
   const binary = (found.stdout ?? "").trim();
   return binary.length > 0 ? binary : null;
-}
-
-// Hermeticity tripwire: before any server is booted, every path
-// `opencode debug paths` reports must live inside the hermetic tmp root. A
-// mismatch means the child would read the developer's real config/db, so the
-// e2e fails loudly instead.
-export function assertHermeticPaths({ binary, cwd, env, root }) {
-  const result = spawnSync(binary, ["debug", "paths"], { cwd, env, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(
-      `opencode debug paths exited ${result.status}:\n${result.stderr || result.stdout}`,
-    );
-  }
-  const output = result.stdout ?? "";
-  const checked = [];
-  for (const line of output.split("\n")) {
-    // `key<whitespace>value` lines; anything else (blank lines, notes) is
-    // ignored, matching the shell check this replaces.
-    const match = /^(\S+)\s+(.+)$/.exec(line);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    const value = rawValue.trim();
-    const relative = path.relative(root, value);
-    const inside = relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
-    if (!inside) {
-      throw new Error(`opencode debug path "${key}" escaped the hermetic root: ${value} (root: ${root})`);
-    }
-    checked.push(key);
-  }
-  if (checked.length === 0) {
-    throw new Error(`opencode debug paths produced no parsable path lines:\n${output}`);
-  }
-  return checked;
 }
 
 // Write the two config files opencode reads: opencode.json points the server

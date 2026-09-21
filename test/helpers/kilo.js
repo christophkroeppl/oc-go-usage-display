@@ -1,15 +1,15 @@
 // Shared kilo harness for the e2e tier.
 //
-// One implementation of: locating the kilo binary, writing a hermetic plugin
-// config, booting `kilo serve`, waiting for its listening sentinel, and
-// querying the registered tool ids. The e2e test
+// One implementation of: locating the kilo binary, writing a plugin config,
+// booting `kilo serve`, waiting for its listening sentinel, and querying the
+// registered tool ids. The e2e test
 // (test/e2e/kilo-load.test.js) consumes this so the flow is not duplicated.
 // TUI display coverage lives in test/helpers/tui.js.
 //
-// Every caller must pass an env produced by test/helpers/run.js (or the shell
-// equivalent), so HOME/XDG paths resolve inside a tmp dir. Kilo resolves its
-// config from $XDG_CONFIG_HOME/kilo/ (NOT OPENCODE_CONFIG_DIR, which Kilo
-// ignores).
+// The load check runs container-only against the container's disposable HOME
+// (`~/.config/kilo`). The TUI tests pass an env from test/helpers/run.js
+// instead, which redirects HOME/XDG into a tmp root. Kilo resolves its config
+// from $XDG_CONFIG_HOME/kilo/ (NOT OPENCODE_CONFIG_DIR, which Kilo ignores).
 
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -19,20 +19,10 @@ import { pathToFileURL } from "node:url";
 // Import the host-agnostic pieces shared with the opencode harness so they are
 // available locally (startKiloServer uses stripConfigOverrides). These do not
 // depend on which host spawns the server.
-import {
-  assertGoUsageRegistered,
-  assertHermeticPaths,
-  fetchToolIds,
-  stripConfigOverrides,
-} from "./opencode.js";
+import { assertGoUsageRegistered, fetchToolIds, stripConfigOverrides } from "./opencode.js";
 
 // Re-export for kilo.js consumers.
-export {
-  assertGoUsageRegistered,
-  assertHermeticPaths,
-  fetchToolIds,
-  stripConfigOverrides,
-};
+export { assertGoUsageRegistered, fetchToolIds, stripConfigOverrides };
 
 import { CONFIG_OVERRIDE_KEYS } from "./run.js";
 

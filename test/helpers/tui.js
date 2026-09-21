@@ -280,27 +280,28 @@ export class TuiSession {
 }
 
 // Poll the pane until the statusline and sidebar patterns both match. If the
-// host sidebar is not visible after a grace period, toggle it once (ctrl+x b)
-// and keep polling. On timeout, throw with the last captured screen.
+// host sidebar is not visible, toggle it (ctrl+x b) and retry: the key can be
+// swallowed while the TUI is still settling, so toggling is attempted
+// repeatedly until the sidebar appears (or the deadline passes). On timeout,
+// throw with the last captured screen.
 export async function waitForUsageSurfaces(
   session,
-  { statusline, sidebar, timeoutMs = 90000, intervalMs = 500, toggleGraceMs = 10000 },
+  { statusline, sidebar, timeoutMs = 90000, intervalMs = 500, toggleGraceMs = 10000, maxToggleAttempts = 8 },
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  let toggled = false;
+  const hostSidebar = /Context|Token Usage/;
+  let toggleAttempts = 0;
   let screen = "";
   while (Date.now() < deadline) {
     screen = session.capture();
     if (statusline.test(screen) && sidebar.test(screen)) return screen;
-    if (
-      !toggled &&
-      Date.now() - startedAt > toggleGraceMs &&
-      !sidebar.test(screen) &&
-      !/Context|Token Usage/.test(screen)
-    ) {
+    const sidebarVisible = hostSidebar.test(screen) || sidebar.test(screen);
+    if (!sidebarVisible && Date.now() - startedAt > toggleGraceMs && toggleAttempts < maxToggleAttempts) {
       session.sendKeys("C-x", "b");
-      toggled = true;
+      toggleAttempts += 1;
+      await sleep(2500);
+      continue;
     }
     await sleep(intervalMs);
   }
