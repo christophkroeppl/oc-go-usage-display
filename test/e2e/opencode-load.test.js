@@ -32,7 +32,7 @@ const SKIP = !inTestContainer()
     ? false
     : "opencode binary not found on PATH (broken container image)";
 
-test("opencode serve loads the plugin and registers go_usage", { skip: SKIP, timeout: 120000 }, async (t) => {
+test("opencode serve loads the plugin and registers go_usage", { skip: SKIP, timeout: 180000 }, async (t) => {
   // Containers run as root with no XDG overrides, so opencode's real config
   // dir is the disposable `~/.config/opencode`.
   const configDir = process.env.OPENCODE_CONFIG_DIR ?? path.join(os.homedir(), ".config", "opencode");

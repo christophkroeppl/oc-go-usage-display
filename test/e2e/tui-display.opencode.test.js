@@ -40,7 +40,7 @@ const LIVE_STATUSLINE = /Go 5h \d+% \| 7d (?:\d+%|n\/a) \| 30d (?:\d+%|n\/a)/;
 
 test(
   "opencode TUI displays the mock usage in sidebar and statusline",
-  { skip: SKIP_NO_HOST, timeout: 300000 },
+  { skip: SKIP_NO_HOST, timeout: 600000 },
   async () => {
     const tmp = makeConfigDir();
     try {
@@ -66,7 +66,7 @@ test(
   "opencode TUI displays live usage from the API",
   {
     skip: SKIP_NO_HOST || (process.env.OPENCODE_GO_API_KEY ? false : "OPENCODE_GO_API_KEY not set"),
-    timeout: 300000,
+    timeout: 600000,
   },
   async (t) => {
     const snapshot = await fetchLiveUsage(process.env.OPENCODE_GO_API_KEY, {

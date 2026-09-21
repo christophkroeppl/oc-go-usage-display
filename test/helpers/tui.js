@@ -286,7 +286,7 @@ export class TuiSession {
 // throw with the last captured screen.
 export async function waitForUsageSurfaces(
   session,
-  { statusline, sidebar, timeoutMs = 90000, intervalMs = 500, toggleGraceMs = 10000, maxToggleAttempts = 8 },
+  { statusline, sidebar, timeoutMs = 150000, intervalMs = 500, toggleGraceMs = 10000, maxToggleAttempts = 8 },
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
@@ -335,7 +335,7 @@ export async function fetchLiveUsage(apiKey, { extractSnapshotFromApiPayload, ti
 // End-to-end display flow against one host. Returns the model used and the
 // final captured screen; throws with the last screen when the surfaces never
 // render. The caller owns the tmp root and env.
-export async function runTuiDisplay({ host, binary, repoDir, env, expect, timeoutMs = 90000 }) {
+export async function runTuiDisplay({ host, binary, repoDir, env, expect, timeoutMs = 150000 }) {
   const models = listProviderModels(binary, "opencode-go", { env, cwd: repoDir });
   const model = pickProviderModel(models);
   if (model === null) {

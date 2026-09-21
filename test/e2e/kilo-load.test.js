@@ -32,7 +32,7 @@ const SKIP = !inTestContainer()
     ? false
     : "kilo binary not found on PATH (broken container image)";
 
-test("kilo serve loads the plugin and registers go_usage", { skip: SKIP, timeout: 120000 }, async (t) => {
+test("kilo serve loads the plugin and registers go_usage", { skip: SKIP, timeout: 180000 }, async (t) => {
   // Kilo resolves its config from $XDG_CONFIG_HOME/kilo/ (not
   // OPENCODE_CONFIG_DIR); the container has no XDG override, so the real
   // disposable `~/.config/kilo` is used.

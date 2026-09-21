@@ -21,6 +21,10 @@ services:
   test:
     build: .
     working_dir: /workspaces/oc-go-usage-display
+    # Hard 3GB cap (RAM + swap): opencode/kilo can leak memory, and the
+    # container is disposable — an OOM kill is better than the host swapping.
+    mem_limit: 3g
+    memswap_limit: 3g
     environment:
       - OPENCODE_GO_API_KEY
       - OC_GO_TEST_CONTAINER=1
