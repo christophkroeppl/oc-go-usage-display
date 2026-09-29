@@ -49,6 +49,7 @@ import {
   errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
+  isLimitedStatus,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
@@ -68,6 +69,11 @@ import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
 const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CACHE_TTL_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
+
+// The three usage windows every snapshot carries, in display order.
+type WindowKey = "rolling" | "weekly" | "monthly";
+
+const WINDOW_KEYS: readonly WindowKey[] = ["rolling", "weekly", "monthly"];
 
 // Fetch redirect statuses (the cookie path handles them manually).
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -146,14 +152,23 @@ function readDiskCache(now: number): UsageSnapshot | null {
   if (!isRecord(parsed.snapshot)) return null;
   const snapshot = parsed.snapshot;
   if (!("rolling" in snapshot && "weekly" in snapshot && "monthly" in snapshot)) return null;
-  // Validate cached windows instead of blindly trusting the shape; a corrupt
-  // entry is dropped so the next fetch repopulates the cache.
-  for (const key of ["rolling", "weekly", "monthly"] as const) {
+  // Re-parse the stored windows instead of casting the raw entry: a cache file
+  // written by an older build predates newer `UsageWindow` fields, so the entry
+  // can be missing them. A window that no longer parses drops the whole entry
+  // so the next fetch repopulates the cache.
+  const windows: Record<WindowKey, UsageWindow | null> = {
+    rolling: null,
+    weekly: null,
+    monthly: null,
+  };
+  for (const key of WINDOW_KEYS) {
     const cachedWindow = snapshot[key];
     if (cachedWindow === null) continue;
-    if (extractWindow(cachedWindow) === null) return null;
+    const window = extractWindow(cachedWindow);
+    if (window === null) return null;
+    windows[key] = window;
   }
-  return snapshot as UsageSnapshot;
+  return { ...snapshot, ...windows } as UsageSnapshot;
 }
 
 function writeDiskCache(snapshot: UsageSnapshot): void {
@@ -234,12 +249,15 @@ async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
 
 // --- Cookie path: workspace page scrape (ported from opencode-go-hud) ---
 
-const USAGE_KEYS: Record<"rolling" | "weekly" | "monthly", string> = {
+const USAGE_KEYS: Record<WindowKey, string> = {
   rolling: "rollingUsage",
   weekly: "weeklyUsage",
   monthly: "monthlyUsage",
 };
-const DOM_ORDER: Array<"rolling" | "weekly" | "monthly"> = ["rolling", "weekly", "monthly"];
+// Markup order of the `usage-item` slots. Spelled out rather than derived from
+// `WINDOW_KEYS`: it is a property of the scraped page, not of the display, and
+// must not follow a display-order change.
+const DOM_ORDER: WindowKey[] = ["rolling", "weekly", "monthly"];
 const LOGIN_TITLE_MARKER = "<title>OpenAuth</title>";
 
 function isLoginPage(finalUrl: string, html: string): boolean {
@@ -293,18 +311,20 @@ function parseStrField(block: string, field: string): string | null {
   return match?.[1] ?? null;
 }
 
-function parseInlineUsage(html: string): Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> {
-  const result: Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> = {};
+function parseInlineUsage(html: string): Partial<Record<WindowKey, UsageWindow>> {
+  const result: Partial<Record<WindowKey, UsageWindow>> = {};
   for (const [name, key] of Object.entries(USAGE_KEYS)) {
-    const window = name as "rolling" | "weekly" | "monthly";
+    const window = name as WindowKey;
     const block = extractUsageBlock(html, key);
     if (!block) continue;
     const percent = parseIntField(block, "usagePercent");
     if (percent === null) continue;
+    const status = parseStrField(block, "status");
     result[window] = {
       percent,
+      status,
+      limited: isLimitedStatus(status),
       resetInSec: parseIntField(block, "resetInSec"),
-      status: parseStrField(block, "status"),
       resetText: null,
     };
   }
@@ -319,8 +339,8 @@ function cleanResetText(raw: string): string | null {
   return cleaned || null;
 }
 
-function parseDomUsage(html: string): Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> {
-  const result: Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> = {};
+function parseDomUsage(html: string): Partial<Record<WindowKey, UsageWindow>> {
+  const result: Partial<Record<WindowKey, UsageWindow>> = {};
   const itemStarts: number[] = [];
   for (const match of html.matchAll(/data-slot="usage-item"/g)) {
     if (match.index !== undefined) itemStarts.push(match.index);
@@ -340,15 +360,16 @@ function parseDomUsage(html: string): Partial<Record<"rolling" | "weekly" | "mon
     const resetText = resetMatch?.[1];
     result[window] = {
       percent: Number.parseInt(percent, 10),
-      resetInSec: null,
       status: null,
+      limited: false,
+      resetInSec: null,
       resetText: resetText !== undefined ? cleanResetText(resetText) : null,
     };
   }
   return result;
 }
 
-function parseScrapedUsage(html: string): Partial<Record<"rolling" | "weekly" | "monthly", UsageWindow>> {
+function parseScrapedUsage(html: string): Partial<Record<WindowKey, UsageWindow>> {
   const inline = parseInlineUsage(html);
   if (Object.keys(inline).length === 3) return inline;
   return { ...parseDomUsage(html), ...inline };

@@ -15,9 +15,9 @@ import {
 
 function tuiSnapshot(overrides = {}) {
   return {
-    rolling: { percent: 42, resetInSec: 7543, resetText: null },
-    weekly: { percent: 15, resetInSec: null, resetText: null },
-    monthly: { percent: 61, resetInSec: null, resetText: null },
+    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
     source: "mock",
     fetchedAt: 0,
     ...overrides,
@@ -64,7 +64,7 @@ test("buildUsageRows renders all three windows with sidebar reset text", () => {
 test("buildUsageRows falls back to resetText and omits missing windows", () => {
   const rows = buildUsageRows(
     tuiSnapshot({
-      rolling: { percent: 10, resetInSec: null, resetText: "soon" },
+      rolling: { percent: 10, status: "ok", limited: false, resetInSec: null, resetText: "soon" },
       weekly: null,
       monthly: null,
     }),

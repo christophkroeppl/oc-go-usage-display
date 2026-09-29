@@ -9,9 +9,9 @@ import { formatServerLine } from "../../dist/helpers.js";
 
 function serverSnapshot(overrides = {}) {
   return {
-    rolling: { percent: 42, resetInSec: 7543, resetText: null },
-    weekly: { percent: 15, resetInSec: null, resetText: null },
-    monthly: { percent: 61, resetInSec: null, resetText: null },
+    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
     source: "mock",
     fetchedAt: 0,
     ...overrides,
@@ -20,9 +20,9 @@ function serverSnapshot(overrides = {}) {
 
 test("server formatServerLine keeps the rolling reset suffix", () => {
   const snapshot = serverSnapshot({
-    rolling: { percent: 42, resetInSec: 7543, status: "active", resetText: null },
-    weekly: { percent: 15, resetInSec: null, status: "active", resetText: null },
-    monthly: { percent: 61, resetInSec: null, status: "active", resetText: null },
+    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
   });
   assert.equal(formatServerLine(snapshot), "Go 5h 42% (reset 2h5m) | 7d 15% | 30d 61%");
 });

@@ -150,8 +150,9 @@ export function authJsonPaths(
 
 export type UsageWindow = {
   percent: number;
-  resetInSec: number | null;
   status: string | null;
+  limited: boolean;
+  resetInSec: number | null;
   resetText: string | null;
 };
 
@@ -245,7 +246,44 @@ export function readAuthJsonApiKey(
 // API payload boundary (tolerant JSON parsing; shape may evolve)
 // ---------------------------------------------------------------------------
 
-export function extractWindow(candidate: unknown): UsageWindow | null {
+// A countdown is only usable when it is a finite, non-negative number of
+// seconds. One guard covers every failure mode, so no consumer re-checks before
+// rendering and no `NaN`, `Invalid Date` or negative span can reach a
+// statusline — an elapsed reset (stale payload, clock skew, a reset that fired
+// mid-flight) is as unusable as an unreadable one and degrades the same way.
+function usableCountdown(seconds: unknown): number | null {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return null;
+  return seconds;
+}
+
+// The live usage API reports the reset as an absolute ISO 8601 instant
+// (`resetsAt`), while every consumer wants the RELATIVE count of seconds left
+// (`resetInSec`). Convert here, at the parse boundary, so the instant is read
+// once against a single clock reading.
+function secondsUntilReset(resetsAt: unknown, now: number): number | null {
+  const instant = toNonEmptyString(resetsAt);
+  if (instant === null) return null;
+  return usableCountdown(Math.round((Date.parse(instant) - now) / 1000));
+}
+
+// Statuses that mean "this window is capped". Matching is on whole normalized
+// tokens, never substrings: "unlimited" contains "limited" and would flip a
+// healthy window. Every unrecognized value (including the scrape path's
+// historical "active" and the API's "ok") stays false, so a status this build
+// has never seen can never paint a window as limited.
+const LIMITED_STATUSES = new Set(["rate-limited", "limited", "exhausted", "capped"]);
+
+// Exported for the cookie-scrape parsers in `src/index.ts`, which build windows
+// from scraped markup instead of the JSON API and must apply the same mapping.
+export function isLimitedStatus(status: string | null): boolean {
+  if (status === null) return false;
+  const normalized = status.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  return LIMITED_STATUSES.has(normalized);
+}
+
+// `now` is injectable so the absolute-to-relative conversion is unit-testable
+// without sleeping; callers always pass the snapshot's single clock reading.
+export function extractWindow(candidate: unknown, now: number = Date.now()): UsageWindow | null {
   if (!isRecord(candidate)) return null;
   const percent = toFiniteNumber(
     candidate.percent ??
@@ -255,30 +293,37 @@ export function extractWindow(candidate: unknown): UsageWindow | null {
       candidate.usage,
   );
   if (percent === null) return null;
-  const resetInSec = toFiniteNumber(candidate.resetInSec ?? candidate.resetInSeconds ?? null);
   const status = toNonEmptyString(candidate.status);
+  // The relative spellings win when present because they are already a
+  // countdown; `resetsAt` is the live field and is derived from the instant.
+  const resetInSec =
+    usableCountdown(candidate.resetInSec ?? candidate.resetInSeconds) ??
+    secondsUntilReset(candidate.resetsAt, now);
   const resetText = toNonEmptyString(candidate.resetText ?? candidate.reset ?? null);
-  return { percent: Math.round(percent), resetInSec, status, resetText };
+  return { percent: Math.round(percent), status, limited: isLimitedStatus(status), resetInSec, resetText };
 }
 
 export function extractSnapshotFromApiPayload(payload: unknown): UsageSnapshot | null {
   if (!isRecord(payload)) return null;
+  // One clock reading for the whole snapshot, so every reset countdown and
+  // `fetchedAt` describe the same instant.
+  const now = Date.now();
   const containers: unknown[] = [payload];
   for (const key of ["usage", "data", "go"]) {
     if (isRecord(payload[key])) containers.push(payload[key]);
   }
   for (const container of containers) {
     if (!isRecord(container)) continue;
-    const rolling = extractWindow(container.rolling ?? container.rollingUsage ?? container["5h"]);
-    const weekly = extractWindow(container.weekly ?? container.weeklyUsage ?? container["7d"]);
-    const monthly = extractWindow(container.monthly ?? container.monthlyUsage ?? container["30d"]);
+    const rolling = extractWindow(container.rolling ?? container.rollingUsage ?? container["5h"], now);
+    const weekly = extractWindow(container.weekly ?? container.weeklyUsage ?? container["7d"], now);
+    const monthly = extractWindow(container.monthly ?? container.monthlyUsage ?? container["30d"], now);
     if (rolling !== null || weekly !== null || monthly !== null) {
       return {
         rolling,
         weekly,
         monthly,
         source: "api",
-        fetchedAt: Date.now(),
+        fetchedAt: now,
       };
     }
   }
@@ -289,11 +334,16 @@ export function extractSnapshotFromApiPayload(payload: unknown): UsageSnapshot |
 // Snapshot builders
 // ---------------------------------------------------------------------------
 
+// `"active"` is the status this mock (and the cookie scrape) has always
+// reported, and it must map to `limited: false` exactly like the parser does —
+// the unit tier pins that agreement so the mock cannot drift from live shape.
+// `resetInSec` stays a literal (not derived from `resetsAt`) so the mock reset
+// suffix is deterministic for the TUI display tests.
 export function mockSnapshot(): UsageSnapshot {
   return {
-    rolling: { percent: 42, resetInSec: 7543, status: "active", resetText: null },
-    weekly: { percent: 15, resetInSec: null, status: "active", resetText: null },
-    monthly: { percent: 61, resetInSec: null, status: "active", resetText: null },
+    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
     source: "mock",
     fetchedAt: Date.now(),
   };

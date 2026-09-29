@@ -14,12 +14,14 @@ import {
   extractSnapshotFromApiPayload,
   extractWindow,
   formatResetDuration,
+  mockSnapshot,
   resolveConfigDir,
   resolveHostRoots,
   safeJoinPath,
   unavailableSnapshot,
   usageHostFromEnv,
 } from "../../dist/shared.js";
+import { formatServerLine } from "../../dist/helpers.js";
 
 // --- safeJoinPath / resolveConfigDir (module-level path construction) ---
 
@@ -225,8 +227,234 @@ test("extractWindow rejects corrupt cached windows so the cache is dropped", () 
   assert.equal(extractWindow({}), null);
   assert.deepStrictEqual(extractWindow({ percent: 12.6 }), {
     percent: 13,
-    resetInSec: null,
     status: null,
+    limited: false,
+    resetInSec: null,
     resetText: null,
   });
+});
+
+// --- resetsAt: the live API's absolute reset instants ---
+
+// Redacted live payload (the real shape; every value is a non-secret number or
+// enum). The API reports the reset as an absolute ISO 8601 instant, which the
+// code used to ignore entirely, so no reset time ever rendered in live use.
+const LIVE_USAGE_PAYLOAD = {
+  usage: {
+    rolling: { status: "ok", percent: 0, resetsAt: "2026-09-29T10:34:00.358Z" },
+    weekly: { status: "ok", percent: 0, resetsAt: "2026-10-05T00:00:00.000Z" },
+    monthly: { status: "rate-limited", percent: 100, resetsAt: "2026-10-08T17:25:34.000Z" },
+  },
+};
+// 2h5m before the rolling reset; far enough from every instant that rounding
+// cannot change the expected second counts.
+const LIVE_NOW = Date.parse("2026-09-29T08:29:00.000Z");
+
+test("extractWindow derives resetInSec (seconds until reset) from resetsAt", () => {
+  const rolling = extractWindow(LIVE_USAGE_PAYLOAD.usage.rolling, LIVE_NOW);
+  assert.deepStrictEqual(rolling, {
+    percent: 0,
+    status: "ok",
+    limited: false,
+    resetInSec: 7500,
+    resetText: null,
+  });
+  assert.equal(extractWindow(LIVE_USAGE_PAYLOAD.usage.weekly, LIVE_NOW)?.resetInSec, 487860);
+  assert.equal(extractWindow(LIVE_USAGE_PAYLOAD.usage.monthly, LIVE_NOW)?.resetInSec, 809794);
+  // The derived value is a SECONDS countdown, not milliseconds.
+  assert.equal(formatResetDuration(rolling?.resetInSec ?? null), "2h5m");
+});
+
+test("extractSnapshotFromApiPayload maps the live payload's status to limited", () => {
+  const snapshot = extractSnapshotFromApiPayload(LIVE_USAGE_PAYLOAD);
+  assert.equal(snapshot?.source, "api");
+  assert.equal(snapshot?.rolling?.status, "ok");
+  assert.equal(snapshot?.rolling?.limited, false);
+  assert.equal(snapshot?.weekly?.status, "ok");
+  assert.equal(snapshot?.weekly?.limited, false);
+  assert.equal(snapshot?.monthly?.status, "rate-limited");
+  assert.equal(snapshot?.monthly?.limited, true);
+  // One clock reading per snapshot: `fetchedAt` and the countdowns agree.
+  assert.ok(Number.isFinite(snapshot?.fetchedAt));
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.ok(snapshot?.[key]?.resetInSec !== null, `${key}.resetInSec parsed from resetsAt`);
+  }
+});
+
+test("a live-shaped payload renders a reset suffix in the server line and sidebar rows", () => {
+  // The live API carries no relative countdown, so these two renderers were
+  // the regression surface for the unparsed `resetsAt` field.
+  const now = Date.now();
+  const snapshot = extractSnapshotFromApiPayload({
+    usage: {
+      rolling: {
+        status: "ok",
+        percent: 0,
+        resetsAt: new Date(now + 2 * 3600_000 + 5 * 60_000 + 30_000).toISOString(),
+      },
+      weekly: { status: "ok", percent: 0, resetsAt: new Date(now + 487_860_000).toISOString() },
+      monthly: {
+        status: "rate-limited",
+        percent: 100,
+        resetsAt: new Date(now + 809_794_000).toISOString(),
+      },
+    },
+  });
+  assert.ok(snapshot !== null);
+  assert.equal(formatServerLine(snapshot), "Go 5h 0% (reset 2h5m) | 7d 0% | 30d 100%");
+  assert.deepStrictEqual(buildUsageRows(snapshot), [
+    { label: "5h", value: "0% · resets 2h5m" },
+    { label: "7d", value: "0%" },
+    { label: "30d", value: "100%" },
+  ]);
+});
+
+test("the relative reset spellings are still accepted and win over resetsAt", () => {
+  for (const key of ["resetInSec", "resetInSeconds"]) {
+    const window = extractWindow({ percent: 5, [key]: 900 }, LIVE_NOW);
+    assert.equal(window?.resetInSec, 900, key);
+  }
+  // An already-relative countdown needs no clock conversion, so it takes
+  // precedence over the absolute instant when a payload carries both.
+  const both = extractWindow(
+    { percent: 5, resetInSec: 900, resetsAt: "2026-10-08T17:25:34.000Z" },
+    LIVE_NOW,
+  );
+  assert.equal(both?.resetInSec, 900);
+  for (const key of ["resetText", "reset"]) {
+    const window = extractWindow({ percent: 5, [key]: "soon" }, LIVE_NOW);
+    assert.equal(window?.resetText, "soon", key);
+  }
+});
+
+test("an elapsed resetsAt degrades to null instead of a negative countdown", () => {
+  const past = extractWindow(
+    { percent: 42, status: "ok", resetsAt: "2026-09-29T08:00:00.000Z" },
+    LIVE_NOW,
+  );
+  assert.equal(past?.resetInSec, null);
+  assert.equal(formatResetDuration(past?.resetInSec ?? null), null);
+  // An elapsed reset falls back to the relative spelling instead of being lost.
+  const both = extractWindow(
+    { percent: 42, resetInSec: 900, resetsAt: "2026-09-29T08:00:00.000Z" },
+    LIVE_NOW,
+  );
+  assert.equal(both?.resetInSec, 900);
+  // An invalid `now` (clock skew outside the representable range) fails the
+  // same guard rather than leaking a non-finite countdown.
+  assert.equal(
+    extractWindow({ percent: 42, resetsAt: "2026-10-08T17:25:34.000Z" }, Number.NaN)?.resetInSec,
+    null,
+  );
+});
+
+test("a negative or non-finite relative countdown degrades to null", () => {
+  // The boundary hands out "a usable countdown or nothing", so no consumer has
+  // to re-check the sign before rendering.
+  for (const resetInSec of [-1, -3600, Number.NaN, Number.POSITIVE_INFINITY, "900", null, {}]) {
+    const window = extractWindow({ percent: 7, resetInSec }, LIVE_NOW);
+    assert.equal(window?.resetInSec, null, `resetInSec ${String(resetInSec)}`);
+  }
+  assert.equal(extractWindow({ percent: 7, resetInSec: 0 }, LIVE_NOW)?.resetInSec, 0);
+});
+
+test("an unparseable or non-string resetsAt degrades to null", () => {
+  const rejected = [
+    "not-a-date",
+    "2026-13-45T99:99:99Z",
+    "",
+    "   ",
+    1_772_000_000,
+    null,
+    undefined,
+    true,
+    {},
+    [],
+    new Date(Number.NaN),
+  ];
+  for (const resetsAt of rejected) {
+    const window = extractWindow({ percent: 7, resetsAt }, LIVE_NOW);
+    assert.ok(window !== null, `window for ${String(resetsAt)}`);
+    assert.equal(window.resetInSec, null, `resetsAt ${String(resetsAt)} must yield null`);
+  }
+});
+
+test("no NaN, Infinity or negative resetInSec can escape the parser", () => {
+  const junk = [
+    ...[undefined, null, 0, 42].flatMap((percent) =>
+      [undefined, null, "", "nope", Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1e18].map(
+        (resetsAt) => ({ percent, resetsAt }),
+      ),
+    ),
+    ...[undefined, null, "", "nope", Number.NaN, Number.POSITIVE_INFINITY, -1, 1e18].map(
+      (resetInSec) => ({ percent: 1, resetInSec }),
+    ),
+  ];
+  for (const candidate of junk) {
+    const window = extractWindow(candidate, LIVE_NOW);
+    if (window === null) continue;
+    const { resetInSec } = window;
+    if (resetInSec === null) continue;
+    assert.ok(Number.isFinite(resetInSec), `finite resetInSec for ${JSON.stringify(candidate)}`);
+    assert.ok(resetInSec >= 0, `non-negative resetInSec for ${JSON.stringify(candidate)}`);
+  }
+  // No unreadable date text can reach a renderer either.
+  for (const resetsAt of ["not-a-date", "2026-13-45T99:99:99Z"]) {
+    const window = extractWindow({ percent: 7, resetsAt }, LIVE_NOW);
+    assert.equal(formatResetDuration(window?.resetInSec ?? null), null);
+    assert.equal(JSON.stringify(window), '{"percent":7,"status":null,"limited":false,"resetInSec":null,"resetText":null}');
+  }
+});
+
+// --- status -> limited ---
+
+test("only recognized limit statuses map to limited", () => {
+  const cases = [
+    // The live API value.
+    ["rate-limited", true],
+    // Same token, other spellings/casing a payload could use.
+    ["Rate-Limited", true],
+    ["rate_limited", true],
+    ["  RATE LIMITED  ", true],
+    ["limited", true],
+    ["LIMITED", true],
+    ["exhausted", true],
+    ["capped", true],
+    // The live healthy value and the scrape/mock status.
+    ["ok", false],
+    ["active", false],
+    // Never limited: "unlimited" contains "limited".
+    ["unlimited", false],
+    ["not-rate-limited", false],
+    // Unknown and absent values default to false instead of throwing.
+    ["some-new-upstream-state", false],
+    ["", false],
+    [null, false],
+  ];
+  for (const [status, expected] of cases) {
+    const window = extractWindow({ percent: 0, status }, LIVE_NOW);
+    assert.equal(window?.limited, expected, `status ${String(status)}`);
+    // The raw status survives (trimmed) next to the derived flag.
+    const expectedRaw = typeof status === "string" && status.trim().length > 0 ? status.trim() : null;
+    assert.equal(window?.status, expectedRaw, `raw status ${String(status)} preserved`);
+  }
+});
+
+test("mockSnapshot agrees with the parser about the 'active' status", () => {
+  // The mock is what every TUI/e2e test renders, so a divergence between it and
+  // the parser would hide a mapping change behind a plausible-looking mock.
+  const mock = mockSnapshot();
+  assert.equal(mock.source, "mock");
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    const expected = extractWindow({ percent: mock[key].percent, status: "active" });
+    assert.equal(mock[key].limited, expected?.limited, `${key}.limited`);
+    assert.equal(mock[key].status, "active", `${key}.status`);
+  }
+  assert.equal(mock.rolling.resetInSec, 7543);
+  assert.equal(formatResetDuration(mock.rolling.resetInSec), "2h5m");
+  assert.deepStrictEqual(buildUsageRows(mock), [
+    { label: "5h", value: "42% · resets 2h5m" },
+    { label: "7d", value: "15%" },
+    { label: "30d", value: "61%" },
+  ]);
 });
