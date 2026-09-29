@@ -21,22 +21,22 @@ either host's bundle is missing.
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display@1.2.0 && npx oc-go-usage-display-init --copy` |
-| One-shot (npx) | `npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy` |
-| Project scope | `npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy --config-dir .opencode` |
+| Persistent (recommended) | `npm install oc-go-usage-display@latest && npx oc-go-usage-display-init --copy` |
+| One-shot (npx) | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy` |
+| Project scope | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
-restart). Restart opencode afterwards. Pin the version (`@1.2.0`, not
-`@latest`) so installs stay reproducible; copy-first requires >= 1.2.0.
+restart). Restart opencode afterwards. Pin the version (`@latest`, not
+`@latest`) so installs stay reproducible; copy-first requires >= latest.
 
 Alternative — no files copied: declare the versioned package and let opencode
 resolve it at startup:
 
 ```jsonc
 // opencode.jsonc — server target (go_usage tool)
-{ "plugin": ["oc-go-usage-display@1.2.0"] }
+{ "plugin": ["oc-go-usage-display@latest"] }
 // tui.json — TUI target (sidebar + statusline)
-{ "plugin": [["oc-go-usage-display@1.2.0", { "sidebar": true, "statusline": true }]] }
+{ "plugin": [["oc-go-usage-display@latest", { "sidebar": true, "statusline": true }]] }
 ```
 
 From a checkout: `./install.sh` (copy install; add `--target kilo` for Kilo),

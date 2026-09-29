@@ -113,8 +113,6 @@ paths are refused. Backups default to
 (`--backup-dir` overrides; `--snapshot` aliases it). Fall back to the published
 package with
 `npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir <path>`
-(`--config-dir` only for project-scoped installs; `--copy` needs a published
-version >= 1.2.0 — 1.1.0 symlinks and ignores it).
 
 Flags: `--dry-run` (download + sanity check only), `--branch` (default
 `develop`), `--workflow` (default `dev-build.yml`), `--run-id`, `--dir`,

@@ -12,11 +12,11 @@
 // detection never fails the install.
 //
 // Supported flows:
-//   npm install oc-go-usage-display@1.2.0 && npx oc-go-usage-display-init --copy
-//   (or declare "plugin": ["oc-go-usage-display@1.2.0"] in config instead).
-//   npx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (one-shot from the package cache)
-//   bunx -p oc-go-usage-display@1.2.0 oc-go-usage-display-init --copy  (same, via Bun)
-// Copy-first needs the published 1.2.0+: 1.1.0 symlinks and ignores --copy.
+//   npm install oc-go-usage-display@latest && npx oc-go-usage-display-init --copy
+//   (or declare "plugin": ["oc-go-usage-display@latest"] in config instead).
+//   npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy  (one-shot from the package cache)
+//   bunx -p oc-go-usage-display@latest oc-go-usage-display-init --copy  (same, via Bun)
+// Copy-first needs the published latest+: 1.1.0 symlinks and ignores --copy.
 // Any source path is accepted; --repo only overrides the default repo root.
 
 import {
