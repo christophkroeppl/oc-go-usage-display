@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "allow",
+    "external_directory": {
+      "/tmp/**": "allow",
+      "~/.config/opencode/**": "allow",
+      "~/.config/kilo/**": "allow",
+      "~/.local/share/opencode/plugins/**": "allow",
+      "~/.opencode/node_modules/@kilocode/**": "allow",
+      "/home/linuxbrew/.linuxbrew/lib/node_modules/@kilocode/**": "allow",
+      "/home/linuxbrew/.linuxbrew/opt/opencode/**": "allow",
+      "/home/linuxbrew/.linuxbrew/Cellar/opencode/**": "allow"
+    },
+    "edit": {
+      "*": "allow",
+      "~/.config/opencode/**": "deny",
+      "~/.config/kilo/**": "deny",
+      "~/.local/share/opencode/plugins/**": "deny",
+      "~/.opencode/node_modules/@kilocode/**": "deny",
+      "/home/linuxbrew/.linuxbrew/lib/node_modules/@kilocode/**": "deny",
+      "/home/linuxbrew/.linuxbrew/opt/opencode/**": "deny",
+      "/home/linuxbrew/.linuxbrew/Cellar/opencode/**": "deny"
+    }
+  }
+}

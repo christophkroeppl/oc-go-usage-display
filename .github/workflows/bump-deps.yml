@@ -1,0 +1,195 @@
+# Weekly dependency bump, committed only when the bumped tree passes the gate.
+#
+# The point is not a notification, it is a lockfile that matches the host SDKs
+# the suite actually runs. Dependabot/Renovate open a PR and stop; this bumps,
+# moves the container's host pins with it, runs the authoritative gate, and
+# pushes only if the gate is green. Runs on its own schedule (after the weekly
+# test run) rather than as a job in it, so a bump can never delay or interfere
+# with the gate on a human commit.
+#
+# The pins move in lockstep, on purpose: `@opencode-ai/plugin` tracks the
+# `opencode-ai` CLI and `@kilocode/plugin` tracks `@kilocode/cli`
+# (1.18.33 <-> 1.18.33, 7.8.1 <-> 7.8.1), and the container gate tests the
+# BINARY installed from the Dockerfile ARG. Bumping the SDK without the ARG
+# would typecheck against a host version the suite never runs, so the ARG moves
+# in the same commit or not at all.
+#
+# `bun update` moves dependencies to the newest version WITHIN the declared
+# range (like `npm update`) — never `bun update --latest`: @opentui/solid is
+# pinned to the version the hosts ship, the peer ranges are a published
+# contract, and a major bump is a code change rather than a bump. Bun rewrites
+# a direct dependency's range to the version it resolved, so the diff also
+# records the floor that was actually tested.
+#
+# `--minimum-release-age=1440` skips anything published in the last day, so a
+# fresh (or compromised) release cannot be adopted and committed the same hour;
+# it lands on the next run instead.
+#
+# The commit is `deps:`, which release-please bumps as a patch and lists under
+# "Dependencies" (release-please-config.json). It reaches npm only when develop
+# is merged into main, like every other commit here.
+#
+# Pushing to develop re-triggers test.yml (unit only: container-e2e is skipped on
+# develop pushes) and dev-build.yml (a dev-tgz with the bumped lockfile). Neither
+# can fail on a tree this job already gated.
+#
+# Requires `develop` to be pushable by the Actions bot (no required-PR rule on
+# it). A rebase conflict fails this job rather than clobbering a human commit:
+# there is no force push anywhere in this file.
+
+name: bump-deps
+
+on:
+  schedule:
+    # Mondays 12:30 UTC — the weekly test run starts at 06:00 and owns the
+    # first half of the day.
+    - cron: "30 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two bumps at once, and never cancel one mid-push: a queued run waits.
+concurrency:
+  group: bump-deps
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: bump deps (gate, then commit)
+    # ubuntu-latest on purpose: the slim runner image has no Docker daemon.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 60
+    # No secret: the container gate runs entirely on mocked usage, so this job
+    # needs no credentials at all.
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.2
+
+      - name: Bump within the declared ranges
+        id: bump
+        run: |
+          set -euo pipefail
+          git show HEAD:package.json > "$RUNNER_TEMP/package.old.json"
+          bun update --minimum-release-age=1440
+          # One script owns the range-to-ARG mapping and the commit message, so
+          # the two cannot drift.
+          cat > "$RUNNER_TEMP/bump.mjs" <<'SCRIPT'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const OLD = process.env.OLD_PACKAGE;
+          const MESSAGE = process.env.BUMP_MESSAGE;
+          const oldPkg = JSON.parse(readFileSync(OLD, "utf8"));
+          const newPkg = JSON.parse(readFileSync("package.json", "utf8"));
+
+          // The host CLIs the container installs, and the SDK packages that
+          // track them. A pair here means "these two versions are the same
+          // release", and the gate only means anything for a pair that moves
+          // together.
+          const PAIRS = {
+            "@opencode-ai/plugin": "OPENCODE_VERSION",
+            "@kilocode/plugin": "KILO_VERSION",
+          };
+
+          const resolved = (pkg) => ({ ...pkg.dependencies, ...pkg.devDependencies });
+          const before = resolved(oldPkg);
+          const after = resolved(newPkg);
+          const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+          const changed = names
+            .filter((name) => before[name] !== after[name])
+            .map((name) => ({ name, from: before[name] ?? "none", to: after[name] ?? "none" }));
+
+          // Transitive-only moves do not rewrite package.json, so read the
+          // versions bun actually installed rather than the ranges.
+          const installed = (name) => {
+            try {
+              return JSON.parse(readFileSync(`node_modules/${name}/package.json`, "utf8")).version;
+            } catch {
+              return null;
+            }
+          };
+
+          // Plan every rewrite before touching the Dockerfile, so a missing pin
+          // fails with the file untouched rather than half-rewritten.
+          const dockerfile = readFileSync("Dockerfile", "utf8");
+          const rewrites = [];
+          const notes = [];
+          for (const entry of changed) {
+            const version = installed(entry.name) ?? entry.to.replace(/^[^0-9]*/, "");
+            const arg = PAIRS[entry.name];
+            if (arg !== undefined) {
+              const pattern = new RegExp(`^ARG ${arg}=.*$`, "m");
+              if (!pattern.test(dockerfile)) {
+                throw new Error(`Dockerfile has no ARG ${arg}; pin it by hand before bumping ${entry.name}`);
+              }
+              rewrites.push([pattern, `ARG ${arg}=${version}`]);
+            }
+            notes.push(`- ${entry.name} ${entry.from} -> ${entry.to} (resolved ${version})`);
+          }
+          // Accumulate, then write once: replacing into a fresh read per entry
+          // would keep only the last rewrite.
+          let pinned = dockerfile;
+          for (const [pattern, replacement] of rewrites) {
+            pinned = pinned.replace(pattern, replacement);
+          }
+          if (rewrites.length > 0) writeFileSync("Dockerfile", pinned);
+
+          // Written even when no direct dependency moved: a transitive-only bump
+          // still changes bun.lock, and the commit step needs something to say
+          // (and the shell decides whether there is anything to commit at all).
+          if (notes.length === 0) notes.push("- transitive dependencies only (bun.lock)");
+          const message = [
+            "deps: update dependencies within the declared ranges",
+            "",
+            ...notes,
+            "",
+            "Bumped by .github/workflows/bump-deps.yml (bun update, 24h minimum release age).",
+            "Gate: docker compose run --rm --build test.",
+          ].join("\n");
+          writeFileSync(MESSAGE, `${message}\n`);
+          console.log(notes.join("\n"));
+          SCRIPT
+          OLD_PACKAGE="$RUNNER_TEMP/package.old.json" \
+          BUMP_MESSAGE="$RUNNER_TEMP/bump-msg.txt" \
+            node "$RUNNER_TEMP/bump.mjs"
+          if git diff --quiet -- package.json bun.lock Dockerfile; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dependencies are already current."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Container gate on the bumped tree
+        if: steps.bump.outputs.changed == 'true'
+        # The same authoritative gate as test.yml's container-e2e: the image
+        # builds the bumped checkout, and the e2e tier drives the real
+        # opencode/kilo TUIs (whose pinned versions moved with the SDKs above).
+        # This is the step that decides: nothing is committed unless it is green.
+        run: docker compose run --rm --build test
+
+      - name: Commit the bump
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json bun.lock Dockerfile
+          git commit -F "$RUNNER_TEMP/bump-msg.txt"
+          # Rebase onto whatever landed while the gate ran. A conflict fails the
+          # job: a bump is not worth overwriting a human's edit to package.json.
+          git pull --rebase origin develop
+          git push origin HEAD:develop

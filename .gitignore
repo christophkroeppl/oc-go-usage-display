@@ -1,4 +1,8 @@
 node_modules
 dist
-*.lockb
 *.tgz
+tmp/
+tmp-dev/
+tmp-dev-pack/
+*.tsbuildinfo
+package-lock.json

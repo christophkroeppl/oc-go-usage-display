@@ -1,18 +1,15 @@
 #!/usr/bin/env node
-// Show the effective installation: link targets, config entries, toggles.
+// Show the effective installation for both hosts: link targets, config
+// entries, toggles, and detection. The top-level fields stay the opencode
+// report (back-compat); `kilo` carries the Kilo report.
 // Secrets are never printed; only presence (env/file) is reported.
 
-import * as path from "node:path";
 import {
-  SERVER_FILE_NAME,
-  TUI_FILE_NAME,
-  TUI_PLUGIN_REL,
-  SERVER_PLUGIN_REL,
-  describeLink,
-  fail,
-  openCodeDirFromArgv,
-  readJsonFile,
-  readTuiSelection,
+  HOSTS,
+  describeHostInstall,
+  detectHosts,
+  exitWithError,
+  hostDirFromArgv,
   repoDirFromArgv,
   secretPresence,
 } from "./lib.js";
@@ -20,46 +17,57 @@ import {
 try {
   const argv = process.argv.slice(2);
   const repoDir = repoDirFromArgv(argv);
-  const configDir = openCodeDirFromArgv(argv);
   const asJson = argv.includes("--json");
+  const detected = detectHosts();
 
-  const serverLink = describeLink(path.join(configDir, "plugins", SERVER_FILE_NAME));
-  const tuiLink = describeLink(path.join(configDir, "plugins", TUI_FILE_NAME));
-  const tui = readTuiSelection(configDir);
-  const opencodeJson = readJsonFile(path.join(configDir, "opencode.jsonc"));
-  const serverEntry =
-    opencodeJson.found &&
-    typeof opencodeJson.value === "object" &&
-    opencodeJson.value !== null &&
-    Array.isArray(opencodeJson.value.plugin) &&
-    opencodeJson.value.plugin.includes(SERVER_PLUGIN_REL);
-  const secrets = secretPresence(configDir);
+  const hosts = {};
+  for (const host of HOSTS) {
+    const configDir = hostDirFromArgv(host, argv);
+    hosts[host] = { ...describeHostInstall(host, configDir), detected: detected[host] === true };
+  }
+
+  const opencode = hosts.opencode;
+  const kilo = hosts.kilo;
+  const secrets = secretPresence(opencode.configDir);
+  const kiloSecrets = secretPresence(kilo.configDir);
 
   const report = {
     repoDir,
-    configDir,
-    server: { expected: SERVER_PLUGIN_REL, entry: serverEntry, ...serverLink },
-    tui: {
-      expected: TUI_PLUGIN_REL,
-      entry: tui.entry,
-      sidebar: tui.sidebar,
-      statusline: tui.statusline,
-      ...tuiLink,
-    },
+    configDir: opencode.configDir,
+    detected,
+    server: opencode.server,
+    tui: opencode.tui,
     secrets: { envPresent: secrets.envPresent, filePresent: secrets.filePresent },
+    kilo: {
+      configDir: kilo.configDir,
+      server: kilo.server,
+      tui: kilo.tui,
+      secrets: { envPresent: kiloSecrets.envPresent, filePresent: kiloSecrets.filePresent },
+    },
   };
+
+  function describeLinkLine(label, link, entry) {
+    return `${label}: ${link.state}${link.detail ? ` -> ${link.detail}` : ""} (entry: ${entry ? "present" : "missing"})`;
+  }
 
   if (asJson) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     console.log(`repo: ${repoDir}`);
-    console.log(`config: ${configDir}`);
-    console.log(`server: ${serverLink.state}${serverLink.detail ? ` -> ${serverLink.detail}` : ""} (entry: ${serverEntry ? "present" : "missing"})`);
-    console.log(`tui: ${tuiLink.state}${tuiLink.detail ? ` -> ${tuiLink.detail}` : ""} (entry: ${tui.entry ? "present" : "missing"})`);
-    console.log(`toggles: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
-    console.log(`secrets: env=${secrets.envPresent ? "set" : "unset"} file=${secrets.filePresent ? "present" : "absent"} (values never shown)`);
+    console.log(`opencode: ${opencode.configDir} (detected: ${detected.opencode ? "yes" : "no"})`);
+    console.log(describeLinkLine("  server", opencode.server, opencode.server.entry));
+    console.log(describeLinkLine("  tui", opencode.tui, opencode.tui.entry));
+    console.log(`  toggles: sidebar=${opencode.tui.sidebar} statusline=${opencode.tui.statusline}`);
+    console.log(
+      `  secrets: env=${secrets.envPresent ? "set" : "unset"} file=${secrets.filePresent ? "present" : "absent"} (values never shown)`,
+    );
+    console.log(`kilo: ${kilo.configDir} (detected: ${detected.kilo ? "yes" : "no"})`);
+    console.log(describeLinkLine("  server", kilo.server, kilo.server.entry));
+    console.log(describeLinkLine("  tui", kilo.tui, kilo.tui.entry));
+    console.log(
+      `  secrets: env=${kiloSecrets.envPresent ? "set" : "unset"} file=${kiloSecrets.filePresent ? "present" : "absent"} (values never shown)`,
+    );
   }
 } catch (error) {
-  if (error instanceof Error) fail(error.message);
-  throw error;
+  exitWithError(error);
 }
