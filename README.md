@@ -219,6 +219,7 @@ inside the container image; host-runnable tests redirect HOME/XDG and force
 | Workflow | Trigger | Jobs |
 | -------- | ------- | ---- |
 | `test.yml` | push, PR, weekly (Mon 06:00 UTC) | `unit` always; `container-e2e` (Docker gate) only on `main` pushes, the schedule, and non-draft PRs |
+| `bump-deps.yml` | weekly (Mon 12:30 UTC), manual | `bun update` within the declared ranges, the Dockerfile host pins moved with the SDKs, the Docker gate on the bumped tree, then the commit — nothing is committed unless the gate is green |
 | `dev-build.yml` | push to `develop` | `dev-tgz` artifact (90 days), used by `install-dev.sh` |
 | `publish.yml` | push to `main` | gate -> release-please Release PR -> OIDC provenance publish; the release carries the tarball, all four plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish |
 

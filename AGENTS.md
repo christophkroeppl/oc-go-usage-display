@@ -20,6 +20,7 @@ lowercase, no trailing period). `scope` is required for `sidebar`, `statusline`,
 - `feat` -> minor; `fix` (and visible `deps`/`revert`) -> patch; `BREAKING CHANGE`/`!` -> major.
 - `chore`, `docs`, `ci`, `test`, `refactor`, `style`, `build`, `perf` -> no release on their own.
 - `main` pushes maintain a `chore(main): release X.Y.Z` PR; merging it creates the tag + GitHub release, and then `publish` runs the gate and publishes to npm (OIDC, no token).
+- `bump-deps.yml` (weekly) runs `bun update` within the declared ranges, moves the Dockerfile host pins (`OPENCODE_VERSION`/`KILO_VERSION`) with `@opencode-ai/plugin`/`@kilocode/plugin`, and commits `deps:` only when the container gate passes on the bumped tree. Those four versions are deliberately in lockstep, so a host SDK bump without its pin must be treated as a bug; majors are never auto-bumped.
 - Force a version with a `Release-As: X.Y.Z` footer on a commit merged to `main`. Never add `[skip ci]` to a release commit.
 - `release-please-config.json` + `.release-please-manifest.json` drive it; `CHANGELOG.md` is generated. Remove `last-release-sha` after the first Release PR merges.
 
