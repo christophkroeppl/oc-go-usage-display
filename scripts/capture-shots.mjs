@@ -85,13 +85,21 @@ async function capture({ host, binary, sidebarMode }) {
     });
     try {
       tui.start();
-      // Wait for the block to settle rather than sleeping a fixed amount: the
-      // sidebar renders asynchronously and a shot of a loading block is useless.
+      // Wait for the whole screen to settle rather than sleeping a fixed amount.
+      // Three things must be true or the shot is a lie: the block has finished
+      // rendering (not "Go loading"), the probe message has painted (the pane
+      // loads asynchronously), and startup is over (the footer would otherwise
+      // read "Finishing startup..").
       const deadline = Date.now() + 150000;
       let screen = "";
       while (Date.now() < deadline) {
         screen = tui.capture();
-        if (/Go Usage[\s\S]*Go \d/.test(screen) && !/Go loading/.test(screen)) break;
+        const settled =
+          /Go Usage[\s\S]*Go \d/.test(screen) &&
+          !/Go loading/.test(screen) &&
+          screen.includes("usage display probe") &&
+          !/Finishing startup/.test(screen);
+        if (settled) break;
         await sleep(1000);
       }
       const ansi = tui.captureAnsi();
