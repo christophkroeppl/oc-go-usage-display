@@ -219,7 +219,7 @@ docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
 | `bun run test:unit` | helper tests + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
-| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks |
+| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks and the per-model mix rendered against a local fake provider |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
 Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects

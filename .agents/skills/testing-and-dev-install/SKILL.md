@@ -42,6 +42,10 @@ on the host). Nothing else touches it:
 
 - every TUI display test runs on `OPENCODE_OC_GO_MOCK=1`, because it asserts
   LAYOUT, and a layout assertion does not need live numbers;
+- the per-model mix, which needs real token accounting to exist at all, gets it
+  from a LOCAL fake provider (`test/helpers/fake-provider.js`): the real
+  `opencode-go` id pointed at a loopback SSE endpoint, so the host writes real
+  assistant messages with real usage. No key, no network, no tokens spent;
 - the container gate therefore needs no secret at all (compose.yml forwards
   none), which also makes it hermetic by construction;
 - one call per workflow run is the budget: do not add a "live" display variant
