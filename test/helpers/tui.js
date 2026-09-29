@@ -217,7 +217,7 @@ export async function createSessionWithModel({ url, directory, model, title }) {
 // absolute path, exactly like `oc-go-usage-display-init --target kilo` (Kilo
 // does not resolve `./...` against its config dir), so the e2e proves the
 // deployed copy resolves the host-provided solid-js/@opentui modules.
-export function writeTuiHostConfig({ host, repoDir, env, model }) {
+export function writeTuiHostConfig({ host, repoDir, env, model, provider }) {
   const configDir = host === "kilo" ? path.join(env.XDG_CONFIG_HOME, "kilo") : env.OPENCODE_CONFIG_DIR;
   fs.mkdirSync(configDir, { recursive: true });
   let serverSpec;
@@ -239,9 +239,14 @@ export function writeTuiHostConfig({ host, repoDir, env, model }) {
     serverSpec = "./plugins/oc-go-usage-display.ts";
     tuiSpec = "./plugins/oc-go-usage-display.tsx";
   }
+  // `provider` replaces one entry of the host's own catalog, which is how a test
+  // points a REAL provider id at a local endpoint (test/helpers/fake-provider.js).
+  // The id has to stay `opencode-go`: that is what the plugin's Go gate keys on.
+  const hostConfig = { $schema: "https://opencode.ai/config.json", model, plugin: [serverSpec] };
+  if (provider !== undefined) hostConfig.provider = provider;
   fs.writeFileSync(
     path.join(configDir, host === "kilo" ? "kilo.json" : "opencode.json"),
-    `${JSON.stringify({ $schema: "https://opencode.ai/config.json", model, plugin: [serverSpec] }, null, 2)}\n`,
+    `${JSON.stringify(hostConfig, null, 2)}\n`,
   );
   fs.writeFileSync(
     path.join(configDir, "tui.json"),
@@ -383,28 +388,47 @@ export function assertSidebarOrder(screen, { before = [], after = [] } = {}) {
 // End-to-end display flow against one host. Returns the model used and the
 // final captured screen; throws with the last screen when the surfaces never
 // render. The caller owns the tmp root and env.
-export async function runTuiDisplay({ host, binary, repoDir, env, expect, timeoutMs = 150000 }) {
-  const models = listProviderModels(binary, "opencode-go", { env, cwd: repoDir });
-  const model = pickProviderModel(models);
-  if (model === null) {
-    throw new Error(
-      `no opencode-go model reported by "${binary} models opencode-go" (models: ${JSON.stringify(models)}); ` +
-        "the provider catalog or provider key is missing in this environment",
-    );
+//
+// `sessionId` (with `model`) boots a session the caller already drove -- one
+// with real assistant messages, say -- instead of the `noReply` probe session,
+// and `provider` routes the model at a local endpoint.
+export async function runTuiDisplay({
+  host,
+  binary,
+  repoDir,
+  env,
+  expect,
+  timeoutMs = 150000,
+  sessionId: presetSessionId,
+  model: presetModel,
+  provider,
+}) {
+  let model = presetModel;
+  if (model === undefined) {
+    const models = listProviderModels(binary, "opencode-go", { env, cwd: repoDir });
+    model = pickProviderModel(models);
+    if (model === null) {
+      throw new Error(
+        `no opencode-go model reported by "${binary} models opencode-go" (models: ${JSON.stringify(models)}); ` +
+          "the provider catalog or provider key is missing in this environment",
+      );
+    }
   }
-  writeTuiHostConfig({ host, repoDir, env, model });
+  writeTuiHostConfig({ host, repoDir, env, model, provider });
 
-  const server = await startHostServer({ binary, env, cwd: repoDir });
-  let sessionId;
-  try {
-    sessionId = await createSessionWithModel({
-      url: server.url,
-      directory: repoDir,
-      model,
-      title: `tui-display-${host}`,
-    });
-  } finally {
-    server.stop();
+  let sessionId = presetSessionId;
+  if (sessionId === undefined) {
+    const server = await startHostServer({ binary, env, cwd: repoDir });
+    try {
+      sessionId = await createSessionWithModel({
+        url: server.url,
+        directory: repoDir,
+        model,
+        title: `tui-display-${host}`,
+      });
+    } finally {
+      server.stop();
+    }
   }
   await sleep(750);
 
