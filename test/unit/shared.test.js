@@ -273,7 +273,9 @@ test("extractWindow derives resetInSec (seconds until reset) from resetsAt", () 
 });
 
 test("extractSnapshotFromApiPayload maps the live payload's status to limited", () => {
-  const snapshot = extractSnapshotFromApiPayload(LIVE_USAGE_PAYLOAD);
+  // The clock is injected: a fixture with literal instants goes stale in
+  // wall-clock time, and the countdowns would silently become `null`.
+  const snapshot = extractSnapshotFromApiPayload(LIVE_USAGE_PAYLOAD, LIVE_NOW);
   assert.equal(snapshot?.source, "api");
   assert.equal(snapshot?.rolling?.status, "ok");
   assert.equal(snapshot?.rolling?.limited, false);

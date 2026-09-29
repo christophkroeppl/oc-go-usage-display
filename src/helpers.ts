@@ -20,8 +20,14 @@ import {
   resolveUsageHost,
   safeJoinPath,
   toNonEmptyString,
+  toUsageCount,
+  CACHE_RATE_DECIMALS,
+  CACHE_RATE_EMPTY,
+  GO_PROVIDER_ID,
+  KILO_MODEL_NAME_MAX_CHARS,
+  KILO_TOKEN_USAGE_ROWS,
 } from "./shared.js";
-import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
+import type { ModelUsage, UsageHost, UsageSnapshot, UsageTokens, UsageWindow } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Server: compact one-line snapshot summary (keeps the rolling reset suffix)
@@ -284,8 +290,15 @@ const ERROR_PERCENT = 90;
 // error instead of reassuring the eye.
 export function usageMeterSeverity(window: UsageWindow): UsageMeterSeverity {
   if (window.limited) return "error";
-  if (window.percent >= ERROR_PERCENT) return "error";
-  if (window.percent >= WARNING_PERCENT) return "warning";
+  return meterSeverityForPercent(window.percent);
+}
+
+// The threshold ladder on its own, so a gauge that is not backed by a plan
+// window (the per-model Go share) colors by the same rules.
+export function meterSeverityForPercent(percent: number): UsageMeterSeverity {
+  if (!Number.isFinite(percent)) return "muted";
+  if (percent >= ERROR_PERCENT) return "error";
+  if (percent >= WARNING_PERCENT) return "warning";
   return "muted";
 }
 
@@ -328,4 +341,147 @@ export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
     });
   }
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// TUI: session model usage (the integrated panel's replacement for Kilo's own
+// token-usage band)
+// ---------------------------------------------------------------------------
+//
+// The host hands over raw counts and a USD cost with no display metadata, so
+// every number crosses a formatter. The formatters below guard first: a bare
+// `Intl.NumberFormat` prints NaN as "NaN" and Infinity as "∞", and either one
+// silently stretches a sidebar column that is width-budgeted by the host.
+
+const COUNT_FORMAT = new Intl.NumberFormat("en-US");
+const CURRENCY_FORMAT = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+export function formatUsageCount(value: unknown): string {
+  return COUNT_FORMAT.format(toUsageCount(value));
+}
+
+export function formatUsageCost(value: unknown): string {
+  return CURRENCY_FORMAT.format(toUsageCount(value));
+}
+
+// Every bucket a token can land in. Cache is included because cached reads and
+// writes are billed work too; excluding them would make the per-model totals
+// disagree with the host's own `totals` row.
+export function usageTokenCount(tokens: UsageTokens): number {
+  return (
+    toUsageCount(tokens.input) +
+    toUsageCount(tokens.output) +
+    toUsageCount(tokens.reasoning) +
+    toUsageCount(tokens.cache.read) +
+    toUsageCount(tokens.cache.write)
+  );
+}
+
+// Kilo's cache rate: the read share of the three buckets a cache hit can be
+// served from. Output and reasoning are excluded on purpose — neither can be
+// cached, so counting them would deflate the rate towards a value that means
+// nothing.
+export function cacheRatePercent(tokens: UsageTokens): string {
+  const denominator =
+    toUsageCount(tokens.input) + toUsageCount(tokens.cache.read) + toUsageCount(tokens.cache.write);
+  if (denominator === 0) return CACHE_RATE_EMPTY;
+  return `${((toUsageCount(tokens.cache.read) / denominator) * 100).toFixed(CACHE_RATE_DECIMALS)}%`;
+}
+
+// A model's share of the Go tokens spent in this session tree. This is a share
+// of Go tokens and nothing else: it is not a share of the plan, a quota, or a
+// price, and it never carries a currency. A zero total is 0% rather than NaN so
+// the row still renders before any Go tokens are attributed.
+export function goSharePercent(modelTokens: unknown, totalGoTokens: unknown): number {
+  const total = toUsageCount(totalGoTokens);
+  if (total === 0) return 0;
+  return (toUsageCount(modelTokens) / total) * 100;
+}
+
+export function totalGoTokens(models: readonly ModelUsage[]): number {
+  let total = 0;
+  for (const model of models) {
+    if (model.providerID !== GO_PROVIDER_ID) continue;
+    total += usageTokenCount(model.tokens);
+  }
+  return total;
+}
+
+export type ModelProviderGroup = {
+  providerID: string;
+  providerName: string;
+  models: ModelUsage[];
+};
+
+// Group in first-seen order (the host's own `models[]` order), which keeps the
+// active provider on top. A provider with no catalog entry falls back to its
+// raw id rather than dropping its models.
+export function groupModelsByProvider(
+  models: readonly ModelUsage[],
+  providerNames: ReadonlyMap<string, string> = new Map(),
+): ModelProviderGroup[] {
+  const groups = new Map<string, ModelProviderGroup>();
+  for (const model of models) {
+    const group = groups.get(model.providerID) ?? {
+      providerID: model.providerID,
+      providerName: providerNames.get(model.providerID) ?? model.providerID,
+      models: [],
+    };
+    group.models.push(model);
+    groups.set(model.providerID, group);
+  }
+  return [...groups.values()];
+}
+
+// Kilo's truncation: a single ellipsis appended to a fixed-width budget, never
+// a trailing "..." that would make the budget worth two extra cells.
+export function truncateModelName(value: string, max: number = KILO_MODEL_NAME_MAX_CHARS): string {
+  if (value.length <= max) return value;
+  const budget = Math.max(max - 1, 0);
+  return `${value.slice(0, budget)}…`;
+}
+
+// Kilo's display normalization, applied before truncation: strip a `vendor:`
+// prefix, a lone leading `vendor/`, and a trailing discount badge, then split a
+// letter run that runs straight into digits. Without it a catalog name like
+// "anthropic/claude-sonnet-4" spends the whole 19-cell budget on the vendor.
+export function displayModelName(name: string): string {
+  return name
+    .trim()
+    .replace(/^[^:]+:\s+/, "")
+    .replace(/^[^/\s]+\/(?=[^/]+$)/, "")
+    .replace(/\s*\([^)]*%\s*off[^)]*\)\s*$/i, "")
+    .replace(/^([A-Za-z]{2,})(?=\d)/, "$1 ")
+    .replace(/\s+/g, " ");
+}
+
+export function modelDisplayName(catalogName: string | null, modelID: string): string {
+  const raw = toNonEmptyString(catalogName) ?? toNonEmptyString(modelID) ?? "";
+  return truncateModelName(displayModelName(raw));
+}
+
+// One row per entry of KILO_TOKEN_USAGE_ROWS, in that order. A label with no
+// value is dropped rather than rendered blank, so the row list and the constant
+// can only disagree in a way the unit tier fails on.
+export function buildTokenUsageRows(totals: { cost: number; tokens: UsageTokens }): UsageRow[] {
+  const values: Readonly<Record<string, string>> = {
+    Input: formatUsageCount(totals.tokens.input),
+    Output: formatUsageCount(totals.tokens.output),
+    Reasoning: formatUsageCount(totals.tokens.reasoning),
+    "Cache read": formatUsageCount(totals.tokens.cache.read),
+    "Cache write": formatUsageCount(totals.tokens.cache.write),
+    "Cache rate": cacheRatePercent(totals.tokens),
+    Cost: formatUsageCost(totals.cost),
+  };
+  return KILO_TOKEN_USAGE_ROWS.flatMap((label) => {
+    const value = values[label];
+    return value === undefined ? [] : [{ label, value }];
+  });
+}
+
+// The per-model token breakdown shown when a model row is expanded: the same
+// labels and order as the totals block, minus `Cost`, which the model row
+// already carries in its own cost column.
+export function buildModelTokenRows(tokens: UsageTokens): UsageRow[] {
+  return buildTokenUsageRows({ cost: 0, tokens }).filter((row) => row.label !== "Cost");
 }

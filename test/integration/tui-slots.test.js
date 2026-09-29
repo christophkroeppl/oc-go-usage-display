@@ -55,7 +55,29 @@ const kiloTui = kiloTuiModule.default.tui;
 // depends on nothing. Only the surface the plugin actually uses is provided.
 // `pluginStates` seeds which plugin ids the host reports as on/off so the
 // integrated-mode panel switch can be observed instead of guessed at.
-function makeStubApi({ pluginStates = { "internal:kilo-sidebar-usage": true } } = {}) {
+//
+// `modelUsageCalls` records every `client.kilocode.sessionModelUsage` request so
+// the integrated panel's data source is observable: the endpoint is host-owned,
+// so "which call does the panel make, and for which session" has to be pinned
+// here rather than inferred from a rendered pane. `modelUsage` is the payload
+// it answers with; setting it to `null` makes the call reject, which is the
+// failure the panel has to survive.
+function makeStubApi({
+  pluginStates = { "internal:kilo-sidebar-usage": true },
+  modelUsage = {
+    sessionIDs: ["ses_stub"],
+    totals: { steps: 2, cost: 0.5, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } } },
+    models: [
+      {
+        providerID: "opencode-go",
+        modelID: "mimo-v2.6-pro",
+        steps: 2,
+        cost: 0.5,
+        tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } },
+      },
+    ],
+  },
+} = {}) {
   const kv = new Map();
   const slotRegistrations = [];
   const commandRegistrations = [];
@@ -63,6 +85,7 @@ function makeStubApi({ pluginStates = { "internal:kilo-sidebar-usage": true } } 
   const disposers = [];
   const pluginTransitions = [];
   const logs = [];
+  const modelUsageCalls = [];
 
   const pluginEntry = (id, enabled) => ({
     id,
@@ -125,10 +148,26 @@ function makeStubApi({ pluginStates = { "internal:kilo-sidebar-usage": true } } 
       },
     },
     route: { current: { name: "session" } },
-    client: { app: { async log(entry) { logs.push(entry); } } },
+    client: {
+      app: { async log(entry) { logs.push(entry); } },
+      kilocode: {
+        async sessionModelUsage(parameters) {
+          modelUsageCalls.push(parameters);
+          if (modelUsage === null) throw new Error("model-usage unavailable");
+          return { data: modelUsage, error: undefined };
+        },
+      },
+    },
+    state: {
+      // The sidebar's provider gate reads this at init; without it the slot
+      // renders null and nothing below it is reachable.
+      config: { model: "opencode-go/mimo-v2.6-pro" },
+      provider: [{ id: "opencode-go", name: "OpenCode Go", models: { "mimo-v2.6-pro": { name: "MiMo-V2.6-Pro" } } }],
+      session: { get: () => undefined },
+    },
   };
 
-  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions };
+  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls };
 }
 
 // Slot names captured by one `slots.register` call.
@@ -415,5 +454,80 @@ test("a host that cannot switch its own panel still initializes", async () => {
     );
   } finally {
     for (const dispose of disposers) dispose();
+  }
+});
+
+// --- integrated panel: the host endpoint the panel depends on ---
+
+// The integrated sidebar reads Kilo's per-session model usage through
+// `client.kilocode.sessionModelUsage`. That call happens while the host renders
+// the slot, which needs the host's own renderer, so the stub can only prove the
+// part that is observable here: the factory initializes against a host that has
+// the endpoint, survives one that does not, and never throws into the host's
+// render pass. The route and the response shape are pinned against the real
+// host by test/e2e/kilo-contract.test.js.
+function sidebarRender(slotRegistrations) {
+  const sidebar = slotRegistrations.find((registration) =>
+    registeredSlotNames(registration).includes("sidebar_content"),
+  );
+  assert.ok(sidebar, "the plugin must register sidebar_content");
+  return sidebar.slots.sidebar_content;
+}
+
+test("integrated mode initializes against a host that serves model usage", async () => {
+  const stub = makeStubApi();
+
+  try {
+    await assert.doesNotReject(() => kiloTui(stub.api, { sidebar_mode: "integrated" }));
+    assert.equal(typeof sidebarRender(stub.slotRegistrations), "function");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("integrated mode initializes against a host with no model-usage endpoint", async () => {
+  // An older Kilo whose SDK has no `kilocode.sessionModelUsage`: the panel has to
+  // degrade to its unavailable state, never take the host down with it.
+  const stub = makeStubApi();
+  delete stub.api.client.kilocode;
+
+  try {
+    await assert.doesNotReject(() => kiloTui(stub.api, { sidebar_mode: "integrated" }));
+    assert.equal(typeof sidebarRender(stub.slotRegistrations), "function");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("integrated mode initializes when the model-usage endpoint always fails", async () => {
+  const stub = makeStubApi();
+  stub.api.client.kilocode.sessionModelUsage = async () => {
+    throw new Error("model-usage unavailable");
+  };
+
+  try {
+    await assert.doesNotReject(() => kiloTui(stub.api, { sidebar_mode: "integrated" }));
+    assert.equal(typeof sidebarRender(stub.slotRegistrations), "function");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("the sidebar render function never throws into the host", async () => {
+  for (const mode of ["integrated", "standalone"]) {
+    const stub = makeStubApi();
+    stub.api.state = undefined;
+    stub.api.client.kilocode = undefined;
+
+    try {
+      await kiloTui(stub.api, { sidebar_mode: mode });
+      const render = sidebarRender(stub.slotRegistrations);
+      // A render that returns null is fine (the stub has no renderer, and the
+      // panel's own provider gate may decline); one that throws is not.
+      assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_probe" }), mode);
+      assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "" }), mode);
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
   }
 });

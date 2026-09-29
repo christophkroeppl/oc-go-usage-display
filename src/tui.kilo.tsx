@@ -66,6 +66,22 @@
 //     slot registry is unreachable from a plugin), so integrated mode retires
 //     it through `api.plugins.deactivate` — the runtime form of the
 //     `plugin_enabled` map in tui.json, and reversible via `activate`.
+//     Retiring it also means replacing what it drew, so the 150 band in
+//     integrated mode renders three sections instead of one block:
+//       Go Usage         the compact plan readout, as in standalone
+//       Session Tokens   Kilo's `Token Usage` rows, from the host endpoint.
+//                        Deliberately not titled `Token Usage`: that is the
+//                        name of the panel integrated mode retired, and a
+//                        second header with it would be indistinguishable
+//                        from the panel that was supposed to go.
+//       Models (N)      Kilo's per-model table, models grouped by provider.
+//                        Inside the `OpenCode Go` group the `Go Plan` meters
+//                        sit between the provider header and the model rows,
+//                        and each Go model row carries a `Go share` line —
+//                        its share of the Go tokens in this session tree,
+//                        never of the plan, and never a price.
+//     The two sections collapse like Kilo's own (local state, both expanded
+//     by default), and model rows fold per model.
 //   The mode is switched live by `oc-go-usage-display.toggle-sidebar-mode`
 //   (title `Go usage: toggle sidebar mode`); the host panel follows
 //   immediately, the slot ORDER is bound at registration and moves on the next
@@ -75,15 +91,19 @@
 // $XDG_DATA_HOME/kilo/auth.json, then $KILO_CONFIG_DIR / ~/.config/kilo,
 // `opencode-go` key else `opencode` key) as Bearer for
 // GET https://opencode.ai/zen/go/v1/usage, refreshed on a 60s poll plus
-// `session.updated` / `message.updated` events. The opencode bundle reads the
-// opencode stores instead; each host reads only its own. Failures keep stale
-// data and never break the host; errors go to api.client.app.log (never
-// console). Secrets are never logged.
+// `session.updated` / `message.updated` events. Integrated mode's per-session
+// split comes from the host's own `client.kilocode.sessionModelUsage`
+// (GET /session/{sessionID}/model-usage), refreshed on the same events Kilo's
+// panel uses and never on a timer. The opencode bundle reads the opencode
+// stores instead; each host reads only its own. Failures keep stale data and
+// never break the host; errors go to api.client.app.log (never console).
+// Secrets are never logged.
 //
 // Coexistence: the server plugin `src/index.ts` (`go_usage` tool only)
 // stays as the headless/Desktop fallback. This module exports
 // only `tui` (never `server`) under id `oc-go-usage-display`.
 
+import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { PluginOptions } from "@kilocode/plugin";
 import type {
   TuiPlugin,
@@ -92,33 +112,64 @@ import type {
   TuiSlotContext,
   TuiTheme,
 } from "@kilocode/plugin/tui";
-import { For, Show, createEffect, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import {
+  buildModelTokenRows,
   buildPlanRows,
+  buildTokenUsageRows,
   buildUsageRows,
   formatStatusline,
+  formatUsageCost,
+  formatUsageCount,
+  goSharePercent,
+  groupModelsByProvider,
   isDisplayMode,
   isSnapshotEmpty,
+  meterSeverityForPercent,
+  modelDisplayName,
   parseBooleanFlag,
   parseSidebarMode,
   surfaceSelectionFromDisplayMode,
+  totalGoTokens,
+  usageMeterBar,
+  usageTokenCount,
   DEFAULT_SIDEBAR_MODE,
 } from "./helpers.js";
-import type { PlanRow, SidebarMode, SurfaceSelection, UsageMeterSeverity } from "./helpers.js";
+import type {
+  ModelProviderGroup,
+  PlanRow,
+  SidebarMode,
+  SurfaceSelection,
+  UsageMeterSeverity,
+  UsageRow,
+} from "./helpers.js";
 import {
   errorMessage,
   extractSnapshotFromApiPayload,
   isRecord,
   mockSnapshot,
+  parseSessionModelUsage,
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
   hostEnv,
+  GO_PROVIDER_ID,
+  GO_PLAN_HEADING,
+  INTEGRATED_EMPTY_LABEL,
+  INTEGRATED_GO_SHARE_LABEL,
+  INTEGRATED_LOADING_LABEL,
+  INTEGRATED_MODELS_SECTION_LABEL,
+  INTEGRATED_TOKENS_SECTION_LABEL,
+  INTEGRATED_UNAVAILABLE_LABEL,
+  KILO_COLLAPSED_GLYPH,
+  KILO_COST_COLUMN_WIDTH,
+  KILO_EXPANDED_GLYPH,
   KILO_INTEGRATED_SLOT_ORDER,
   KILO_SLOT_ORDER,
+  KILO_STEPS_COLUMN_WIDTH,
   KILO_USAGE_PANEL_PLUGIN_ID,
 } from "./shared.js";
-import type { UsageHost, UsageSnapshot } from "./shared.js";
+import type { ModelUsage, SessionModelUsage, UsageHost, UsageSnapshot } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -129,7 +180,11 @@ const POLL_INTERVAL_MS = 60_000;
 const EVENT_TTL_MS = 15_000;
 const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
-const GO_PROVIDER_ID = "opencode-go";
+
+// The endpoint reports the whole top-level session tree, so a change in a child
+// session still changes our numbers. The walk is bounded because a cycle in the
+// host's parent chain must not hang a render.
+const SESSION_TREE_WALK_LIMIT = 32;
 
 // This entry is the Kilo build, so it resolves `KILO_OC_GO_*` and never reads
 // an opencode-prefixed name.
@@ -327,9 +382,97 @@ async function logUsageError(api: TuiPluginApi, message: string): Promise<void> 
   }
 }
 
+// The only data source for the integrated panel. This is the same typed call
+// Kilo's own panel makes (`client.kilocode.sessionModelUsage`), which the SDK
+// resolves to `GET /session/{sessionID}/model-usage`; that path is a PATH param
+// and is pinned against the real host by test/e2e/kilo-contract.test.js,
+// because `/kilocode/sessionModelUsage` 404s and `/session/model-usage` collides
+// with `/session/:id`. No timer: the panel refreshes on host events instead.
+async function fetchSessionModelUsage(
+  api: TuiPluginApi,
+  sessionId: string,
+): Promise<SessionModelUsage | null> {
+  if (sessionId.length === 0) return null;
+  try {
+    const result = await api.client.kilocode.sessionModelUsage({ sessionID: sessionId });
+    return parseSessionModelUsage(result.data);
+  } catch {
+    return null;
+  }
+}
+
+function readProviderDisplayNames(api: TuiPluginApi): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  try {
+    for (const provider of api.state?.provider ?? []) {
+      const id = toNonEmptyString(provider.id);
+      if (id === null) continue;
+      names.set(id, toNonEmptyString(provider.name) ?? id);
+    }
+  } catch {
+    // The catalog is optional: a group falls back to its raw provider id.
+  }
+  return names;
+}
+
+function readModelCatalogName(api: TuiPluginApi, model: ModelUsage): string | null {
+  try {
+    const provider = api.state?.provider?.find((entry) => entry.id === model.providerID);
+    return toNonEmptyString(provider?.models?.[model.modelID]?.name);
+  } catch {
+    return null;
+  }
+}
+
+// Whether `sessionId` is the rendered session or one of its descendants: the
+// endpoint sums the tree, so a step finished in a child session moves our
+// numbers too. Mirrors the check Kilo makes before it refetches.
+function isInSessionTree(api: TuiPluginApi, sessionId: string, rootId: string): boolean {
+  if (sessionId === rootId) return true;
+  let current = sessionId;
+  for (let depth = 0; depth < SESSION_TREE_WALK_LIMIT; depth += 1) {
+    let parent: string | undefined;
+    try {
+      parent = api.state?.session.get(current)?.parentID;
+    } catch {
+      return false;
+    }
+    if (parent === undefined || parent.length === 0) return false;
+    if (parent === rootId) return true;
+    current = parent;
+  }
+  return false;
+}
+
+function trackSubscription(unsubscribes: Array<() => void>, subscribe: () => (() => void) | undefined): void {
+  try {
+    const unsubscribe = subscribe();
+    if (typeof unsubscribe === "function") unsubscribes.push(unsubscribe);
+  } catch {
+    // Event subscription is additive; a failure must not abort the panel.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // TUI plugin
 // ---------------------------------------------------------------------------
+//
+// Reactivity in this entry is hand-rolled on purpose. The deployed bundle is
+// compiled by esbuild's automatic JSX rather than Solid's compiler, so a child
+// written as a plain value is an ordinary evaluated expression: the host is free
+// to reuse the element it was handed instead of re-invoking this subtree when
+// something changes. A FUNCTION child is the one form the renderer is documented
+// to re-evaluate (`insertExpression` wraps it in a render effect), so every
+// region whose contents can change after mount is written as a function child
+// and every prop carrying a changing value is passed as an accessor. Wrapping a
+// region that happens to be static costs nothing and removes the question.
+//
+// This was verified against the real host in both directions rather than
+// assumed: the collapse toggle and an async snapshot arriving after mount both
+// re-render correctly, which is the property this pattern exists to guarantee.
+function reactiveChild(accessor: () => unknown): JSX.Element {
+  return accessor as unknown as JSX.Element;
+}
 
 // The factory body lives here so the exported `goUsageTui` can wrap the whole
 // initialization in a single fail-safe boundary. A throwing factory would
@@ -443,6 +586,14 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     return theme.current.textMuted;
   }
 
+  // The plan meters, or nothing at all: an unavailable snapshot has no windows,
+  // and a missing one is still loading.
+  function currentPlanRows(): PlanRow[] {
+    const snapshot = usageSnapshot();
+    if (snapshot === null || snapshot.source === "unavailable") return [];
+    return buildPlanRows(snapshot);
+  }
+
   // Kilo's own row grammar: a row box with the label muted and pushed away
   // from the value, which here is the meter plus its percent.
   function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
@@ -476,7 +627,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     return (
       <box flexDirection="column">
         <text fg={props.theme.current.text}>
-          <b>Go Plan</b>
+          <b>{GO_PLAN_HEADING}</b>
         </text>
         <box flexDirection="column" paddingLeft={1}>
           <For each={props.rows}>
@@ -487,7 +638,10 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
-  function GoSidebarPanel(props: { theme: TuiTheme }) {
+  // The compact `Go Usage` block. Integrated mode renders it without the plan
+  // section, because there the plan lives inside the OpenCode Go model group
+  // where it reads as part of that provider's usage.
+  function GoUsageBlock(props: { theme: TuiTheme; withPlan: boolean }) {
     createEffect(() => {
       const snapshot = usageSnapshot();
       if (snapshot !== null && snapshot.source === "unavailable") {
@@ -497,48 +651,446 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         );
       }
     });
+    const body = createMemo(() => {
+      const snapshot = usageSnapshot();
+      if (snapshot === null) {
+        return (
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            Go loading…
+          </text>
+        );
+      }
+      // Rejected keys (and other unavailable snapshots) must surface a row
+      // instead of a bare header with zero rows. The statusline stays hidden for
+      // unavailable (isSnapshotEmpty -> null).
+      if (snapshot.source === "unavailable") {
+        return (
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            Go n/a ({snapshot.apiError ?? "unavailable"})
+          </text>
+        );
+      }
+      const planRows = buildPlanRows(snapshot);
+      return (
+        <box flexDirection="column">
+          <For each={buildUsageRows(snapshot)}>
+            {(row) => (
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                {row.label} {row.value}
+              </text>
+            )}
+          </For>
+          <Show when={props.withPlan && planRows.length > 0}>
+            <GoPlanSection theme={props.theme} rows={planRows} />
+          </Show>
+        </box>
+      );
+    });
     return (
       <box flexDirection="column">
         <text fg={props.theme.current.text}>
           <b>Go Usage</b>
         </text>
-        <Show
-          when={usageSnapshot()}
-          fallback={
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Go loading…
+        {reactiveChild(body)}
+      </box>
+    );
+  }
+
+  function GoSidebarPanel(props: { theme: TuiTheme }) {
+    return <GoUsageBlock theme={props.theme} withPlan={true} />;
+  }
+
+  // Kilo's `space-between` label/value row, the grammar both the totals block
+  // and every per-model breakdown use.
+  function LabeledValueRow(props: { theme: TuiTheme; row: UsageRow }) {
+    return (
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {props.row.label}
+        </text>
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {props.row.value}
+        </text>
+      </box>
+    );
+  }
+
+  function SectionHeader(props: {
+    theme: TuiTheme;
+    label: string;
+    expanded: () => boolean;
+    count: () => number | null;
+    onToggle: () => void;
+  }) {
+    return (
+      <box flexDirection="row" gap={1} flexShrink={0} onMouseDown={props.onToggle}>
+        <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
+          {reactiveChild(() => (props.expanded() ? KILO_EXPANDED_GLYPH : KILO_COLLAPSED_GLYPH))}
+        </text>
+        <text fg={props.theme.current.text} wrapMode="none">
+          <b>
+            {reactiveChild(() => {
+              const count = props.count();
+              return count === null ? props.label : `${props.label} (${count})`;
+            })}
+          </b>
+        </text>
+      </box>
+    );
+  }
+
+  // A collapsible region: the header reacts to its own state, and the body is a
+  // memo so an unchanged subtree keeps the very same element instead of being
+  // rebuilt on every unrelated signal write.
+  function CollapsibleSection(props: {
+    theme: TuiTheme;
+    label: string;
+    count: () => number | null;
+    expanded: () => boolean;
+    onToggle: () => void;
+    body: () => JSX.Element;
+  }) {
+    return (
+      <box flexDirection="column">
+        <SectionHeader
+          theme={props.theme}
+          label={props.label}
+          count={props.count}
+          expanded={props.expanded}
+          onToggle={props.onToggle}
+        />
+        <box flexDirection="column" gap={1}>
+          {reactiveChild(() => (props.expanded() ? props.body() : null))}
+        </box>
+      </box>
+    );
+  }
+
+  function GoShareRow(props: { theme: TuiTheme; percent: number }) {
+    const rounded = Math.round(props.percent);
+    return (
+      <box flexDirection="row" gap={1}>
+        <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+          {INTEGRATED_GO_SHARE_LABEL}
+        </text>
+        <box flexDirection="row" flexShrink={0}>
+          <text fg={meterColor(props.theme, meterSeverityForPercent(rounded))} wrapMode="none">
+            {usageMeterBar(rounded)}
+          </text>
+          <text fg={props.theme.current.textMuted} wrapMode="none" marginLeft={1}>
+            {rounded}%
+          </text>
+        </box>
+      </box>
+    );
+  }
+
+  function ModelUsageRow(props: {
+    theme: TuiTheme;
+    model: ModelUsage;
+    isGo: boolean;
+    expanded: () => boolean;
+    goShare: () => number;
+    onToggle: () => void;
+  }) {
+    const detail = createMemo(() =>
+      props.expanded() ? (
+        <box flexDirection="column" paddingLeft={2}>
+          <For each={buildModelTokenRows(props.model.tokens)}>
+            {(row) => <LabeledValueRow theme={props.theme} row={row} />}
+          </For>
+        </box>
+      ) : null,
+    );
+    return (
+      <box flexDirection="column" gap={1}>
+        <box flexDirection="row" gap={1} flexShrink={0} onMouseDown={props.onToggle}>
+          <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
+            {reactiveChild(() => (props.expanded() ? KILO_EXPANDED_GLYPH : KILO_COLLAPSED_GLYPH))}
+          </text>
+          <box flexGrow={1} minWidth={0} overflow="hidden">
+            <text fg={props.theme.current.text} wrapMode="none">
+              <b>{modelDisplayName(readModelCatalogName(api, props.model), props.model.modelID)}</b>
             </text>
-          }
-        >
-          {(snapshot) => {
-            const snap = snapshot();
-            // Rejected keys (and other unavailable snapshots) must surface a
-            // row instead of a bare header with zero rows. Statusline stays
-            // hidden for unavailable (isSnapshotEmpty -> null).
-            if (snap.source === "unavailable") {
-              return (
-                <text fg={props.theme.current.textMuted} wrapMode="none">
-                  Go n/a ({snap.apiError ?? "unavailable"})
-                </text>
-              );
-            }
-            const planRows = buildPlanRows(snap);
+          </box>
+          <box
+            width={KILO_STEPS_COLUMN_WIDTH}
+            flexDirection="row"
+            flexShrink={0}
+            justifyContent="flex-end"
+          >
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              {formatUsageCount(props.model.steps)}
+            </text>
+          </box>
+          <box
+            width={KILO_COST_COLUMN_WIDTH}
+            flexDirection="row"
+            flexShrink={0}
+            justifyContent="flex-end"
+          >
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              {formatUsageCost(props.model.cost)}
+            </text>
+          </box>
+        </box>
+        <Show when={props.isGo}>
+          <box paddingLeft={2}>
+            <GoShareRow theme={props.theme} percent={props.goShare()} />
+          </box>
+        </Show>
+        {reactiveChild(detail)}
+      </box>
+    );
+  }
+
+  function ProviderUsageGroup(props: {
+    theme: TuiTheme;
+    group: ModelProviderGroup;
+    planRows: PlanRow[];
+    goTotal: number;
+    expandedModels: () => ReadonlySet<string>;
+    onToggleModel: (key: string) => void;
+  }) {
+    const isGo = props.group.providerID === GO_PROVIDER_ID;
+    return (
+      <box flexDirection="column" gap={1}>
+        <text fg={props.theme.current.text} wrapMode="none">
+          {props.group.providerName}
+        </text>
+        <Show when={isGo && props.planRows.length > 0}>
+          <GoPlanSection theme={props.theme} rows={props.planRows} />
+        </Show>
+        <box flexDirection="row" gap={1}>
+          <box width={1} flexShrink={0} />
+          <text flexGrow={1} minWidth={0} fg={props.theme.current.textMuted} wrapMode="none">
+            Model
+          </text>
+          <box
+            width={KILO_STEPS_COLUMN_WIDTH}
+            flexDirection="row"
+            flexShrink={0}
+            justifyContent="flex-end"
+          >
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              Steps
+            </text>
+          </box>
+          <box
+            width={KILO_COST_COLUMN_WIDTH}
+            flexDirection="row"
+            flexShrink={0}
+            justifyContent="flex-end"
+          >
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              Cost
+            </text>
+          </box>
+        </box>
+        <For each={props.group.models}>
+          {(model) => {
+            const key = `${model.providerID}/${model.modelID}`;
             return (
-              <>
-                <For each={buildUsageRows(snap)}>
-                  {(row) => (
-                    <text fg={props.theme.current.textMuted} wrapMode="none">
-                      {row.label} {row.value}
-                    </text>
-                  )}
-                </For>
-                <Show when={planRows.length > 0}>
-                  <GoPlanSection theme={props.theme} rows={planRows} />
-                </Show>
-              </>
+              <ModelUsageRow
+                theme={props.theme}
+                model={model}
+                isGo={isGo}
+                expanded={() => props.expandedModels().has(key)}
+                goShare={() => goSharePercent(usageTokenCount(model.tokens), props.goTotal)}
+                onToggle={() => props.onToggleModel(key)}
+              />
             );
           }}
-        </Show>
+        </For>
+      </box>
+    );
+  }
+
+  function ModelsSection(props: {
+    theme: TuiTheme;
+    usage: () => SessionModelUsage | null;
+    planRows: () => PlanRow[];
+  }) {
+    const [isExpanded, setIsExpanded] = createSignal<boolean>(true);
+    const [expandedModels, setExpandedModels] = createSignal<ReadonlySet<string>>(new Set());
+
+    // Fold state is local, like Kilo's: it resets on remount rather than
+    // outliving the session it described.
+    function toggleModel(key: string): void {
+      setExpandedModels((current) => {
+        const next = new Set(current);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      });
+    }
+
+    const modelCount = createMemo(() => props.usage()?.models.length ?? 0);
+
+    const body = createMemo(() => {
+      const usage = props.usage();
+      const models = usage?.models ?? [];
+      const providerNames = readProviderDisplayNames(api);
+      const grouped = groupModelsByProvider(models, providerNames);
+      // A failed or still-loading request leaves no model list, and the Go plan
+      // would disappear with it. A model-less Go group keeps the plan on screen:
+      // it comes from a different endpoint, and those numbers stay ours to show
+      // regardless of what the host's per-model request did.
+      // A failed or still-loading request leaves no model list, and the Go plan
+      // would disappear with it. A model-less Go group keeps the plan on screen:
+      // it comes from a different endpoint, and those numbers stay ours to show
+      // regardless of what the host's per-model request did.
+      const groups =
+        grouped.length === 0 && props.planRows().length > 0
+          ? [
+              {
+                providerID: GO_PROVIDER_ID,
+                providerName: providerNames.get(GO_PROVIDER_ID) ?? GO_PROVIDER_ID,
+                models: [],
+              },
+            ]
+          : grouped;
+      const goTotal = totalGoTokens(models);
+      return (
+        <box flexDirection="column" gap={1} paddingTop={1}>
+          <Show when={models.length === 0}>
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              {INTEGRATED_EMPTY_LABEL}
+            </text>
+          </Show>
+          <For each={groups}>
+            {(group) => (
+              <ProviderUsageGroup
+                theme={props.theme}
+                group={group}
+                planRows={props.planRows()}
+                goTotal={goTotal}
+                expandedModels={expandedModels}
+                onToggleModel={toggleModel}
+              />
+            )}
+          </For>
+        </box>
+      );
+    });
+
+    return (
+      <CollapsibleSection
+        theme={props.theme}
+        label={INTEGRATED_MODELS_SECTION_LABEL}
+        count={modelCount}
+        expanded={isExpanded}
+        onToggle={() => setIsExpanded((current) => !current)}
+        body={body}
+      />
+    );
+  }
+
+  // Integrated mode's replacement for Kilo's own 150 band: the compact Go
+  // readout, Kilo's session token totals, and Kilo's per-model table with the
+  // plan nested inside the OpenCode Go group.
+  function GoIntegratedPanel(props: { theme: TuiTheme; sessionId: string }) {
+    const [usage, setUsage] = createSignal<SessionModelUsage | null>(null);
+    const [loadFailed, setLoadFailed] = createSignal<boolean>(false);
+    const [refetchToken, setRefetchToken] = createSignal<number>(0);
+    const [isTokensExpanded, setIsTokensExpanded] = createSignal<boolean>(true);
+
+    createEffect(() => {
+      const sessionId = props.sessionId;
+      refetchToken();
+      if (sessionId.length === 0) return;
+      let cancelled = false;
+      void fetchSessionModelUsage(api, sessionId).then((result) => {
+        if (cancelled) return;
+        setUsage(result);
+        // Log the transition, not every event: a step-finish storm must not
+        // fill the host log with the same line.
+        if (result === null && !loadFailed()) {
+          void logUsageError(api, "Session model usage unavailable (request failed)");
+        }
+        setLoadFailed(result === null);
+      });
+      onCleanup(() => {
+        cancelled = true;
+      });
+    });
+
+    createEffect(() => {
+      const sessionId = props.sessionId;
+      const unsubscribes: Array<() => void> = [];
+      const inTree = (id: string): boolean => isInSessionTree(api, id, sessionId);
+      const refetch = (): void => {
+        setRefetchToken((current) => current + 1);
+      };
+
+      trackSubscription(unsubscribes, () =>
+        api.event.on("message.part.updated", (event) => {
+          if (event.properties.part.type !== "step-finish") return;
+          if (inTree(event.properties.sessionID)) refetch();
+        }),
+      );
+      trackSubscription(unsubscribes, () =>
+        api.event.on("message.part.removed", (event) => {
+          if (inTree(event.properties.sessionID)) refetch();
+        }),
+      );
+      trackSubscription(unsubscribes, () =>
+        api.event.on("message.removed", (event) => {
+          if (inTree(event.properties.sessionID)) refetch();
+        }),
+      );
+      trackSubscription(unsubscribes, () =>
+        api.event.on("session.created", (event) => {
+          if (inTree(event.properties.sessionID)) refetch();
+        }),
+      );
+      trackSubscription(unsubscribes, () =>
+        api.event.on("session.deleted", (event) => {
+          if (inTree(event.properties.sessionID)) refetch();
+        }),
+      );
+      trackSubscription(unsubscribes, () => api.event.on("server.connected", refetch));
+
+      onCleanup(() => {
+        for (const unsubscribe of unsubscribes) {
+          try {
+            unsubscribe();
+          } catch {
+            // A throwing unsubscribe must not stop the rest of the teardown.
+          }
+        }
+      });
+    });
+
+    const tokenBody = createMemo(() => {
+      const data = usage();
+      if (data === null) {
+        return (
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            {loadFailed() ? INTEGRATED_UNAVAILABLE_LABEL : INTEGRATED_LOADING_LABEL}
+          </text>
+        );
+      }
+      return (
+        <box flexDirection="column">
+          <For each={buildTokenUsageRows(data.totals)}>
+            {(row) => <LabeledValueRow theme={props.theme} row={row} />}
+          </For>
+        </box>
+      );
+    });
+
+    return (
+      <box flexDirection="column" gap={1}>
+        <GoUsageBlock theme={props.theme} withPlan={false} />
+        <CollapsibleSection
+          theme={props.theme}
+          label={INTEGRATED_TOKENS_SECTION_LABEL}
+          count={() => null}
+          expanded={isTokensExpanded}
+          onToggle={() => setIsTokensExpanded((current) => !current)}
+          body={tokenBody}
+        />
+        <ModelsSection theme={props.theme} usage={usage} planRows={currentPlanRows} />
       </box>
     );
   }
@@ -570,6 +1122,12 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
               if (!isGoUsageProvider(activeProviderId())) return null;
               if (api.route.current.name !== "session") return null;
               if (isSidebarCollapsed()) return null;
+              // Read live so the mode command takes effect at once, the same way
+              // the host panel follows it; only the ORDER stays bound to
+              // registration.
+              if (sidebarMode === "integrated") {
+                return <GoIntegratedPanel theme={ctx.theme} sessionId={props.session_id} />;
+              }
               return <GoSidebarPanel theme={ctx.theme} />;
             } catch {
               return null;

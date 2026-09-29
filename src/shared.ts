@@ -212,6 +212,14 @@ export function toFiniteNumber(value: unknown): number | null {
   return value;
 }
 
+// A host-reported count or cost, coerced into something a formatter can print.
+// Clamping at 0 also folds `-0` into `0`, so no renderer can emit "-0" for a
+// quantity that is zero.
+export function toUsageCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(value, 0);
+}
+
 export function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -283,6 +291,42 @@ export const KILO_TOKEN_USAGE_ROWS: readonly string[] = [
   "Cache rate",
   "Cost",
 ];
+
+// The provider whose plan this plugin exists for, and whose per-model group
+// carries the Go meters.
+export const GO_PROVIDER_ID = "opencode-go";
+
+// Layout constants of the Models table Kilo renders, in the same block as the
+// ladder above: a Kilo release that re-lays the table changes these, and a
+// constant is the only thing a drift check can assert against.
+export const KILO_MODEL_NAME_MAX_CHARS = 19;
+export const KILO_STEPS_COLUMN_WIDTH = 5;
+export const KILO_COST_COLUMN_WIDTH = 9;
+
+// Kilo's disclosure glyphs: the section caret and the per-model fold marker.
+export const KILO_COLLAPSED_GLYPH = "▶";
+export const KILO_EXPANDED_GLYPH = "▾";
+
+// Cache rate is a share of the three buckets a cache hit can be served from, so
+// it is meaningless when all of them are zero — and a zero denominator is the
+// normal state of a session that never hit a cache. A dash, not "0.0%".
+export const CACHE_RATE_DECIMALS = 1;
+export const CACHE_RATE_EMPTY = "-";
+
+// Section titles of the integrated panel. The token section is deliberately NOT
+// "Token Usage": integrated mode retires the host panel of that name, and
+// re-printing the title would be indistinguishable from the panel that was
+// supposed to go.
+export const INTEGRATED_TOKENS_SECTION_LABEL = "Session Tokens";
+export const INTEGRATED_MODELS_SECTION_LABEL = "Models";
+export const GO_PLAN_HEADING = "Go Plan";
+export const INTEGRATED_GO_SHARE_LABEL = "Go share";
+
+// Kilo's own load/failure/empty wording for this block, so the integrated panel
+// reads identically whether it or the host panel is on screen.
+export const INTEGRATED_LOADING_LABEL = "Loading usage...";
+export const INTEGRATED_UNAVAILABLE_LABEL = "Usage unavailable";
+export const INTEGRATED_EMPTY_LABEL = "No model usage yet";
 
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
@@ -388,11 +432,11 @@ export function extractWindow(candidate: unknown, now: number = Date.now()): Usa
   return { percent: Math.round(percent), status, limited: isLimitedStatus(status), resetInSec, resetText };
 }
 
-export function extractSnapshotFromApiPayload(payload: unknown): UsageSnapshot | null {
+export function extractSnapshotFromApiPayload(
+  payload: unknown,
+  now: number = Date.now(),
+): UsageSnapshot | null {
   if (!isRecord(payload)) return null;
-  // One clock reading for the whole snapshot, so every reset countdown and
-  // `fetchedAt` describe the same instant.
-  const now = Date.now();
   const containers: unknown[] = [payload];
   for (const key of ["usage", "data", "go"]) {
     if (isRecord(payload[key])) containers.push(payload[key]);
@@ -443,5 +487,87 @@ export function unavailableSnapshot(error: string): UsageSnapshot {
     fetchedAt: Date.now(),
     apiUnavailable: true,
     apiError: error,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Session model usage boundary (Kilo's per-session token/cost split)
+// ---------------------------------------------------------------------------
+//
+// `GET /session/{sessionID}/model-usage` on the host API, which reports the
+// whole top-level session tree. `sessionCost` also exists in 7.8.x and is absent
+// in 7.7.5, so it is deliberately not part of the trusted shape: nothing here may
+// depend on it. The path is a PATH param and is pinned against the real host by
+// test/e2e/kilo-contract.test.js — the generated SDK types are the only place a
+// route typo could otherwise hide.
+
+export type UsageTokens = {
+  input: number;
+  output: number;
+  reasoning: number;
+  cache: { read: number; write: number };
+};
+
+export type UsageTotals = {
+  steps: number;
+  cost: number;
+  tokens: UsageTokens;
+};
+
+export type ModelUsage = UsageTotals & {
+  providerID: string;
+  modelID: string;
+};
+
+export type SessionModelUsage = {
+  sessionIDs: string[];
+  totals: UsageTotals;
+  models: ModelUsage[];
+};
+
+const EMPTY_TOKENS: UsageTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+
+// Tolerant because the payload is host-owned and can be renamed without breaking
+// our build: a missing bucket becomes 0 rather than `undefined`, and a missing
+// envelope is a null so the caller can show the unavailable state instead of
+// rendering a column of zeros it cannot vouch for.
+function parseUsageTokens(candidate: unknown): UsageTokens {
+  if (!isRecord(candidate)) return { ...EMPTY_TOKENS, cache: { ...EMPTY_TOKENS.cache } };
+  const cache = isRecord(candidate.cache) ? candidate.cache : {};
+  return {
+    input: toUsageCount(candidate.input),
+    output: toUsageCount(candidate.output),
+    reasoning: toUsageCount(candidate.reasoning),
+    cache: { read: toUsageCount(cache.read), write: toUsageCount(cache.write) },
+  };
+}
+
+function parseUsageTotals(candidate: unknown): UsageTotals {
+  if (!isRecord(candidate)) return { steps: 0, cost: 0, tokens: { ...EMPTY_TOKENS, cache: { ...EMPTY_TOKENS.cache } } };
+  return {
+    steps: toUsageCount(candidate.steps),
+    cost: toUsageCount(candidate.cost),
+    tokens: parseUsageTokens(candidate.tokens),
+  };
+}
+
+export function parseSessionModelUsage(payload: unknown): SessionModelUsage | null {
+  if (!isRecord(payload)) return null;
+  const models: ModelUsage[] = [];
+  if (Array.isArray(payload.models)) {
+    for (const entry of payload.models) {
+      if (!isRecord(entry)) continue;
+      const providerID = toNonEmptyString(entry.providerID);
+      const modelID = toNonEmptyString(entry.modelID);
+      // A row without both keys cannot be grouped or labelled, so it is dropped
+      // rather than rendered as an unlabelled model.
+      if (providerID === null || modelID === null) continue;
+      models.push({ providerID, modelID, ...parseUsageTotals(entry) });
+    }
+  }
+  return {
+    sessionIDs: Array.isArray(payload.sessionIDs) ? payload.sessionIDs.filter((id): id is string => typeof id === "string") : [],
+    totals: parseUsageTotals(payload.totals),
+    models,
   };
 }
