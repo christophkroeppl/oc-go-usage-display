@@ -143,7 +143,10 @@ export function pickProviderModel(models, { preferFree = true } = {}) {
 
 // Spawn `<binary> serve`, wait for the listening sentinel, and return the URL
 // plus a stop handle. The caller creates the session, then must stop it.
-export async function startHostServer({ binary, env, cwd, timeoutMs = 30000 }) {
+// 60s for the same reason as the Kilo helper: the first boot of a pinned host in
+// a fresh container does real work before it listens, and a slow boot must cost
+// seconds rather than a flaky red.
+export async function startHostServer({ binary, env, cwd, timeoutMs = 60000 }) {
   const child = spawn(binary, ["serve", "--port", "0", "--hostname", "127.0.0.1"], {
     cwd,
     env,

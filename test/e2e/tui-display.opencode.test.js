@@ -51,14 +51,23 @@ const SKIP_NO_HOST =
 const MOCK_STATUSLINE = /Go 5h 42% \| 7d 15% \| 30d 61%/;
 // The whole sidebar block, so the capture cannot land between the header and
 // the rows: the model section is what proves the block finished rendering.
-const MOCK_SIDEBAR_SETTLED = /Go Usage[\s\S]*Top Go models/;
+// Wait for a plan ROW, not just the section header: the sidebar paints in
+// passes, and a header-only match can land a frame before the rows do.
+const MOCK_SIDEBAR_SETTLED = /Go Usage[\s\S]*Top Go models[\s\S]*\b5h\b[\s\S]*\d+%/;
 // The meters are boxes (they fill whatever the sidebar gives them), so a plain
 // text capture cannot see a bar. What it can check is the grid: three plan rows,
 // one label column, one percent column, and that column ending where the host's
 // own rows end -- which is the property "there is still space on the right" is
 // really about.
+// Every line in the host's sidebar ends with its own edge glyph -- a right
+// border, a scrollbar thumb -- which is NOT part of our content and is not there
+// on every host or in every panel state. Match against the line with that
+// trailing glyph removed, or a grid assertion silently finds nothing on a screen
+// that is showing exactly what it asked for (it did: three plan rows, zero
+// matches).
+const stripEdge = (line) => line.replace(/[\u2500-\u259f\u25a0-\u25ff]+\s*$/, "").replace(/\s+$/, "");
 const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
-const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
+const planRows = (screen) => screen.split("\n").map(stripEdge).filter((line) => PLAN_ROW.test(line));
 
 function assertPlanGrid(screen) {
   const rows = planRows(screen);

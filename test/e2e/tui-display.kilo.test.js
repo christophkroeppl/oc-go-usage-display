@@ -42,8 +42,15 @@ const MOCK_SIDEBAR = /Go Usage/;
 // on one column, percents on one column, and the percent column reaching the
 // same right edge as the host's own rows. That last one is the property a
 // screenshot complaint about "space on the right" is really about.
+// Every line in the host's sidebar ends with its own edge glyph -- a right
+// border, a scrollbar thumb -- which is NOT part of our content and is not there
+// on every host or in every panel state. Match against the line with that
+// trailing glyph removed, or a grid assertion silently finds nothing on a screen
+// that is showing exactly what it asked for (it did: three plan rows, zero
+// matches).
+const stripEdge = (line) => line.replace(/[\u2500-\u259f\u25a0-\u25ff]+\s*$/, "").replace(/\s+$/, "");
 const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
-const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
+const planRows = (screen) => screen.split("\n").map(stripEdge).filter((line) => PLAN_ROW.test(line));
 
 // The end column of the last match of `pattern` on any line. Measured on the
 // host's OWN sidebar rows (the ones with a known label and a right-aligned
@@ -52,7 +59,7 @@ const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(l
 function rightmostColumn(screen, pattern) {
   const global = new RegExp(pattern.source, "g");
   let best = -1;
-  for (const line of screen.split("\n")) {
+  for (const line of screen.split("\n").map(stripEdge)) {
     for (const match of line.matchAll(global)) best = Math.max(best, (match.index ?? 0) + match[0].length);
   }
   return best;
@@ -98,10 +105,11 @@ const MODES = [
     mode: "standalone",
     // The poll helper waits for `expect.sidebar` before it captures, and the
     // host panel is switched asynchronously, so the wait pattern is what makes
-    // the settled state observable: only a screen showing BOTH panels means
-    // `activate` has landed. Matching `Go Usage` alone would let the capture
-    // race the switch and flake.
-    settled: /Go Usage[\s\S]*\bToken Usage\b/,
+    // the settled state observable. It waits for a host ROW, not just the
+    // panel's header: `activate` registers the panel a frame before it draws
+    // its rows, so a header-only match lets the capture race it and the next
+    // assertion ("kilo must still render the Input row") flakes.
+    settled: /Go Usage[\s\S]*\bToken Usage\b[\s\S]*\bInput\b[\s\S]*\d/,
     // KILO_SLOT_ORDER 125: below `Context` (100), above `Token Usage` (150),
     // so both readouts stay adjacent and the host panel is untouched.
     order: { before: [/\bToken Usage\b/], after: [/\bContext\b/] },

@@ -47,7 +47,12 @@ export function findKiloBinary() {
 
 // Spawn `kilo serve` and resolve once the listening sentinel is seen.
 // Rejects (after killing the child) when it exits early or the wait times out.
-export async function startKiloServer({ binary, cwd, env, timeoutMs = 15000 }) {
+// 60s, not 15s: Kilo's first boot in a fresh container resolves providers and
+// writes its own store before it listens, and on a loaded runner that has
+// measured over 15s -- which failed the release gate on a contract test that has
+// nothing to do with timing. The harness is not the thing under test here; a
+// slow boot should cost seconds, not a red run.
+export async function startKiloServer({ binary, cwd, env, timeoutMs = 60000 }) {
   const child = spawn(binary, ["serve", "--port", "0", "--hostname", "127.0.0.1"], {
     cwd,
     env: stripConfigOverrides(env),
