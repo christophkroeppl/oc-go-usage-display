@@ -3,8 +3,8 @@
 // OpenCode Go usage TUI plugin (dual-surface display).
 //
 // Renders subscription usage in two additive multi-render slots. `SLOT_ORDER`
-// (125) is a free band in Kilo's own `sidebar_content` ladder, so the block is
-// placed deterministically instead of tied with a host panel:
+// (KILO_SLOT_ORDER) is a free band in Kilo's own `sidebar_content` ladder, so
+// the block is placed deterministically instead of tied with a host panel:
 //   50 kilo-sidebar-pr | 100 sidebar-context | 150 kilo-sidebar-usage
 //   | 200 sidebar-mcp | 225 kilo-sidebar-indexing
 //   | 250 kilo-sidebar-background-processes | 300 sidebar-lsp
@@ -88,6 +88,7 @@ import {
   toNonEmptyString,
   unavailableSnapshot,
   hostEnv,
+  KILO_SLOT_ORDER,
 } from "./shared.js";
 import type { UsageHost, UsageSnapshot } from "./shared.js";
 
@@ -105,7 +106,7 @@ const GO_PROVIDER_ID = "opencode-go";
 // This entry is the Kilo build, so it resolves `KILO_OC_GO_*` and never reads
 // an opencode-prefixed name.
 const HOST: UsageHost = "kilo";
-const SLOT_ORDER = 125;
+const SLOT_ORDER = KILO_SLOT_ORDER;
 const KV_DISPLAY_KEY = "display";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
 const KV_COLLAPSED_STATUSLINE_KEY = "collapsed_statusline";

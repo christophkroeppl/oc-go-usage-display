@@ -17,6 +17,9 @@ import {
   mockSnapshot,
   hostEnv,
   hostEnvName,
+  KILO_SIDEBAR_ORDERS,
+  KILO_SLOT_ORDER,
+  KILO_TOKEN_USAGE_ROWS,
   resolveConfigDir,
   resolveHostRoots,
   safeJoinPath,
@@ -493,4 +496,37 @@ test("hostEnv prefers the host-scoped name over the deprecated one", () => {
 test("hostEnv tolerates a missing environment", () => {
   assert.equal(hostEnv("opencode", "SIDEBAR", undefined), undefined);
   assert.equal(hostEnv("kilo", "SIDEBAR", {}), undefined);
+});
+
+// The Kilo sidebar ladder is host-owned data we cannot query at runtime, so it is
+// asserted here rather than left in a comment: a Kilo release that adds a panel
+// inside our chosen band must fail the build, not silently collide.
+test("the kilo slot order stays a free band between context and token usage", () => {
+  const colliding = Object.entries(KILO_SIDEBAR_ORDERS).find(
+    ([, order]) => order === KILO_SLOT_ORDER,
+  );
+  assert.equal(colliding, undefined, `KILO_SLOT_ORDER ${KILO_SLOT_ORDER} collides with ${colliding?.[0]}`);
+
+  assert.ok(
+    KILO_SIDEBAR_ORDERS["internal:sidebar-context"] < KILO_SLOT_ORDER,
+    "KILO_SLOT_ORDER must stay below the context panel",
+  );
+  assert.ok(
+    KILO_SLOT_ORDER < KILO_SIDEBAR_ORDERS["internal:kilo-sidebar-usage"],
+    "KILO_SLOT_ORDER must stay above the token-usage panel",
+  );
+});
+
+test("the mirrored kilo token-usage rows are the ones we render", () => {
+  // Order matters: the integrated panel lays these out in the host's order.
+  assert.deepStrictEqual(KILO_TOKEN_USAGE_ROWS, [
+    "Input",
+    "Output",
+    "Reasoning",
+    "Cache read",
+    "Cache write",
+    "Cache rate",
+    "Cost",
+  ]);
+  assert.equal(new Set(KILO_TOKEN_USAGE_ROWS).size, KILO_TOKEN_USAGE_ROWS.length, "no duplicate rows");
 });

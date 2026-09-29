@@ -238,6 +238,44 @@ export function errorMessage(error: unknown): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Kilo sidebar ladder (host-owned; asserted by the e2e contract test)
+// ---------------------------------------------------------------------------
+//
+// The `sidebar_content` orders Kilo registers internally, read from the shipped
+// binary. The plugin cannot query them at runtime, so they live here as data: a
+// comment would be unenforceable, and the point of the contract test is to fail
+// when a Kilo release adds a panel inside the band we chose.
+export const KILO_SIDEBAR_ORDERS: Readonly<Record<string, number>> = {
+  "internal:kilo-sidebar-pr": 50,
+  "internal:sidebar-context": 100,
+  "internal:kilo-sidebar-usage": 150,
+  "internal:sidebar-mcp": 200,
+  "internal:kilo-sidebar-indexing": 225,
+  "internal:kilo-sidebar-background-processes": 250,
+  "internal:sidebar-lsp": 300,
+  "internal:sidebar-todo": 400,
+  "internal:sidebar-files": 500,
+  "internal:kilo-sidebar-memory": 1000,
+};
+
+// Free band between the context panel and the token-usage panel, so the Go block
+// renders directly between them and never ties with a host panel.
+export const KILO_SLOT_ORDER = 125;
+
+// Rows the integrated mode mirrors from Kilo's own `Token Usage` panel, in the
+// order it renders them. Kept here so a reword upstream is a test failure rather
+// than a silent divergence between our panel and the host's.
+export const KILO_TOKEN_USAGE_ROWS: readonly string[] = [
+  "Input",
+  "Output",
+  "Reasoning",
+  "Cache read",
+  "Cache write",
+  "Cache rate",
+  "Cost",
+];
+
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);

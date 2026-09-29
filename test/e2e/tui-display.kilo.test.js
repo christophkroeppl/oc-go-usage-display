@@ -23,7 +23,7 @@ import {
   runTuiDisplay,
   skipWithNotice,
 } from "../helpers/tui.js";
-import { extractSnapshotFromApiPayload } from "../../dist/shared.js";
+import { extractSnapshotFromApiPayload, KILO_TOKEN_USAGE_ROWS } from "../../dist/shared.js";
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BINARY = findKiloBinary();
@@ -57,6 +57,13 @@ test(
       // sidebar. Anchors are Kilo's always-rendered core panels, so this fails
       // if the block drifts out of that band in either direction.
       assertSidebarOrder(screen, { before: [/\bToken Usage\b/], after: [/\bContext\b/] });
+      // The rows the integrated mode mirrors. Asserted here because this screen
+      // already has Kilo's panel rendered: one boot proves both that the labels
+      // exist upstream and that our block lands in the right place among them.
+      for (const label of KILO_TOKEN_USAGE_ROWS) {
+        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        assert.match(screen, new RegExp(escaped), `kilo must still render the "${label}" row we mirror`);
+      }
       console.log(`[e2e] kilo TUI mock usage rendered (model ${model})`);
     } finally {
       tmp.cleanup();
