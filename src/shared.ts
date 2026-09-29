@@ -317,37 +317,6 @@ export const SIDEBAR_EXPANDED_GLYPH = "▾";
 export const CACHE_RATE_DECIMALS = 1;
 export const CACHE_RATE_EMPTY = "-";
 
-// ---------------------------------------------------------------------------
-// Meter widths, per host
-// ---------------------------------------------------------------------------
-//
-// A meter is a string of glyph cells, so its width is a constant, not something
-// the layout can stretch: the only way to stop a sidebar's right edge from
-// standing empty is to size the bar to the space the host's OWN panel already
-// uses in that column. Anything wider overflows into a truncated percent, which
-// is worse than a little slack, and nothing here measures the sidebar at
-// runtime (opentui resolves a text node's `width` as a wrapping bound, and there
-// no layout callback reaches a plugin).
-//
-// The bar box is `flexShrink={1}` in every meter row for the same reason: in a
-// narrower-than-assumed sidebar the BAR gives up cells, not the percent beside
-// it, so the number stays readable and only the gauge is cut.
-
-// Kilo's Models table is the widest thing its sidebar draws:
-// `▸` + name(19) + Steps(5) + Cost(9) + the gaps between them = 33 cells. The
-// plan is drawn inside that group, so a plan row may be exactly as wide as the
-// table around it and no wider: 4 (label) + 24 (bar) + 5 (percent) = 33.
-export const KILO_PLAN_BAR_WIDTH = 24;
-// The per-model share meter sits under the model names, so it takes the name
-// column: 8 ("Go share") + 1 gap + 19 (bar) + 5 (percent) = 33, the table's
-// width again. A bar that ran past the names above it would read as belonging to
-// the next column.
-export const KILO_SHARE_BAR_WIDTH = KILO_MODEL_NAME_MAX_CHARS;
-
-// opencode's sidebar is ~30 cells, of which the host's own panels use the full
-// width for label/value rows. 4 + 18 + 5 = 27 leaves three cells of slack in a
-// 30-cell sidebar, and `flexShrink` covers anything narrower.
-export const OPENCODE_METER_WIDTH = 18;
 // A model name in opencode's narrower sidebar: 12 cells, where Kilo's table
 // gives 19.
 export const OPENCODE_MODEL_NAME_MAX_CHARS = 12;
@@ -355,9 +324,6 @@ export const OPENCODE_MODEL_NAME_MAX_CHARS = 12;
 // same column. A text node's `width` reserves cells but does NOT right-align the
 // text inside them, so the padding has to be in the string.
 export const PERCENT_CELL_WIDTH = 5;
-// The model rows in the folded-open section are indented two cells, so their
-// meter is smaller: name(12) + gap + 10 (bar) + 5 (percent) = 30.
-export const GO_MODEL_BAR_WIDTH = 10;
 
 // The collapsed mix line: how many models it lists, and how many cells it may
 // spend. The budget is why the mix line is built cell by cell (see

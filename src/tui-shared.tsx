@@ -51,18 +51,17 @@ import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { TuiTheme } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import {
-  METER_WIDTH,
   PLAN_LABEL_WIDTH,
   buildPlanRows,
   formatPercentCell,
   formatStatusline,
   isDisplayMode,
   isSnapshotEmpty,
+  meterFillPercent,
   meterSeverityForPercent,
   parseBooleanFlag,
   resolveProviderId,
   surfaceSelectionFromDisplayMode,
-  usageMeterBar,
 } from "./helpers.js";
 import type {
   PlanRow,
@@ -453,9 +452,27 @@ export function LabeledValueRow(props: { theme: TuiTheme; row: UsageRow }) {
   );
 }
 
-// The narrowest a meter may become before a row is simply clipped: enough to
-// still read a filled-vs-empty split at a glance.
+// The narrowest a meter may become before it stops being a meter: enough to read
+// a filled-vs-empty split at a glance.
 export const MIN_METER_WIDTH = 6;
+
+// A meter as two boxes: the filled part at the window's percentage, the track for
+// the rest. Both fill whatever the row has, so the bar reaches the sidebar's
+// right edge on any host, at any sidebar width, with nothing to measure and
+// nothing to guess -- the failure modes a fixed-width glyph string has (too short
+// on a wide sidebar, clipped on a narrow one) cannot happen.
+//
+// The track is a surface tone rather than the severity colour, so an empty meter
+// reads as an empty track instead of blank space.
+export function MeterBar(props: { theme: TuiTheme; percent: number; severity: UsageMeterSeverity }) {
+  const fill = createMemo(() => meterFillPercent(props.percent));
+  return (
+    <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={MIN_METER_WIDTH}>
+      <box width={`${fill()}%`} backgroundColor={meterColor(props.theme, props.severity)} />
+      <box flexGrow={1} backgroundColor={props.theme.current.backgroundElement} />
+    </box>
+  );
+}
 
 // One plan window as a row of three FIXED-WIDTH columns: label, bar, percent.
 //
@@ -466,7 +483,7 @@ export const MIN_METER_WIDTH = 6;
 // against a 100% one (seen at 30d 100% next to 5h 0%). Fixed columns make the
 // meters stack whatever the font does, and the percentages right-align on one
 // edge.
-export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: number }) {
+export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
   return (
     <box flexDirection="column">
       <box flexDirection="row">
@@ -480,13 +497,7 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: numb
             {props.row.label}
           </text>
         </box>
-        {/* flexShrink: in a narrower-than-assumed sidebar the bar gives up cells,
-            the percent never does. */}
-        <box width={props.barWidth} flexShrink={1} minWidth={MIN_METER_WIDTH} flexDirection="row">
-          <text fg={meterColor(props.theme, props.row.severity)} wrapMode="none">
-            {props.row.bar}
-          </text>
-        </box>
+        <MeterBar theme={props.theme} percent={props.row.percent} severity={props.row.severity} />
         <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
           {formatPercentCell(props.row.percent)}
         </text>
@@ -502,7 +513,7 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: numb
   );
 }
 
-export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[]; barWidth: number }) {
+export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[] }) {
   return (
     <box flexDirection="column">
       <text fg={props.theme.current.text} wrapMode="none">
@@ -510,7 +521,7 @@ export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[]; barWidt
       </text>
       <box flexDirection="column" paddingLeft={1}>
         <For each={props.rows}>
-          {(row) => <GoPlanRow theme={props.theme} row={row} barWidth={props.barWidth} />}
+          {(row) => <GoPlanRow theme={props.theme} row={row} />}
         </For>
       </box>
     </box>
@@ -575,21 +586,21 @@ export function CollapsibleSection(props: {
 // row, so they line up with the Steps/Cost columns of the table above instead of
 // trailing the label wherever it happens to end. The label takes the slack
 // (`flexGrow`), the meter group never shrinks.
-export function GoShareRow(props: { theme: TuiTheme; percent: number; width: number }) {
+export function GoShareRow(props: { theme: TuiTheme; percent: number }) {
   const rounded = Math.round(props.percent);
   return (
     <box flexDirection="row" gap={1}>
       <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0} flexGrow={1}>
         {INTEGRATED_GO_SHARE_LABEL}
       </text>
-      <box flexDirection="row" flexShrink={1} minWidth={MIN_METER_WIDTH}>
-        <text fg={meterColor(props.theme, meterSeverityForPercent(rounded))} wrapMode="none">
-          {usageMeterBar(rounded, props.width)}
-        </text>
-        <text fg={props.theme.current.textMuted} wrapMode="none">
-          {formatPercentCell(rounded)}
-        </text>
-      </box>
+      <MeterBar
+        theme={props.theme}
+        percent={rounded}
+        severity={meterSeverityForPercent(rounded)}
+      />
+      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+        {formatPercentCell(rounded)}
+      </text>
     </box>
   );
 }
@@ -608,14 +619,14 @@ export function GoShareRow(props: { theme: TuiTheme; percent: number; width: num
 // different feature depending on where it was drawn. Kilo's integrated mode does
 // not use this block at all -- the plan is drawn once, inside its Models table
 // where it belongs to the provider it meters.
+//
+// There is no meter width in here to tune: `MeterBar` fills the row.
 export function GoUsageBlock(props: {
   api: UsagePanelApi;
   theme: TuiTheme;
   snapshot: () => UsageSnapshot | null;
-  meterWidth?: number;
   resetLine?: () => string | null;
 }) {
-  const barWidth = props.meterWidth ?? METER_WIDTH;
   createEffect(() => {
     const snapshot = props.snapshot();
     if (snapshot !== null && snapshot.source === "unavailable") {
@@ -648,7 +659,7 @@ export function GoUsageBlock(props: {
     // The per-row `resets in` suffix is dropped here: `resetLine` already prints
     // the soonest countdown under the header, and printing the same countdown
     // twice in one block is noise rather than emphasis.
-    const planRows = buildPlanRows(snapshot, barWidth).map((row) => ({ ...row, reset: null }));
+    const planRows = buildPlanRows(snapshot).map((row) => ({ ...row, reset: null }));
     return (
       <box flexDirection="column">
         <Show when={props.resetLine === undefined ? null : props.resetLine()}>
@@ -658,7 +669,7 @@ export function GoUsageBlock(props: {
             </text>
           )}
         </Show>
-        <For each={planRows}>{(row) => <GoPlanRow theme={props.theme} row={row} barWidth={barWidth} />}</For>
+        <For each={planRows}>{(row) => <GoPlanRow theme={props.theme} row={row} />}</For>
       </box>
     );
   });

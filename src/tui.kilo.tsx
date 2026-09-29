@@ -104,8 +104,6 @@ import {
   SIDEBAR_EXPANDED_GLYPH,
   KILO_COST_COLUMN_WIDTH,
   KILO_INTEGRATED_SLOT_ORDER,
-  KILO_PLAN_BAR_WIDTH,
-  KILO_SHARE_BAR_WIDTH,
   KILO_SLOT_ORDER,
   KILO_STEPS_COLUMN_WIDTH,
   KILO_USAGE_PANEL_PLUGIN_ID,
@@ -341,7 +339,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           {props.group.providerName}
         </text>
         <Show when={isGo && props.planRows.length > 0}>
-          <GoPlanSection theme={props.theme} rows={props.planRows} barWidth={KILO_PLAN_BAR_WIDTH} />
+          <GoPlanSection theme={props.theme} rows={props.planRows} />
         </Show>
         <box flexDirection="row" gap={1}>
           <box width={1} flexShrink={0} />
@@ -444,11 +442,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         </box>
         <Show when={props.isGo}>
           <box paddingLeft={2}>
-            <GoShareRow
-              theme={props.theme}
-              percent={props.goShare()}
-              width={KILO_SHARE_BAR_WIDTH}
-            />
+            <GoShareRow theme={props.theme} percent={props.goShare()} />
           </box>
         </Show>
         {reactiveChild(detail)}
@@ -654,7 +648,6 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         api={api}
         theme={props.theme}
         snapshot={usageStore.snapshot}
-        meterWidth={KILO_PLAN_BAR_WIDTH}
         resetLine={planResetLine}
       />
     );

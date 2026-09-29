@@ -23,9 +23,7 @@ import {
   toUsageCount,
   CACHE_RATE_DECIMALS,
   CACHE_RATE_EMPTY,
-  GO_MODEL_BAR_WIDTH,
   GO_MODEL_MIX_BUDGET,
-  KILO_PLAN_BAR_WIDTH,
   GO_MODEL_MIX_NAME_MAX_CHARS,
   GO_MODEL_MIX_SEPARATOR,
   GO_PROVIDER_ID,
@@ -310,20 +308,12 @@ export function formatStatusline(snapshot: UsageSnapshot): string {
 
 export type UsageMeterSeverity = "muted" | "warning" | "error";
 
-// The default meter width, used when a caller does not name its host. The
-// per-host widths live in `shared.ts` (KILO_PLAN_BAR_WIDTH / OPENCODE_METER_WIDTH);
-// this is the one a caller gets by accident, so it is the wider of the two.
-export const METER_WIDTH = KILO_PLAN_BAR_WIDTH;
-
-const METER_FILLED = "█";
-const METER_EMPTY = "░";
-
 const WARNING_PERCENT = 75;
 const ERROR_PERCENT = 90;
 
 // A capped window is a hard stop rather than a percentage: `limited` wins over
-// whatever the gauge says, so a window that is capped at 3% still reads as
-// error instead of reassuring the eye.
+// whatever the gauge says, so a window that is capped at 3% still reads as error
+// instead of reassuring the eye.
 export function usageMeterSeverity(window: UsageWindow): UsageMeterSeverity {
   if (window.limited) return "error";
   return meterSeverityForPercent(window.percent);
@@ -338,20 +328,23 @@ export function meterSeverityForPercent(percent: number): UsageMeterSeverity {
   return "muted";
 }
 
-// Saturating fill: the API can report a percent outside 0-100, and a repeat
-// count outside 0-width throws, so both ends are clamped here instead of at
-// the render site.
-export function usageMeterBar(percent: number, width: number = METER_WIDTH): string {
-  const cells = Number.isFinite(width) ? Math.max(Math.floor(width), 0) : 0;
-  if (cells === 0 || !Number.isFinite(percent)) return "";
-  const clamped = Math.min(Math.max(percent, 0), 100);
-  const filled = Math.min(Math.max(Math.round((clamped / 100) * cells), 0), cells);
-  return METER_FILLED.repeat(filled) + METER_EMPTY.repeat(cells - filled);
+// The meter's filled fraction, clamped to 0-100: the API can report a percent
+// outside the range and a NaN would be a layout error rather than a drawing one.
+//
+// The meter itself is TWO BOXES -- a filled one at this percentage and a track
+// for the rest -- not a string of block glyphs. A glyph string has a fixed cell
+// count, and a plugin cannot measure the sidebar it is rendering into (opentui
+// resolves a text node's `width` as a wrapping bound, and no layout callback
+// reaches a plugin), so a glyph meter is either too short for a wide sidebar or
+// clipped by a narrow one. Boxes fill whatever the row gives them, which is why
+// the meter now reaches the sidebar's right edge on any host and any width.
+export function meterFillPercent(percent: number): number {
+  if (!Number.isFinite(percent)) return 0;
+  return Math.min(Math.max(percent, 0), 100);
 }
 
 export type PlanRow = {
   label: string;
-  bar: string;
   percent: number;
   severity: UsageMeterSeverity;
   reset: string | null;
@@ -360,7 +353,7 @@ export type PlanRow = {
 // `meterWidth` is the sidebar's budget, not the bar's design: 16 cells fit next
 // to Kilo's model table, 10 fit opencode's ~30-cell sidebar. The glyphs and the
 // saturating fill are identical, so two widths are the same bar at two sizes.
-export function buildPlanRows(snapshot: UsageSnapshot, meterWidth: number = METER_WIDTH): PlanRow[] {
+export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
   const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
     ["5h", snapshot.rolling],
     ["7d", snapshot.weekly],
@@ -371,7 +364,6 @@ export function buildPlanRows(snapshot: UsageSnapshot, meterWidth: number = METE
     if (window === null) continue;
     rows.push({
       label,
-      bar: usageMeterBar(window.percent, meterWidth),
       percent: window.percent,
       severity: usageMeterSeverity(window),
       // A countdown only tells the user something once the window is capped;
@@ -543,9 +535,10 @@ export function shortModelName(value: string, max: number = GO_MODEL_MIX_NAME_MA
   return truncateModelName(head, max);
 }
 
-// The plan window label cell ("5h", "30d"): wide enough for the longest label
-// the plan has, so every meter starts on the same column.
-export const PLAN_LABEL_WIDTH = 4;
+// The plan window label cell ("5h", "7d", "30d"): exactly the longest label the
+// plan has, so every meter starts on the same column and none of the width goes
+// to padding.
+export const PLAN_LABEL_WIDTH = 3;
 
 // A percent padded into a fixed-width cell, right-aligned by construction. A
 // non-finite percent renders as 0 rather than "NaN%", which would break the
@@ -591,7 +584,6 @@ export type GoModelWeight = {
   modelID: string;
   tokens: number;
   share: number;
-  bar: string;
   steps: number;
   cost: number;
 };
@@ -619,7 +611,6 @@ export type GoModelWeights = {
 export function weightGoModels(
   models: readonly ModelUsage[],
   limit: number = TOP_GO_MODELS_LIMIT,
-  barWidth: number = GO_MODEL_BAR_WIDTH,
 ): GoModelWeights {
   const goModels = models.filter((model) => model.providerID === GO_PROVIDER_ID);
   const goTokens = goModels.reduce((sum, model) => sum + usageTokenCount(model.tokens), 0);
@@ -640,7 +631,6 @@ export function weightGoModels(
         modelID: model.modelID,
         tokens,
         share,
-        bar: usageMeterBar(share, barWidth),
         steps: toUsageCount(model.steps),
         cost: toUsageCount(model.cost),
       };

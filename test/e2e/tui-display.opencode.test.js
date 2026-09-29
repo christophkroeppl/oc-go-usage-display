@@ -52,13 +52,33 @@ const MOCK_STATUSLINE = /Go 5h 42% \| 7d 15% \| 30d 61%/;
 // The whole sidebar block, so the capture cannot land between the header and
 // the rows: the model section is what proves the block finished rendering.
 const MOCK_SIDEBAR_SETTLED = /Go Usage[\s\S]*Top Go models/;
-const METER_CELL = "\u2588";
-// Column of the first meter glyph on each plan row, and the column its percent
-// ends in. Derived from the captured pane, so they are the host's real layout.
-const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/;
-const meterColumns = (screen) => planRows(screen).map((line) => line.search(/[\u2588\u2591]/));
-const percentColumns = (screen) => planRows(screen).map((line) => line.search(/\d+%\s*$/));
+// The meters are boxes (they fill whatever the sidebar gives them), so a plain
+// text capture cannot see a bar. What it can check is the grid: three plan rows,
+// one label column, one percent column, and that column ending where the host's
+// own rows end -- which is the property "there is still space on the right" is
+// really about.
+const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
 const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
+
+function assertPlanGrid(screen) {
+  const rows = planRows(screen);
+  const sidebar = screen
+    .split("\n")
+    .map((line, index) => [index, line.replace(/\s+$/, "")])
+    .filter(([, line]) => /Go Usage|Top Go models|resets in|\b5h|\b7d|\b30d|Context/.test(line))
+    .map(([index, line]) => `${index}|${line}`);
+  assert.equal(rows.length, 3, `the plan must render three rows\n${sidebar.join("\n")}`);
+  const labels = rows.map((line) => line.indexOf(line.trim().split(/\s+/)[0]));
+  assert.ok(
+    labels.every((column) => column === labels[0]),
+    `the plan labels must share a left edge (got ${labels.join(", ")})`,
+  );
+  const percents = rows.map((line) => line.search(/\d+%\s*$/));
+  assert.ok(
+    percents.every((column) => column === percents[0]),
+    `the plan percents must share a left edge (got ${percents.join(", ")})`,
+  );
+}
 
 test(
   "opencode TUI displays the mock usage in sidebar and statusline",
@@ -77,24 +97,10 @@ test(
       // The plan is the meters themselves in this host's narrow sidebar, and
       // the soonest reset is its own line under the header.
       assert.match(screen, /5h resets in 2h5m/, "sidebar must render the next reset");
-      assert.match(screen, /5h\s+[\u2588\u2591]+\s+42%/, "sidebar must render the rolling meter");
-      assert.match(screen, /7d\s+[\u2588\u2591]+\s+15%/, "sidebar must render the weekly meter");
-      assert.match(screen, /30d\s+[\u2588\u2591]+\s+61%/, "sidebar must render the monthly meter");
-      assert.ok(screen.includes(METER_CELL), "the plan must render as a block meter, not a bare percent");
-      // The three meters stack: same left edge, one percent column. Pinning the
-      // column is what stops a regression back to a label-sized offset, which is
-      // what a screenshot complaint like "they do not line up" actually is.
-      const bars = meterColumns(screen);
-      const percents = percentColumns(screen);
-      assert.equal(bars.length, 3, "the plan must render three stacked meters");
-      assert.ok(
-        bars.every((column) => column === bars[0]),
-        `all three plan meters must start in the same column (got ${bars.join(", ")})`,
-      );
-      assert.ok(
-        percents.every((column) => column === percents[0]),
-        `all three plan percents must end in the same column (got ${percents.join(", ")})`,
-      );
+      assertPlanGrid(screen);
+      assert.match(screen, /^\s*5h\s+42%\s*$/m, "sidebar must render the rolling row");
+      assert.match(screen, /^\s*7d\s+15%\s*$/m, "sidebar must render the weekly row");
+      assert.match(screen, /^\s*30d\s+61%\s*$/m, "sidebar must render the monthly row");
       // No assistant messages means no weights, and the section says so
       // instead of printing an empty ranking or a zero.
       assert.match(screen, /Top Go models/, "the model section must render");

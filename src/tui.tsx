@@ -65,6 +65,7 @@ import {
   buildGoModelFooters,
   buildModelMixSummary,
   formatNextResetLine,
+  formatPercentCell,
   meterSeverityForPercent,
   modelDisplayName,
   shortModelName,
@@ -75,7 +76,6 @@ import {
   aggregateModelUsageFromMessages,
   errorMessage,
   MODELS_EMPTY_LABEL,
-  OPENCODE_METER_WIDTH,
   OPENCODE_MODEL_NAME_MAX_CHARS,
   TOP_GO_MODELS_LABEL,
 } from "./shared.js";
@@ -84,12 +84,12 @@ import {
   CollapsibleSection,
   GoStatusline,
   GoUsageBlock,
+  MeterBar,
   createCollapseState,
   createUsageStore,
   isGoUsageProvider,
   logUsageError,
   makeProviderResolver,
-  meterColor,
   readModelDisplayName,
   reactiveChild,
   resolveSurfaceSelection,
@@ -154,17 +154,14 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
           {name()}
         </text>
-        <box flexGrow={1} minWidth={0} flexDirection="row" justifyContent="flex-end" flexShrink={0}>
-          <text
-            fg={meterColor(props.theme, meterSeverityForPercent(rounded()))}
-            wrapMode="none"
-          >
-            {props.model.bar}
-          </text>
-          <text fg={props.theme.current.textMuted} wrapMode="none" marginLeft={1}>
-            {rounded()}%
-          </text>
-        </box>
+        <MeterBar
+          theme={props.theme}
+          percent={props.model.share}
+          severity={meterSeverityForPercent(rounded())}
+        />
+        <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+          {formatPercentCell(rounded())}
+        </text>
       </box>
     );
   }
@@ -269,7 +266,6 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           api={api}
           theme={props.theme}
           snapshot={usageStore.snapshot}
-          meterWidth={OPENCODE_METER_WIDTH}
           resetLine={planResetLine}
         />
         <TopGoModelsSection theme={props.theme} usage={sessionUsage} />

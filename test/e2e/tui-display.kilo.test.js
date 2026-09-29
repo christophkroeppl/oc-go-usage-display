@@ -37,34 +37,59 @@ const MOCK_SIDEBAR = /Go Usage/;
 // default. The mode decides whether Kilo's own `Token Usage` panel is on screen
 // at all -- integrated mode retires it -- so the ordering anchors differ per
 // mode and an unpinned test would assert one of them against the other.
-// Both modes render the plan as STACKED meters in fixed-width columns, so the
-// three rows must share a left edge and their percents a right edge. The
-// difference between the modes is where the block sits and what surrounds it:
-// standalone keeps Kilo's own Token Usage panel, integrated replaces that band
-// and draws the plan once, inside the Models table's Go group.
-const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/;
+// The meters are boxes now, not block glyphs: a plain-text capture cannot see
+// them, so what it CAN check is the grid they sit in -- three plan rows, labels
+// on one column, percents on one column, and the percent column reaching the
+// same right edge as the host's own rows. That last one is the property a
+// screenshot complaint about "space on the right" is really about.
+const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
 const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
 
-function assertStackedMeters(screen) {
-  // A layout assertion that only says "0 !== 3" is useless: the row it looked
-  // for is either missing, truncated (the percent is gone) or off the edge. The
-  // sidebar's own lines go in the message so the next failure says which.
+// The end column of the last match of `pattern` on any line. Measured on the
+// host's OWN sidebar rows (the ones with a known label and a right-aligned
+// value), never on the transcript to their left -- the pane is 200 cells wide
+// and full of numbers, so "the widest line on screen" is not the sidebar's edge.
+function rightmostColumn(screen, pattern) {
+  const global = new RegExp(pattern.source, "g");
+  let best = -1;
+  for (const line of screen.split("\n")) {
+    for (const match of line.matchAll(global)) best = Math.max(best, (match.index ?? 0) + match[0].length);
+  }
+  return best;
+}
+
+function assertPlanGrid(screen) {
   const rows = planRows(screen);
+  // A layout assertion that only says "0 !== 3" is useless: the rows it looked
+  // for are missing, truncated or off the edge. The sidebar's lines go in the
+  // message so the next failure says which.
   const sidebar = screen
     .split("\n")
     .map((line, index) => [index, line.replace(/\s+$/, "")])
-    .filter(([, line]) => /Go Plan|Session Tokens|Models|[\u2588\u2591]|resets in/.test(line))
+    .filter(([, line]) => /Go Plan|Session Tokens|Models|resets in|\b5h|\b7d|\b30d/.test(line))
     .map(([index, line]) => `${index}|${line}`);
-  assert.equal(rows.length, 3, `the plan must render three stacked meters\n${sidebar.join("\n")}`);
-  const meters = rows.map((line) => line.search(/[\u2588\u2591]/));
+  assert.equal(rows.length, 3, `the plan must render three rows\n${sidebar.join("\n")}`);
+
+  const labels = rows.map((line) => line.indexOf(line.trim().split(/\s+/)[0]));
   assert.ok(
-    meters.every((column) => column === meters[0]),
-    `meters must share a left edge (got ${meters.join(", ")})`,
+    labels.every((column) => column === labels[0]),
+    `the plan labels must share a left edge (got ${labels.join(", ")})`,
   );
   const percents = rows.map((line) => line.search(/\d+%\s*$/));
   assert.ok(
     percents.every((column) => column === percents[0]),
-    `percents must share a left edge (got ${percents.join(", ")})`,
+    `the plan percents must share a left edge (got ${percents.join(", ")})`,
+  );
+  // The percent column must end where the host's own value column ends, i.e.
+  // the block is flush with the sidebar's right edge and leaves no dead space.
+  const planEdge = Math.max(...rows.map((line) => line.search(/\d+%\s*$/) + line.match(/\d+%\s*$/)[0].length));
+  const hostEdge = rightmostColumn(
+    screen,
+    new RegExp(`(?:${KILO_TOKEN_USAGE_ROWS.join("|")})\\s+\\S+\\s*$`),
+  );
+  assert.ok(
+    planEdge >= hostEdge - 1,
+    `the plan must reach the host's right edge (plan ${planEdge}, host ${hostEdge})`,
   );
 }
 
@@ -114,10 +139,10 @@ for (const { mode, order, hostPanel, settled } of MODES) {
           env,
           expect: { statusline: MOCK_STATUSLINE, sidebar: settled },
         });
-        assertStackedMeters(screen);
-        assert.match(screen, /5h\s+[\u2588\u2591]+\s+42%/, "sidebar must render the rolling meter");
-        assert.match(screen, /7d\s+[\u2588\u2591]+\s+15%/, "sidebar must render the weekly meter");
-        assert.match(screen, /30d\s+[\u2588\u2591]+\s+61%/, "sidebar must render the monthly meter");
+        assertPlanGrid(screen);
+        assert.match(screen, /^\s*5h\s+42%\s*$/m, "sidebar must render the rolling row");
+        assert.match(screen, /^\s*7d\s+15%\s*$/m, "sidebar must render the weekly row");
+        assert.match(screen, /^\s*30d\s+61%\s*$/m, "sidebar must render the monthly row");
         if (mode === "integrated") {
           // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside
           // the OpenCode Go group. A separate `Go Usage` block above it said the

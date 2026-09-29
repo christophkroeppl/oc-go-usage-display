@@ -25,8 +25,6 @@ import {
   goSharePercent,
   groupModelsByProvider,
   isSnapshotEmpty,
-  meterSeverityForPercent,
-  METER_WIDTH,
   modelDisplayName,
   parseBooleanFlag,
   parseSidebarMode,
@@ -34,7 +32,8 @@ import {
   surfaceSelectionFromDisplayMode,
   totalGoTokens,
   truncateModelName,
-  usageMeterBar,
+  meterFillPercent,
+  meterSeverityForPercent,
   usageMeterSeverity,
   usageTokenCount,
   weightGoModels,
@@ -45,12 +44,8 @@ import {
   aggregateModelUsageFromMessages,
   CACHE_RATE_DECIMALS,
   CACHE_RATE_EMPTY,
-  GO_MODEL_BAR_WIDTH,
   GO_MODEL_MIX_BUDGET,
   GO_PROVIDER_ID,
-  KILO_PLAN_BAR_WIDTH,
-  KILO_SHARE_BAR_WIDTH,
-  OPENCODE_METER_WIDTH,
   PERCENT_CELL_WIDTH,
   OPENCODE_MODEL_NAME_MAX_CHARS,
   KILO_COST_COLUMN_WIDTH,
@@ -181,44 +176,13 @@ test("usageMeterSeverity paints a capped window error whatever the percent", () 
 
 // --- usageMeterBar ---
 
-test("usageMeterBar fills proportionally to the percent", () => {
-  assert.equal(usageMeterBar(0, 16), "░░░░░░░░░░░░░░░░");
-  assert.equal(usageMeterBar(100, 16), "████████████████");
-  assert.equal(usageMeterBar(50, 16), "████████░░░░░░░░");
-  assert.equal(usageMeterBar(42, 16), "███████░░░░░░░░░");
-  assert.equal(usageMeterBar(61, 16), "██████████░░░░░░");
-});
-
-test("usageMeterBar saturates instead of overflowing the width", () => {
-  // The API can report >100; `repeat` with a negative count throws, and an
-  // over-wide bar would break the host's row layout.
-  assert.equal(usageMeterBar(150, 16), "████████████████");
-  assert.equal(usageMeterBar(-20, 16), "░░░░░░░░░░░░░░░░");
-  assert.equal(usageMeterBar(50, 4), "██░░");
-  assert.equal(usageMeterBar(50, 0), "");
-  assert.equal(usageMeterBar(50, -3), "");
-});
-
-test("usageMeterBar degrades to an empty bar for a non-finite percent", () => {
-  assert.equal(usageMeterBar(Number.NaN), "");
-  assert.equal(usageMeterBar(Number.POSITIVE_INFINITY), "");
-  assert.equal(usageMeterBar(50, Number.NaN), "");
-});
-
-test("usageMeterBar defaults to the widest host budget", () => {
-  // The default is the wider of the two host meters, so a caller that forgets to
-  // name its host overflows nothing -- the bar box shrinks instead.
-  assert.equal(METER_WIDTH, KILO_PLAN_BAR_WIDTH);
-  assert.equal(usageMeterBar(100).length, METER_WIDTH);
-});
-
 // --- buildPlanRows ---
 
 test("buildPlanRows meters every window in 5h/7d/30d order", () => {
   assert.deepStrictEqual(buildPlanRows(tuiSnapshot()), [
-    { label: "5h", bar: usageMeterBar(42), percent: 42, severity: "muted", reset: null },
-    { label: "7d", bar: usageMeterBar(15), percent: 15, severity: "muted", reset: null },
-    { label: "30d", bar: usageMeterBar(61), percent: 61, severity: "muted", reset: null },
+    { label: "5h", percent: 42, severity: "muted", reset: null },
+    { label: "7d", percent: 15, severity: "muted", reset: null },
+    { label: "30d", percent: 61, severity: "muted", reset: null },
   ]);
 });
 
@@ -580,13 +544,6 @@ test("parseSessionModelUsage rejects anything that is not an object", () => {
 
 // --- the Kilo layout constants the integrated panel is budgeted against ---
 
-test("the Kilo table budget is pinned next to the ladder it belongs to", () => {
-  assert.equal(KILO_STEPS_COLUMN_WIDTH, 5);
-  assert.equal(KILO_COST_COLUMN_WIDTH, 9);
-  assert.equal(KILO_MODEL_NAME_MAX_CHARS, 19);
-  assert.equal(usageMeterBar(100).length, METER_WIDTH);
-});
-
 // The Go-only display gate used to be latched from `config.model` at init, so it
 // stayed closed for anyone without a config model and never re-armed when the
 // model changed -- the plugin looked installed and rendered nothing. It now
@@ -776,8 +733,8 @@ test("weightGoModels ranks the heaviest Go models and weights them against the G
   // Session totals cover every Go model, not only the listed three.
   assert.equal(weights.steps, 161);
   assert.equal(weights.cost, 1.51);
-  assert.equal(weights.models[0].bar, usageMeterBar(59, GO_MODEL_BAR_WIDTH));
-  assert.equal(weights.models[0].bar.length, GO_MODEL_BAR_WIDTH);
+  // No bar string: the meter is drawn as boxes at `share` percent, so the row
+  // carries the number and nothing pre-rendered.
 });
 
 test("weightGoModels ignores models from another provider", () => {
@@ -810,7 +767,7 @@ test("weightGoModels reports 0% rather than NaN when no Go token is attributed",
   const weights = weightGoModels([goModel("mimo-v2.6-pro", 0)]);
   assert.equal(weights.models.length, 1);
   assert.equal(weights.models[0].share, 0);
-  assert.equal(weights.models[0].bar, usageMeterBar(0, GO_MODEL_BAR_WIDTH));
+  assert.equal(weights.models[0].share, 0);
   assert.equal(weightGoModels([]).models.length, 0);
   assert.equal(weightGoModels([]).goTokens, 0);
   assert.equal(weightGoModels([], 3, 0).models[0]?.bar, undefined);
@@ -900,49 +857,6 @@ test("modelDisplayName takes the sidebar's own width budget", () => {
 
 // --- the opencode layout budget, and the meters it is spent on ---
 
-test("the opencode layout budget is pinned next to the sidebar it belongs to", () => {
-  assert.equal(OPENCODE_METER_WIDTH, 18);
-  assert.equal(OPENCODE_MODEL_NAME_MAX_CHARS, 12);
-  assert.equal(GO_MODEL_BAR_WIDTH, 10);
-  // The meters are sized to the space the host's own panel uses in the same
-  // column, not to a guess: Kilo's Models table is the widest thing its sidebar
-  // draws, and a plan row inside that group may be exactly as wide.
-  assert.equal(KILO_PLAN_BAR_WIDTH, 24);
-  assert.equal(KILO_SHARE_BAR_WIDTH, KILO_MODEL_NAME_MAX_CHARS);
-  // Kilo's Models table fixes glyph(1) + Steps(5) + Cost(9) and three 1-cell
-  // gaps; the name column takes the rest, and the 19 cells the code budgets for
-  // it is what that leaves in a 37-cell sidebar. The plan is drawn inside that
-  // group, so a plan row plus the group's own indent may not exceed it.
-  const tableFixed = 1 + KILO_STEPS_COLUMN_WIDTH + KILO_COST_COLUMN_WIDTH + 3;
-  const sidebarWidth = tableFixed + KILO_MODEL_NAME_MAX_CHARS;
-  const planRow = PLAN_LABEL_WIDTH + KILO_PLAN_BAR_WIDTH + PERCENT_CELL_WIDTH;
-  assert.ok(
-    planRow + 1 <= sidebarWidth,
-    `the plan row plus its group indent must fit the sidebar the table implies (${planRow + 1} > ${sidebarWidth})`,
-  );
-  assert.equal(
-    "Go share".length + 1 + KILO_SHARE_BAR_WIDTH + PERCENT_CELL_WIDTH,
-    planRow,
-    "the share meter and the plan must end on the same column",
-  );
-  assert.equal(usageMeterBar(42, OPENCODE_METER_WIDTH).length, OPENCODE_METER_WIDTH);
-  assert.notEqual(OPENCODE_METER_WIDTH, METER_WIDTH, "the two sidebars are not the same width");
-  // A model row is the widest thing the section draws: name + gap + bar + percent.
-  const modelRow = OPENCODE_MODEL_NAME_MAX_CHARS + 1 + GO_MODEL_BAR_WIDTH + 1 + PERCENT_CELL_WIDTH;
-  assert.ok(modelRow <= 30, `a model row must fit opencode's sidebar (${modelRow} cells)`);
-  const opencodePlanRow = PLAN_LABEL_WIDTH + OPENCODE_METER_WIDTH + PERCENT_CELL_WIDTH;
-  assert.ok(opencodePlanRow <= 30, `a plan row must fit opencode's sidebar (${opencodePlanRow} cells)`);
-  // And so is the collapsed mix line it collapses to.
-  assert.ok(GO_MODEL_MIX_BUDGET + 2 <= 30);
-});
-
-test("buildPlanRows takes the host's meter width", () => {
-  const rows = buildPlanRows(tuiSnapshot(), OPENCODE_METER_WIDTH);
-  assert.deepStrictEqual(rows.map((row) => row.label), ["5h", "7d", "30d"]);
-  for (const row of rows) assert.equal(row.bar.length, OPENCODE_METER_WIDTH);
-  assert.equal(buildPlanRows(tuiSnapshot())[0].bar.length, METER_WIDTH, "Kilo's default width is unchanged");
-});
-
 test("formatNextResetLine names the window the countdown belongs to", () => {
   assert.equal(formatNextResetLine(tuiSnapshot()), "5h resets in 2h5m");
   // The soonest window wins, and the label travels with it.
@@ -1008,9 +922,3 @@ test("formatPercentCell keeps a broken percent out of the column", () => {
   assert.equal(formatPercentCell(42, 3), "42%", "an explicit width still pads");
 });
 
-test("the plan label column is wide enough for the longest label", () => {
-  assert.ok(PLAN_LABEL_WIDTH >= 3, "30d is three cells");
-  for (const label of ["5h", "7d", "30d"]) {
-    assert.ok(label.length <= PLAN_LABEL_WIDTH, `${label} must fit the label column`);
-  }
-});
