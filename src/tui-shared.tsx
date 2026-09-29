@@ -492,7 +492,12 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
             still starts wherever the label ended -- "5h" and "30d" then draw
             their meters a cell apart. A box is a real layout box, which is why
             Kilo's Steps/Cost columns (boxes) line up and these did not. */}
-        <box width={PLAN_LABEL_WIDTH} flexShrink={0} flexDirection="row">
+        {/* The label cell is exactly `30d` wide and carries a one-cell margin:
+            without it the longest label butts straight into the meter, while the
+            shorter `5h`/`7d` happen to leave one behind -- the meter has to start
+            the same column on every row, so the separation is a layout fact and
+            not something the label's own length may decide. */}
+        <box width={PLAN_LABEL_WIDTH} marginRight={1} flexShrink={0} flexDirection="row">
           <text fg={props.theme.current.textMuted} wrapMode="none">
             {props.row.label}
           </text>
