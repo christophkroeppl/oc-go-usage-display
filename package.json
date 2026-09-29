@@ -74,7 +74,7 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.18.0",
-    "@kilocode/plugin": "^7.4.0",
+    "@kilocode/plugin": "^7.8.0",
     "@opentui/solid": "0.5.11",
     "solid-js": "1.9.12"
   },
@@ -90,8 +90,8 @@
     }
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.18.31",
-    "@kilocode/plugin": "^7.7.5",
+    "@opencode-ai/plugin": "^1.18.33",
+    "@kilocode/plugin": "^7.8.1",
     "@opentui/solid": "0.5.11",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.2",

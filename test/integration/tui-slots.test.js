@@ -28,10 +28,9 @@ process.env.XDG_CONFIG_HOME = path.join(ROOT, "xdg-config");
 process.env.XDG_DATA_HOME = path.join(ROOT, "xdg-data");
 process.env.OPENCODE_CONFIG_DIR = path.join(ROOT, "config");
 
-// Both hosts' env spellings must be neutralized: the plugin resolves a
-// host-scoped name first and falls back to the deprecated unscoped one, so an
-// ambient value under any of the three spellings would reach the entry.
-for (const prefix of ["OPENCODE_OC_GO_", "KILO_OC_GO_", "OPENCODE_GO_"]) {
+// Both hosts' env spellings must be neutralized: an ambient value under either
+// prefix would reach the entry we are about to import.
+for (const prefix of ["OPENCODE_OC_GO_", "KILO_OC_GO_"]) {
   for (const suffix of ["API_KEY", "AUTH_COOKIE", "WORKSPACE_ID", "DISPLAY", "SIDEBAR", "STATUSLINE", "SIDEBAR_MODE"]) {
     delete process.env[`${prefix}${suffix}`];
   }

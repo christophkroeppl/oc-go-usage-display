@@ -33,15 +33,15 @@ const HERMETIC_KEYS = [
 // Secret-bearing vars are removed so an ambient developer shell can never leak
 // credentials into (or be observed by) a test child. Only an explicit
 // `allowSecrets` opt-in re-admits a key for the live usage/TUI tests.
-// Every spelling the plugin can resolve, per host plus the deprecated unscoped
-// one: `hostEnv` falls back to `OPENCODE_GO_*`, so an ambient legacy var in a
-// developer shell would otherwise survive into a test child.
+// Every spelling the plugin can resolve. The unscoped `OPENCODE_GO_*` is dead
+// as of the 2.0 host scoping but is still stripped: a developer shell may
+// carry one, and a test child must not see a variable no build reads.
 const HOST_ENV_PREFIXES = ["OPENCODE_OC_GO_", "KILO_OC_GO_", "OPENCODE_GO_"];
 
 // The Go key a live test should use, whichever host prefix carries it. A shell
 // may reasonably export either name, and the live checks are host-agnostic.
 export function goApiKeyFromEnv(env = process.env) {
-  for (const key of ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY", "OPENCODE_GO_API_KEY"]) {
+  for (const key of ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY"]) {
     const value = (env[key] ?? "").trim();
     if (value.length > 0) return { key, value };
   }

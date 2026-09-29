@@ -133,10 +133,11 @@ reason.
 OPENCODE_OC_GO_SIDEBAR=1 KILO_OC_GO_SIDEBAR=0 opencode
 ```
 
-**Deprecated**: the unscoped `OPENCODE_GO_*` spelling still resolves when no
-host-scoped name is set, so upgrading cannot strand a working credential. The
-host-scoped name always wins when both are present. New configuration should use
-the scoped form.
+The pre-2.0 unscoped `OPENCODE_GO_*` spelling is **no longer read**. It was
+removed rather than deprecated: a fallback would keep one shared variable steering
+both hosts after the split, which is the exact ambiguity the prefixes exist to
+remove. If you configured credentials through it, move them to the host-scoped
+name you actually run.
 
 `OPENCODE_CONFIG_DIR` / `KILO_CONFIG_DIR` are read by the install CLIs, not by
 the plugin entry modules.
@@ -187,8 +188,8 @@ footer to a commit merged to `main`.
   restart the host (`opencode debug config` shows the resolved plugin list;
   `opencode --pure` skips plugins, so it is not a valid check).
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
-  `OPENCODE_OC_GO_API_KEY` and `KILO_OC_GO_API_KEY` (or the deprecated
-  `OPENCODE_GO_API_KEY` for both), sign in through the
+  `OPENCODE_OC_GO_API_KEY` or `KILO_OC_GO_API_KEY` for the host you are
+  running, sign in through the
   `opencode-go` provider in the host you are running, or configure workspace +
   cookie. Each host reads only its own `auth.json`, so a Kilo login does not
   feed the opencode plugin and vice versa.

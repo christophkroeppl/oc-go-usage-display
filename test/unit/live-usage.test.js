@@ -16,7 +16,7 @@ import { extractSnapshotFromApiPayload } from "../../dist/shared.js";
 const API_URL = "https://opencode.ai/zen/go/v1/usage";
 // Inlined rather than imported: the unit tier is purity-checked and
 // test/helpers/run.js performs fs work. Any host prefix may carry the key.
-const GO_KEY_NAME = ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY", "OPENCODE_GO_API_KEY"].find(
+const GO_KEY_NAME = ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY"].find(
   (name) => (process.env[name] ?? "").trim().length > 0,
 );
 const API_KEY = GO_KEY_NAME === undefined ? "" : process.env[GO_KEY_NAME].trim();

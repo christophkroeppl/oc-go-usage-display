@@ -82,27 +82,21 @@ export function resolveUsageHost(): UsageHost {
 // two hosts keep separate auth stores and separate config dirs for exactly this
 // reason.
 //
-// The unscoped `OPENCODE_GO_*` spelling predates host scoping and is still
-// honoured as a fallback, so upgrading cannot silently strand a working
-// credential. It is deprecated: the host-scoped name wins whenever both are set.
 const ENV_PREFIX: Record<UsageHost, string> = {
   opencode: "OPENCODE_OC_GO_",
   kilo: "KILO_OC_GO_",
 };
 
-const DEPRECATED_ENV_PREFIX = "OPENCODE_GO_";
-
 export function hostEnvName(host: UsageHost, suffix: string): string {
   return `${ENV_PREFIX[host]}${suffix}`;
 }
 
-// First match wins: the host-scoped name, then the deprecated unscoped one.
 export function hostEnv(
   host: UsageHost,
   suffix: string,
   env: NodeJS.ProcessEnv | undefined = process.env,
 ): string | undefined {
-  return env?.[hostEnvName(host, suffix)] ?? env?.[`${DEPRECATED_ENV_PREFIX}${suffix}`];
+  return env?.[hostEnvName(host, suffix)];
 }
 
 // `resolveHomedir` can throw when no home directory is resolvable; plugin

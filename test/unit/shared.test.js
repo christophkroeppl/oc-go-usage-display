@@ -479,18 +479,11 @@ test("hostEnv reads the host-scoped name and never the other host's", () => {
   assert.equal(hostEnv("opencode", "STATUSLINE", env), undefined);
 });
 
-test("hostEnv falls back to the deprecated unscoped name", () => {
-  // Upgrading must not strand a working credential, so the pre-host-scoping
-  // spelling still resolves when no host-scoped name is present.
-  assert.equal(hostEnv("kilo", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), "legacy");
-  assert.equal(hostEnv("opencode", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), "legacy");
-});
-
-test("hostEnv prefers the host-scoped name over the deprecated one", () => {
-  const env = { OPENCODE_OC_GO_API_KEY: "scoped", OPENCODE_GO_API_KEY: "legacy" };
-  assert.equal(hostEnv("opencode", "API_KEY", env), "scoped");
-  const kiloEnv = { KILO_OC_GO_API_KEY: "scoped", OPENCODE_GO_API_KEY: "legacy" };
-  assert.equal(hostEnv("kilo", "API_KEY", kiloEnv), "scoped");
+test("hostEnv ignores the pre-2.0 unscoped name", () => {
+  // The 2.0 break removed the fallback deliberately: a migration shim would let
+  // a stale OPENCODE_GO_* keep steering one host long after the split.
+  assert.equal(hostEnv("opencode", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), undefined);
+  assert.equal(hostEnv("kilo", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), undefined);
 });
 
 test("hostEnv tolerates a missing environment", () => {
