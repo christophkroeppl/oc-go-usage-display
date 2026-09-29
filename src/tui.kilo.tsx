@@ -17,7 +17,11 @@
 //   - `sidebar_content`      -> titled block, e.g. `Go Usage` header plus one
 //     muted row per window (`5h 42%`, `7d 15%`, `30d 61%`). The header box
 //     carries no paddingLeft/gap so `Go Usage` aligns flush left like the
-//     `Context` header.
+//     `Context` header. A `Go Plan` section follows it: a bold heading with the
+//     three plan windows indented one level, each a muted label plus a 16-cell
+//     meter whose whole bar is colored by threshold (muted < 75% <= warning <
+//     90% <= error, and error for a capped window regardless of percent), with
+//     a `resets in <duration>` line under a capped row.
 //   - `session_prompt_right` -> compact single line next to the context status
 //     info (e.g. `Go 5h 42% | 7d 15% | 30d 61%`), where the `80.6K (8%) · $0.09` readout
 //     lives. Additive multi-render only; `sidebar_footer` (single_winner,
@@ -48,6 +52,25 @@
 // both new keys are set true, then the legacy key is cleared) and ignored
 // afterwards.
 //
+// Sidebar placement is a third axis, alongside the two surface booleans
+// (`sidebar_mode`, default `integrated`), resolved exactly like them — TUI
+// plugin option in tui.json -> `KILO_OC_GO_SIDEBAR_MODE` -> `api.kv`
+// `sidebar_mode` -> default. (Kilo's tui.json schema rejects the option, so on
+// this host the option path is only reachable in-process, the same situation
+// the `sidebar`/`statusline` options are in.)
+//   - `standalone` -> register at KILO_SLOT_ORDER (125), Kilo's own
+//     `Token Usage` panel stays where it is.
+//   - `integrated` -> register at KILO_INTEGRATED_SLOT_ORDER (150) and switch
+//     `internal:kilo-sidebar-usage` off, so one band carries the Go readout
+//     instead of two competing ones. Kilo's panel cannot be extended (the real
+//     slot registry is unreachable from a plugin), so integrated mode retires
+//     it through `api.plugins.deactivate` — the runtime form of the
+//     `plugin_enabled` map in tui.json, and reversible via `activate`.
+//   The mode is switched live by `oc-go-usage-display.toggle-sidebar-mode`
+//   (title `Go usage: toggle sidebar mode`); the host panel follows
+//   immediately, the slot ORDER is bound at registration and moves on the next
+//   TUI start (the SDK exposes no slot unregister).
+//
 // Data: Kilo's own auth.json (dataShare ~/.local/share/kilo/auth.json or
 // $XDG_DATA_HOME/kilo/auth.json, then $KILO_CONFIG_DIR / ~/.config/kilo,
 // `opencode-go` key else `opencode` key) as Bearer for
@@ -71,14 +94,17 @@ import type {
 } from "@kilocode/plugin/tui";
 import { For, Show, createEffect, createSignal } from "solid-js";
 import {
+  buildPlanRows,
   buildUsageRows,
   formatStatusline,
   isDisplayMode,
   isSnapshotEmpty,
   parseBooleanFlag,
+  parseSidebarMode,
   surfaceSelectionFromDisplayMode,
+  DEFAULT_SIDEBAR_MODE,
 } from "./helpers.js";
-import type { SurfaceSelection } from "./helpers.js";
+import type { PlanRow, SidebarMode, SurfaceSelection, UsageMeterSeverity } from "./helpers.js";
 import {
   errorMessage,
   extractSnapshotFromApiPayload,
@@ -88,7 +114,9 @@ import {
   toNonEmptyString,
   unavailableSnapshot,
   hostEnv,
+  KILO_INTEGRATED_SLOT_ORDER,
   KILO_SLOT_ORDER,
+  KILO_USAGE_PANEL_PLUGIN_ID,
 } from "./shared.js";
 import type { UsageHost, UsageSnapshot } from "./shared.js";
 
@@ -107,7 +135,9 @@ const GO_PROVIDER_ID = "opencode-go";
 // an opencode-prefixed name.
 const HOST: UsageHost = "kilo";
 const SLOT_ORDER = KILO_SLOT_ORDER;
+const INTEGRATED_SLOT_ORDER = KILO_INTEGRATED_SLOT_ORDER;
 const KV_DISPLAY_KEY = "display";
+const KV_SIDEBAR_MODE_KEY = "sidebar_mode";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
 const KV_COLLAPSED_STATUSLINE_KEY = "collapsed_statusline";
 const KV_COLLAPSED_LEGACY_KEY = "collapsed";
@@ -152,6 +182,70 @@ function resolveSurfaceSelection(options: PluginOptions | undefined, api: TuiPlu
     // Persisted settings are best-effort; fall through to the default.
   }
   return { sidebar: true, statusline: true };
+}
+
+// Sidebar placement uses the same precedence ladder as the surface selection,
+// including the Kilo-hostile case of an option its tui.json schema cannot
+// carry: the plugin cannot fix the host's schema, and it must not skip the
+// option because of it (that would silently diverge from `resolveSurfaceSelection`
+// and make the two axes disagree about which source won).
+function resolveSidebarMode(options: PluginOptions | undefined, api: TuiPluginApi): SidebarMode {
+  if (options !== undefined) {
+    const option = parseSidebarMode(options.sidebar_mode);
+    if (option !== null) return option;
+  }
+
+  const env = parseSidebarMode(hostEnv(HOST, "SIDEBAR_MODE"));
+  if (env !== null) return env;
+
+  try {
+    const stored = parseSidebarMode(api.kv.get<unknown>(KV_SIDEBAR_MODE_KEY, null));
+    if (stored !== null) return stored;
+  } catch {
+    // Persisted settings are best-effort; fall through to the default.
+  }
+  return DEFAULT_SIDEBAR_MODE;
+}
+
+// Whether the host's own token-usage panel is currently switched on, or null
+// when the host does not report it. Reading the state first keeps every launch
+// from writing an unchanged `plugin_enabled` entry.
+function hostUsagePanelEnabled(api: TuiPluginApi): boolean | null {
+  try {
+    const entry = api.plugins?.list?.().find((status) => status.id === KILO_USAGE_PANEL_PLUGIN_ID);
+    if (entry === undefined) return null;
+    return entry.active || entry.enabled;
+  } catch {
+    return null;
+  }
+}
+
+// Integrated mode replaces Kilo's `Token Usage` band, so the host panel has to
+// go; standalone mode puts it back. The SDK's `deactivate`/`activate` are the
+// runtime form of the `plugin_enabled` map in tui.json and persist to KV, which
+// is what makes the switch survive a restart. Kilo's panel is not reachable
+// through `api.slots` (that facade only exposes `register`), so this is the
+// only supported way to take its band. Every step is best-effort: a failure
+// leaves both panels on screen and is logged, never thrown.
+async function applyHostUsagePanel(api: TuiPluginApi, mode: SidebarMode): Promise<void> {
+  const wantEnabled = mode === "standalone";
+  try {
+    const current = hostUsagePanelEnabled(api);
+    if (current === wantEnabled) return;
+    const applied = await (wantEnabled
+      ? api.plugins.activate(KILO_USAGE_PANEL_PLUGIN_ID)
+      : api.plugins.deactivate(KILO_USAGE_PANEL_PLUGIN_ID));
+    if (applied === true) return;
+    await logUsageError(
+      api,
+      `Could not ${wantEnabled ? "enable" : "disable"} Kilo's ${KILO_USAGE_PANEL_PLUGIN_ID} panel`,
+    );
+  } catch (error) {
+    await logUsageError(
+      api,
+      `Kilo ${KILO_USAGE_PANEL_PLUGIN_ID} panel switch failed: ${errorMessage(error)}`,
+    );
+  }
 }
 
 function readCollapsedFlag(api: TuiPluginApi, key: string): boolean {
@@ -242,7 +336,12 @@ async function logUsageError(api: TuiPluginApi, message: string): Promise<void> 
 // destabilize the host's plugin load, so it must never reject.
 async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefined): Promise<void> {
   const surfaces = resolveSurfaceSelection(options, api);
+  // Live mode: the host panel below follows it immediately. The sidebar slot's
+  // ORDER is read once at registration, because the SDK exposes no slot
+  // unregister — so a toggle moves the block on the next TUI start.
+  let sidebarMode = resolveSidebarMode(options, api);
   migrateLegacyCollapsedFlag(api);
+  void applyHostUsagePanel(api, sidebarMode);
 
   const [usageSnapshot, setUsageSnapshot] = createSignal<UsageSnapshot | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = createSignal<boolean>(
@@ -325,6 +424,69 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     }
   }
 
+  function toggleSidebarMode(): void {
+    const next: SidebarMode = sidebarMode === "integrated" ? "standalone" : "integrated";
+    sidebarMode = next;
+    // Fire-and-forget: the host panel switch is async and may fail, and the
+    // command must return either way.
+    void applyHostUsagePanel(api, next);
+    try {
+      api.kv.set(KV_SIDEBAR_MODE_KEY, next);
+    } catch {
+      // Mode persistence is best-effort; the panel switch above still happened.
+    }
+  }
+
+  function meterColor(theme: TuiTheme, severity: UsageMeterSeverity) {
+    if (severity === "error") return theme.current.error;
+    if (severity === "warning") return theme.current.warning;
+    return theme.current.textMuted;
+  }
+
+  // Kilo's own row grammar: a row box with the label muted and pushed away
+  // from the value, which here is the meter plus its percent.
+  function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
+    return (
+      <box flexDirection="column">
+        <box flexDirection="row" justifyContent="space-between">
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            {props.row.label}
+          </text>
+          <box flexDirection="row">
+            <text fg={meterColor(props.theme, props.row.severity)} wrapMode="none">
+              {props.row.bar}
+            </text>
+            <text fg={props.theme.current.textMuted} wrapMode="none" marginLeft={1}>
+              {props.row.percent}%
+            </text>
+          </box>
+        </box>
+        <Show when={props.row.reset}>
+          {(reset) => (
+            <text fg={props.theme.current.textMuted} wrapMode="none">
+              resets in {reset()}
+            </text>
+          )}
+        </Show>
+      </box>
+    );
+  }
+
+  function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[] }) {
+    return (
+      <box flexDirection="column">
+        <text fg={props.theme.current.text}>
+          <b>Go Plan</b>
+        </text>
+        <box flexDirection="column" paddingLeft={1}>
+          <For each={props.rows}>
+            {(row) => <GoPlanRow theme={props.theme} row={row} />}
+          </For>
+        </box>
+      </box>
+    );
+  }
+
   function GoSidebarPanel(props: { theme: TuiTheme }) {
     createEffect(() => {
       const snapshot = usageSnapshot();
@@ -360,14 +522,20 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
                 </text>
               );
             }
+            const planRows = buildPlanRows(snap);
             return (
-              <For each={buildUsageRows(snap)}>
-                {(row) => (
-                  <text fg={props.theme.current.textMuted} wrapMode="none">
-                    {row.label} {row.value}
-                  </text>
-                )}
-              </For>
+              <>
+                <For each={buildUsageRows(snap)}>
+                  {(row) => (
+                    <text fg={props.theme.current.textMuted} wrapMode="none">
+                      {row.label} {row.value}
+                    </text>
+                  )}
+                </For>
+                <Show when={planRows.length > 0}>
+                  <GoPlanSection theme={props.theme} rows={planRows} />
+                </Show>
+              </>
             );
           }}
         </Show>
@@ -393,7 +561,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     // dispose path.
     try {
       api.slots.register({
-        order: SLOT_ORDER,
+        order: sidebarMode === "integrated" ? INTEGRATED_SLOT_ORDER : SLOT_ORDER,
         slots: {
           sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
             // Individually guarded: a later render must never throw into the host.
@@ -455,6 +623,12 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         value: "oc-go-usage-display.toggle-statusline",
         category: "Go",
         onSelect: () => toggleStatuslineCollapsed(),
+      },
+      {
+        title: "Go usage: toggle sidebar mode",
+        value: "oc-go-usage-display.toggle-sidebar-mode",
+        category: "Go",
+        onSelect: () => toggleSidebarMode(),
       },
     ]);
     if (typeof unregister === "function") unregisterToggleCommand = unregister;

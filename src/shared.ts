@@ -257,6 +257,20 @@ export const KILO_SIDEBAR_ORDERS: Readonly<Record<string, number>> = {
 // renders directly between them and never ties with a host panel.
 export const KILO_SLOT_ORDER = 125;
 
+// Integrated mode takes over the token-usage panel's own band, so the Go block
+// lands where Kilo already draws usage. It ties with
+// `internal:kilo-sidebar-usage` by construction — which is why that panel is
+// retired rather than extended (see KILO_USAGE_PANEL_PLUGIN_ID): a Kilo
+// release that moves it off 150 leaves us in a free band again, harmlessly.
+export const KILO_INTEGRATED_SLOT_ORDER = 150;
+
+// The host panel integrated mode replaces. `api.slots` is a per-plugin facade
+// that exposes only `register`, so this panel cannot be extended or
+// monkey-patched: the only supported way to take its band is to switch it off
+// through the plugin lifecycle (`plugin_enabled` in tui.json at config time,
+// `api.plugins.deactivate` at runtime).
+export const KILO_USAGE_PANEL_PLUGIN_ID = "internal:kilo-sidebar-usage";
+
 // Rows the integrated mode mirrors from Kilo's own `Token Usage` panel, in the
 // order it renders them. Kept here so a reword upstream is a test failure rather
 // than a silent divergence between our panel and the host's.

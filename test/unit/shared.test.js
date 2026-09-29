@@ -19,7 +19,9 @@ import {
   hostEnvName,
   KILO_SIDEBAR_ORDERS,
   KILO_SLOT_ORDER,
+  KILO_INTEGRATED_SLOT_ORDER,
   KILO_TOKEN_USAGE_ROWS,
+  KILO_USAGE_PANEL_PLUGIN_ID,
   resolveConfigDir,
   resolveHostRoots,
   safeJoinPath,
@@ -522,4 +524,27 @@ test("the mirrored kilo token-usage rows are the ones we render", () => {
     "Cost",
   ]);
   assert.equal(new Set(KILO_TOKEN_USAGE_ROWS).size, KILO_TOKEN_USAGE_ROWS.length, "no duplicate rows");
+});
+
+// Integrated mode deliberately ties with the host panel it retires, so the tie
+// is the contract: if the panel ever moves off this order the plugin silently
+// falls back into a free band, which is why both facts are asserted together
+// rather than letting the collision look like a bug.
+test("the integrated slot order is exactly the kilo usage panel it replaces", () => {
+  assert.equal(KILO_SIDEBAR_ORDERS[KILO_USAGE_PANEL_PLUGIN_ID], KILO_INTEGRATED_SLOT_ORDER);
+  assert.equal(
+    Object.entries(KILO_SIDEBAR_ORDERS).filter(([, order]) => order === KILO_INTEGRATED_SLOT_ORDER).length,
+    1,
+    "the integrated band must be claimed by the panel we retire, and by nothing else",
+  );
+  assert.ok(
+    KILO_SIDEBAR_ORDERS["internal:sidebar-context"] < KILO_INTEGRATED_SLOT_ORDER,
+    "the integrated band must stay below the context panel",
+  );
+});
+
+test("the retired panel id is the one the ladder records", () => {
+  // A typo here would leave Kilo's panel rendering next to ours forever, with
+  // no error anywhere to explain the duplicate.
+  assert.ok(KILO_USAGE_PANEL_PLUGIN_ID in KILO_SIDEBAR_ORDERS, "unknown kilo panel id");
 });

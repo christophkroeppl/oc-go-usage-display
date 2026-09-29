@@ -123,6 +123,7 @@ so one shell can drive the two hosts independently:
 | `SIDEBAR` | `OPENCODE_OC_GO_SIDEBAR` | `KILO_OC_GO_SIDEBAR` |
 | `STATUSLINE` | `OPENCODE_OC_GO_STATUSLINE` | `KILO_OC_GO_STATUSLINE` |
 | `DISPLAY` (legacy) | `OPENCODE_OC_GO_DISPLAY` | `KILO_OC_GO_DISPLAY` |
+| `SIDEBAR_MODE` | `OPENCODE_OC_GO_SIDEBAR_MODE` | `KILO_OC_GO_SIDEBAR_MODE` |
 
 A Kilo build only reads `KILO_OC_GO_*`, so an `OPENCODE_OC_GO_*` name can never
 steer it — the two hosts keep separate auth stores and config dirs for the same

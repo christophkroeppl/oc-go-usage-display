@@ -35,41 +35,82 @@ const MOCK_STATUSLINE = /Go 5h 42% \| 7d 15% \| 30d 61%/;
 const MOCK_SIDEBAR = /Go Usage/;
 const LIVE_STATUSLINE = /Go 5h \d+% \| 7d (?:\d+%|n\/a) \| 30d (?:\d+%|n\/a)/;
 
-test(
-  "kilo TUI displays the mock usage in sidebar and statusline",
-  { skip: SKIP_NO_HOST, timeout: 600000 },
-  async () => {
-    const tmp = makeConfigDir();
-    try {
-      const env = makeTuiEnv({ root: tmp.root, live: false });
-      const { model, screen } = await runTuiDisplay({
-        host: "kilo",
-        binary: BINARY,
-        repoDir: REPO_DIR,
-        env,
-        expect: { statusline: MOCK_STATUSLINE, sidebar: MOCK_SIDEBAR },
-      });
-      assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
-      assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
-      assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
-      // SLOT_ORDER 125: below Kilo's `Context` (100), above its `Token Usage`
-      // block (150), so both usage readouts stay adjacent at the top of the
-      // sidebar. Anchors are Kilo's always-rendered core panels, so this fails
-      // if the block drifts out of that band in either direction.
-      assertSidebarOrder(screen, { before: [/\bToken Usage\b/], after: [/\bContext\b/] });
-      // The rows the integrated mode mirrors. Asserted here because this screen
-      // already has Kilo's panel rendered: one boot proves both that the labels
-      // exist upstream and that our block lands in the right place among them.
-      for (const label of KILO_TOKEN_USAGE_ROWS) {
-        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        assert.match(screen, new RegExp(escaped), `kilo must still render the "${label}" row we mirror`);
-      }
-      console.log(`[e2e] kilo TUI mock usage rendered (model ${model})`);
-    } finally {
-      tmp.cleanup();
-    }
+// Both sidebar modes are driven explicitly rather than inherited from the
+// default. The mode decides whether Kilo's own `Token Usage` panel is on screen
+// at all -- integrated mode retires it -- so the ordering anchors differ per
+// mode and an unpinned test would assert one of them against the other.
+const MODES = [
+  {
+    mode: "standalone",
+    // The poll helper waits for `expect.sidebar` before it captures, and the
+    // host panel is switched asynchronously, so the wait pattern is what makes
+    // the settled state observable: only a screen showing BOTH panels means
+    // `activate` has landed. Matching `Go Usage` alone would let the capture
+    // race the switch and flake.
+    settled: /Go Usage[\s\S]*\bToken Usage\b/,
+    // KILO_SLOT_ORDER 125: below `Context` (100), above `Token Usage` (150),
+    // so both readouts stay adjacent and the host panel is untouched.
+    order: { before: [/\bToken Usage\b/], after: [/\bContext\b/] },
+    hostPanel: true,
   },
-);
+  {
+    mode: "integrated",
+    // Same reasoning: the block only reads as settled once it sits in the host
+    // panel's old band, i.e. above the panels that follow it.
+    settled: /Go Usage[\s\S]*\bLSP\b/,
+    // KILO_INTEGRATED_SLOT_ORDER 150: the host panel's own band, so our block
+    // is below `Context` and there is no `Token Usage` header to anchor below.
+    order: { after: [/\bContext\b/] },
+    hostPanel: false,
+  },
+];
+
+for (const { mode, order, hostPanel, settled } of MODES) {
+  test(
+    `kilo TUI displays the mock usage in sidebar and statusline (${mode})`,
+    { skip: SKIP_NO_HOST, timeout: 600000 },
+    async () => {
+      const tmp = makeConfigDir();
+      try {
+        const env = makeTuiEnv({ root: tmp.root, live: false });
+        env.KILO_OC_GO_SIDEBAR_MODE = mode;
+        const { model, screen } = await runTuiDisplay({
+          host: "kilo",
+          binary: BINARY,
+          repoDir: REPO_DIR,
+          env,
+          expect: { statusline: MOCK_STATUSLINE, sidebar: settled },
+        });
+        assert.match(screen, MOCK_SIDEBAR, "sidebar must render the Go Usage block");
+        assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
+        assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
+        assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
+        assertSidebarOrder(screen, order);
+
+        if (hostPanel) {
+          // The rows the integrated mode mirrors. Asserted here because this
+          // screen already has Kilo's panel rendered: one boot proves both that
+          // the labels exist upstream and that our block lands among them.
+          for (const label of KILO_TOKEN_USAGE_ROWS) {
+            const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            assert.match(screen, new RegExp(escaped), `kilo must still render the "${label}" row we mirror`);
+          }
+        } else {
+          // Integrated mode must have retired the host panel, not merely
+          // rendered beside it: two competing usage blocks is the failure mode.
+          assert.doesNotMatch(
+            screen,
+            /\bToken Usage\b/,
+            "integrated mode must retire Kilo's own Token Usage panel",
+          );
+        }
+        console.log(`[e2e] kilo TUI mock usage rendered (model ${model}, ${mode})`);
+      } finally {
+        tmp.cleanup();
+      }
+    },
+  );
+}
 
 test(
   "kilo TUI displays live usage from the API",

@@ -205,6 +205,23 @@ export function isDisplayMode(value: unknown): value is DisplayMode {
   return value === "sidebar" || value === "statusline" || value === "both";
 }
 
+// Where the Go block sits in Kilo's sidebar ladder:
+//   - `integrated`  — takes over the host's own token-usage band and retires
+//     its panel, so both usage readouts are one block instead of two.
+//   - `standalone` — a free band of our own, host panel untouched.
+export type SidebarMode = "integrated" | "standalone";
+
+export const DEFAULT_SIDEBAR_MODE: SidebarMode = "integrated";
+
+// Tolerant like `parseBooleanFlag`, because the same value reaches us from a
+// hand-written env var and from typed JSON: null means "unset or unrecognized",
+// and the caller keeps falling through to the next source.
+export function parseSidebarMode(value: unknown): SidebarMode | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "integrated" || normalized === "standalone" ? normalized : null;
+}
+
 export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
   return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
 }
@@ -242,5 +259,73 @@ export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
   }
   if (snapshot.weekly !== null) rows.push({ label: "7d", value: `${snapshot.weekly.percent}%` });
   if (snapshot.monthly !== null) rows.push({ label: "30d", value: `${snapshot.monthly.percent}%` });
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// TUI: plan meters (gauge fill + threshold severity)
+// ---------------------------------------------------------------------------
+//
+// Severity is a name, not a color: this module is inlined into the server
+// bundle too, and only the TUI entry can resolve it against a theme.
+
+export type UsageMeterSeverity = "muted" | "warning" | "error";
+
+export const METER_WIDTH = 16;
+
+const METER_FILLED = "█";
+const METER_EMPTY = "░";
+
+const WARNING_PERCENT = 75;
+const ERROR_PERCENT = 90;
+
+// A capped window is a hard stop rather than a percentage: `limited` wins over
+// whatever the gauge says, so a window that is capped at 3% still reads as
+// error instead of reassuring the eye.
+export function usageMeterSeverity(window: UsageWindow): UsageMeterSeverity {
+  if (window.limited) return "error";
+  if (window.percent >= ERROR_PERCENT) return "error";
+  if (window.percent >= WARNING_PERCENT) return "warning";
+  return "muted";
+}
+
+// Saturating fill: the API can report a percent outside 0-100, and a repeat
+// count outside 0-width throws, so both ends are clamped here instead of at
+// the render site.
+export function usageMeterBar(percent: number, width: number = METER_WIDTH): string {
+  const cells = Number.isFinite(width) ? Math.max(Math.floor(width), 0) : 0;
+  if (cells === 0 || !Number.isFinite(percent)) return "";
+  const clamped = Math.min(Math.max(percent, 0), 100);
+  const filled = Math.min(Math.max(Math.round((clamped / 100) * cells), 0), cells);
+  return METER_FILLED.repeat(filled) + METER_EMPTY.repeat(cells - filled);
+}
+
+export type PlanRow = {
+  label: string;
+  bar: string;
+  percent: number;
+  severity: UsageMeterSeverity;
+  reset: string | null;
+};
+
+export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
+  const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
+    ["5h", snapshot.rolling],
+    ["7d", snapshot.weekly],
+    ["30d", snapshot.monthly],
+  ];
+  const rows: PlanRow[] = [];
+  for (const [label, window] of windows) {
+    if (window === null) continue;
+    rows.push({
+      label,
+      bar: usageMeterBar(window.percent),
+      percent: window.percent,
+      severity: usageMeterSeverity(window),
+      // A countdown only tells the user something once the window is capped;
+      // before that the schedule is noise, and the header rows already show it.
+      reset: window.limited ? formatResetDuration(window.resetInSec) ?? window.resetText : null,
+    });
+  }
   return rows;
 }
