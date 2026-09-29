@@ -2,9 +2,13 @@
 //
 // OpenCode Go usage TUI plugin (dual-surface display).
 //
-// Renders subscription usage in two additive multi-render slots (sidebar order
-// 50 sits above the context panel at 100 and below model-sidebar at 20;
-// worktrunk renders elsewhere so multi-render stacking is unaffected):
+// Renders subscription usage in two additive multi-render slots. `SLOT_ORDER`
+// (50) sits in the free band above every host panel, so the block renders at
+// the top of the sidebar; OpenCode's own `sidebar_content` ladder starts at
+// 100 (`sidebar-context`) and continues 200 mcp / 300 lsp / 400 todo /
+// 500 files, and it registers no `session_prompt_right` panel at all, so the
+// statusline has nothing to stack against. Worktrunk renders elsewhere so
+// multi-render stacking is unaffected:
 //   - `sidebar_content`      -> titled block, e.g. `Go Usage` header plus one
 //     muted row per window (`5h 42%`, `7d 15%`, `30d 61%`). The header box
 //     carries no paddingLeft/gap so `Go Usage` aligns flush left like the

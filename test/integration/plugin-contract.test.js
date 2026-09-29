@@ -46,10 +46,12 @@ process.on("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
 
 const serverModule = await import("../../dist/index.js");
 const tuiModule = await import("../../dist/tui.js");
+const kiloTuiModule = await import("../../dist/tui.kilo.js");
 
 const ENTRY_MODULES = [
   { name: "dist/index.js", mod: serverModule, key: "server" },
   { name: "dist/tui.js", mod: tuiModule, key: "tui" },
+  { name: "dist/tui.kilo.js", mod: kiloTuiModule, key: "tui" },
 ];
 
 // A Hooks value is a plain object (the loader reads properties off it, e.g.
@@ -70,6 +72,16 @@ test("tui entry exports only the default plugin module", () => {
   assert.equal(tuiModule.default.id, "oc-go-usage-display");
   assert.equal(typeof tuiModule.default.tui, "function");
   assert.equal(tuiModule.default.server, undefined);
+});
+
+// The Kilo TUI entry is the same module with the host baked in by an esbuild
+// define (scripts/build-plugins.mjs), so it carries the identical loader
+// contract — the loader enumerates its exports exactly the same way.
+test("kilo tui entry exports only the default plugin module", () => {
+  assert.deepStrictEqual(Object.keys(kiloTuiModule), ["default"]);
+  assert.equal(kiloTuiModule.default.id, "oc-go-usage-display");
+  assert.equal(typeof kiloTuiModule.default.tui, "function");
+  assert.equal(kiloTuiModule.default.server, undefined);
 });
 
 test("legacy export enumeration finds no export that is not a plugin module", async () => {

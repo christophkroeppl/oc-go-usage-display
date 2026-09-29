@@ -1,18 +1,42 @@
-// Unit tier: `dist/tui.js` registration contract, proven with a
-// dependency-free stub `TuiPluginApi` (no PTY, no opencode binary, no network).
+// Integration tier: `dist/tui.js` (opencode, order 50) and `dist/tui.kilo.js`
+// (Kilo, order 125) registration contracts, proven with a dependency-free stub
+// `TuiPluginApi` (no PTY, no opencode/kilo binary, no network).
+//
+// These assert the registered `order` value; the *rendered* consequence of that
+// order is pinned separately by the e2e tier (assertSidebarOrder in
+// test/helpers/tui.js), which is what actually guards the constant.
 //
 // `OPENCODE_GO_MOCK=1` makes the plugin's refresh path return the mock snapshot
 // synchronously, so the factory resolves without touching auth.json or fetch.
+// HOME/XDG are redirected into a tmp root before the imports anyway, so a future
+// mock regression cannot reach the developer's real `~/.local/share/{opencode,
+// kilo}/auth.json` now that both host entries are loaded here.
 //
 // Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "oc-go-usage-display-tui-slots-"));
 process.env.OPENCODE_GO_MOCK = "1";
+process.env.HOME = path.join(ROOT, "home");
+process.env.XDG_CONFIG_HOME = path.join(ROOT, "xdg-config");
+process.env.XDG_DATA_HOME = path.join(ROOT, "xdg-data");
+process.env.OPENCODE_CONFIG_DIR = path.join(ROOT, "config");
+delete process.env.OPENCODE_GO_API_KEY;
+delete process.env.OPENCODE_GO_AUTH_COOKIE;
+for (const dir of ["home", "xdg-config", "xdg-data", "config"]) {
+  fs.mkdirSync(path.join(ROOT, dir), { recursive: true });
+}
+process.on("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
 
 const tuiModule = await import("../../dist/tui.js");
 const tui = tuiModule.default.tui;
+const kiloTuiModule = await import("../../dist/tui.kilo.js");
+const kiloTui = kiloTuiModule.default.tui;
 
 // A stub host that records registrations and disposes like the real one, but
 // depends on nothing. Only the surface the plugin actually uses is provided.
@@ -69,7 +93,7 @@ function registeredSlotNames(registration) {
   return Object.keys(registration.slots);
 }
 
-test("tui factory registers both surfaces at order 50 and wires dispose", async () => {
+test("opencode tui factory registers both surfaces at order 50 and wires dispose", async () => {
   const { api, slotRegistrations, disposers } = makeStubApi();
 
   try {
@@ -92,7 +116,7 @@ test("tui factory registers both surfaces at order 50 and wires dispose", async 
   }
 });
 
-test("tui factory registers only sidebar_content when statusline is off", async () => {
+test("opencode tui factory registers only sidebar_content when statusline is off", async () => {
   const { api, slotRegistrations, disposers } = makeStubApi();
 
   try {
@@ -100,6 +124,43 @@ test("tui factory registers only sidebar_content when statusline is off", async 
 
     assert.equal(slotRegistrations.length, 1);
     assert.equal(slotRegistrations[0].order, 50);
+    assert.deepStrictEqual(registeredSlotNames(slotRegistrations[0]), ["sidebar_content"]);
+  } finally {
+    for (const dispose of disposers) dispose();
+  }
+});
+
+// Kilo renders the widget between its Context (100) and Token Usage (150)
+// panels: 100 < 125 < 150.
+test("kilo tui factory registers both surfaces at order 125 and wires dispose", async () => {
+  const { api, slotRegistrations, disposers } = makeStubApi();
+
+  try {
+    await kiloTui(api, { sidebar: true, statusline: true });
+
+    assert.equal(kiloTuiModule.default.id, "oc-go-usage-display");
+    assert.equal(slotRegistrations.length, 2);
+    for (const registration of slotRegistrations) {
+      assert.equal(registration.order, 125);
+    }
+    const names = slotRegistrations.flatMap(registeredSlotNames).sort();
+    assert.deepStrictEqual(names, ["session_prompt_right", "sidebar_content"]);
+
+    assert.equal(disposers.length, 1);
+    assert.equal(typeof disposers[0], "function");
+  } finally {
+    for (const dispose of disposers) dispose();
+  }
+});
+
+test("kilo tui factory registers only sidebar_content when statusline is off", async () => {
+  const { api, slotRegistrations, disposers } = makeStubApi();
+
+  try {
+    await kiloTui(api, { sidebar: true, statusline: false });
+
+    assert.equal(slotRegistrations.length, 1);
+    assert.equal(slotRegistrations[0].order, 125);
     assert.deepStrictEqual(registeredSlotNames(slotRegistrations[0]), ["sidebar_content"]);
   } finally {
     for (const dispose of disposers) dispose();

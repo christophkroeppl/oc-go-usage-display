@@ -2,9 +2,18 @@
 //
 // OpenCode Go usage TUI plugin (dual-surface display).
 //
-// Renders subscription usage in two additive multi-render slots (sidebar order
-// 50 sits above the context panel at 100 and below model-sidebar at 20;
-// worktrunk renders elsewhere so multi-render stacking is unaffected):
+// Renders subscription usage in two additive multi-render slots. `SLOT_ORDER`
+// (125) is a free band in Kilo's own `sidebar_content` ladder, so the block is
+// placed deterministically instead of tied with a host panel:
+//   50 kilo-sidebar-pr | 100 sidebar-context | 150 kilo-sidebar-usage
+//   | 200 sidebar-mcp | 225 kilo-sidebar-indexing
+//   | 250 kilo-sidebar-background-processes | 300 sidebar-lsp
+//   | 400 sidebar-todo | 500 sidebar-files | 1000 kilo-sidebar-memory
+// 100 < 125 < 150 therefore renders directly below Kilo's `Context` panel and
+// above its `Token Usage` block, keeping both usage readouts adjacent at the
+// top of the sidebar; worktrunk renders elsewhere so multi-render stacking is
+// unaffected. Kilo's own `session_prompt_right` panels sit at 50/51, so the
+// same order puts this statusline rightmost:
 //   - `sidebar_content`      -> titled block, e.g. `Go Usage` header plus one
 //     muted row per window (`5h 42%`, `7d 15%`, `30d 61%`). The header box
 //     carries no paddingLeft/gap so `Go Usage` aligns flush left like the
@@ -91,7 +100,7 @@ const EVENT_TTL_MS = 15_000;
 const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const GO_PROVIDER_ID = "opencode-go";
-const SLOT_ORDER = 50;
+const SLOT_ORDER = 125;
 const KV_DISPLAY_KEY = "display";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
 const KV_COLLAPSED_STATUSLINE_KEY = "collapsed_statusline";

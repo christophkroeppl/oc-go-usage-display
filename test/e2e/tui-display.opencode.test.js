@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { findOpencodeBinary } from "../helpers/opencode.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
+  assertSidebarOrder,
   fetchLiveUsage,
   hasTmux,
   hostVersionSkipReason,
@@ -55,6 +56,9 @@ test(
       assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
       assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
       assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
+      // SLOT_ORDER 50: above every host panel, so the block leads the sidebar
+      // and `Context` (the first host panel, at 100) follows it.
+      assertSidebarOrder(screen, { before: [/\bContext\b/] });
       console.log(`[e2e] opencode TUI mock usage rendered (model ${model})`);
     } finally {
       tmp.cleanup();

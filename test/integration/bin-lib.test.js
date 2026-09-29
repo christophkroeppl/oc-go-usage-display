@@ -1,4 +1,4 @@
-// Unit tier: `bin/lib.js` — dependency-free install helpers (flag parsing,
+// Integration tier: `bin/lib.js` — dependency-free install helpers (flag parsing,
 // tui entry normalization, config-entry round-trips, plugin file removal).
 // Temp dirs come from `test/helpers/tmp.js`; the real config dir is never used.
 //

@@ -1,4 +1,4 @@
-// Unit tier: fail-safe guarantees for the compiled plugin entry modules.
+// Integration tier: fail-safe guarantees for the compiled plugin entry modules.
 //
 // OpenCode's loader collects plugin hook objects and later dereferences
 // `hook.config` / `hook.provider`; a null/undefined/non-object entry (or a

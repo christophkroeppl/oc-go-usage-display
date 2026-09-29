@@ -1,4 +1,4 @@
-// Unit tier: `dist/index.js` cookie-scrape fetch wiring.
+// Integration tier: `dist/index.js` cookie-scrape fetch wiring.
 //
 // The redirect helpers are covered by redirect.test.js; this suite proves the
 // compiled server actually uses them: the scrape fetch must request

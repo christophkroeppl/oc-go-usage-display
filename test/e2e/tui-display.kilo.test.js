@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { findKiloBinary } from "../helpers/kilo.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
+  assertSidebarOrder,
   fetchLiveUsage,
   hasTmux,
   hostVersionSkipReason,
@@ -51,6 +52,11 @@ test(
       assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
       assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
       assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
+      // SLOT_ORDER 125: below Kilo's `Context` (100), above its `Token Usage`
+      // block (150), so both usage readouts stay adjacent at the top of the
+      // sidebar. Anchors are Kilo's always-rendered core panels, so this fails
+      // if the block drifts out of that band in either direction.
+      assertSidebarOrder(screen, { before: [/\bToken Usage\b/], after: [/\bContext\b/] });
       console.log(`[e2e] kilo TUI mock usage rendered (model ${model})`);
     } finally {
       tmp.cleanup();

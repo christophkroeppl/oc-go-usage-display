@@ -17,6 +17,7 @@
 // the tmux socket all live inside a tmp root.
 
 import { spawn, spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolatedEnv } from "./run.js";
@@ -331,6 +332,38 @@ export async function waitForUsageSurfaces(
     `TUI did not render expected usage surfaces within ${timeoutMs}ms (missing: ${missing.join(", ")})` +
       `\n--- last captured pane ---\n${screen}`,
   );
+}
+
+// First rendered line index (0-based) matching `pattern`, or -1. The e2e
+// sessions use a fixed title, so the host sidebar headers are unique in the
+// captured pane and their line order is the order the host actually rendered.
+export function renderedLine(screen, pattern) {
+  const lines = screen.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (pattern.test(lines[i])) return i;
+  }
+  return -1;
+}
+
+// Pin the *rendered* position of the `Go Usage` block in the host sidebar
+// ladder. `SLOT_ORDER` only means something through where the host ends up
+// drawing it, so this is what actually guards the constant: the contract tests
+// can only echo it back. `before`/`after` are host sidebar headers that must
+// render below/above `Go Usage`; a host that stops rendering one of them is a
+// real layout change and fails loudly.
+export function assertSidebarOrder(screen, { before = [], after = [] } = {}) {
+  const goUsage = renderedLine(screen, /Go Usage/);
+  assert.ok(goUsage >= 0, "Go Usage header must be rendered in the sidebar");
+  for (const header of after) {
+    const line = renderedLine(screen, header);
+    assert.ok(line >= 0, `host sidebar header ${header} must be rendered`);
+    assert.ok(goUsage > line, `Go Usage (line ${goUsage + 1}) must render below ${header} (line ${line + 1})`);
+  }
+  for (const header of before) {
+    const line = renderedLine(screen, header);
+    assert.ok(line >= 0, `host sidebar header ${header} must be rendered`);
+    assert.ok(goUsage < line, `Go Usage (line ${goUsage + 1}) must render above ${header} (line ${line + 1})`);
+  }
 }
 
 // Readonly live-usage preflight for the live e2e variant: returns the parsed
