@@ -77,16 +77,24 @@ or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
 
 ## Display toggles
 
-Both surfaces default on:
+Three axes, all defaulting to on/integrated. Each is a command in the palette,
+persisted per surface, and it applies to whichever sidebar mode is active:
+
+| Axis | Command | Also settable as |
+| ---- | ------- | ---------------- |
+| sidebar on/off | `Go usage: toggle sidebar` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
+| statusline on/off | `Go usage: toggle statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
+| display mode (Kilo) | `Go usage: toggle sidebar mode` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
 
 ```json
 { "plugin": ["./plugins/oc-go-usage-display.tsx", { "sidebar": true, "statusline": true }] }
 ```
 
-Toggle them from the command palette (`Go usage: toggle sidebar` /
-`Go usage: toggle statusline`); the collapsed state persists per surface.
-Environment variables and the legacy `display` option apply only when the
-`tui.json` toggles are absent. Restart opencode after changing static config.
+Hiding the sidebar hides it in either mode; the mode decides *what* it draws, not
+whether it is there. Environment variables and the legacy `display` option apply
+only when the `tui.json` toggles are absent. Restart the host after changing
+static config. Kilo's `tui.json` rejects the `sidebar`/`statusline` options, so
+on that host the palette and the env vars are the way to set them.
 
 ## What the sidebar shows
 
@@ -133,12 +141,19 @@ client-visible. Bars use the plan's threshold coloring (muted < 75% ≤ warning 
 90% ≤ error), and a capped window is always the error color however low its
 percent reads.
 
-**Kilo** — the same plan as label/value rows with a `Go Plan` section, plus
-`sidebar_mode`: `standalone` (default `integrated`) renders in a free band, and
-`integrated` takes over the host's own `Token Usage` band, retiring that panel
-and replacing it with `Go Usage` / `Session Tokens` / `Models`, where the plan
-meters sit inside the OpenCode Go group and every Go model row carries its
-`Go share`. Toggle it with `Go usage: toggle sidebar mode`.
+Both hosts draw the plan the same way: the next reset on one line, then three
+stacked meters whose bars share a left edge and whose percents share a right
+edge.
+
+**Kilo** — `sidebar_mode` picks what the block is:
+
+- **integrated** (default): the block takes over the host's own `Token Usage`
+  band, retires that panel, and renders `Session Tokens` / `Models`. The plan is
+  drawn **once**, as the `Go Plan` meters inside the `OpenCode Go` group, and
+  every Go model row carries its `Go share`. There is deliberately no separate
+  `Go Usage` block saying the same three numbers again.
+- **standalone**: our block in a free band above the host's panel, and the host
+  panel stays.
 
 ## Auth and config
 

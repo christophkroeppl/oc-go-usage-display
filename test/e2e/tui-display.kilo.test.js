@@ -37,6 +37,29 @@ const MOCK_SIDEBAR = /Go Usage/;
 // default. The mode decides whether Kilo's own `Token Usage` panel is on screen
 // at all -- integrated mode retires it -- so the ordering anchors differ per
 // mode and an unpinned test would assert one of them against the other.
+// Both modes render the plan as STACKED meters in fixed-width columns, so the
+// three rows must share a left edge and their percents a right edge. The
+// difference between the modes is where the block sits and what surrounds it:
+// standalone keeps Kilo's own Token Usage panel, integrated replaces that band
+// and draws the plan once, inside the Models table's Go group.
+const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/;
+const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
+
+function assertStackedMeters(screen) {
+  const rows = planRows(screen);
+  assert.equal(rows.length, 3, "the plan must render three stacked meters");
+  const meters = rows.map((line) => line.search(/[\u2588\u2591]/));
+  assert.ok(
+    meters.every((column) => column === meters[0]),
+    `meters must share a left edge (got ${meters.join(", ")})`,
+  );
+  const percents = rows.map((line) => line.search(/\d+%\s*$/));
+  assert.ok(
+    percents.every((column) => column === percents[0]),
+    `percents must share a left edge (got ${percents.join(", ")})`,
+  );
+}
+
 const MODES = [
   {
     mode: "standalone",
@@ -54,11 +77,15 @@ const MODES = [
   {
     mode: "integrated",
     // Same reasoning: the block only reads as settled once it sits in the host
-    // panel's old band, i.e. above the panels that follow it.
-    settled: /Go Usage[\s\S]*\bLSP\b/,
+    // panel's old band, i.e. above the panels that follow it. `Session Tokens`
+    // is the first thing integrated mode renders -- there is no `Go Usage`
+    // heading above it any more.
+    settled: /Session Tokens[\s\S]*\bLSP\b/,
     // KILO_INTEGRATED_SLOT_ORDER 150: the host panel's own band, so our block
     // is below `Context` and there is no `Token Usage` header to anchor below.
-    order: { after: [/\bContext\b/] },
+    // Integrated mode opens with `Session Tokens` -- there is no `Go Usage`
+    // heading, because the plan is drawn once inside the Models table.
+    order: { after: [/\bContext\b/], anchor: /Session Tokens/ },
     hostPanel: false,
   },
 ];
@@ -79,28 +106,22 @@ for (const { mode, order, hostPanel, settled } of MODES) {
           env,
           expect: { statusline: MOCK_STATUSLINE, sidebar: settled },
         });
-        assert.match(screen, MOCK_SIDEBAR, "sidebar must render the Go Usage block");
-        assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
-        // The `Go Plan` meters are fixed-width columns: they must stack on one
-        // left edge, whatever the labels are.
+        assertStackedMeters(screen);
+        assert.match(screen, /5h\s+[\u2588\u2591]+\s+42%/, "sidebar must render the rolling meter");
+        assert.match(screen, /7d\s+[\u2588\u2591]+\s+15%/, "sidebar must render the weekly meter");
+        assert.match(screen, /30d\s+[\u2588\u2591]+\s+61%/, "sidebar must render the monthly meter");
         if (mode === "integrated") {
-          const rows = screen
-            .split("\n")
-            .filter((line) => /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/.test(line));
-          assert.equal(rows.length, 3, "the plan must render three stacked meters");
-          const columns = rows.map((line) => line.search(/[\u2588\u2591]/));
-          assert.ok(
-            columns.every((column) => column === columns[0]),
-            `meters must share a left edge (got ${columns.join(", ")})`,
-          );
-          const percents = rows.map((line) => line.search(/\d+%\s*$/));
-          assert.ok(
-            percents.every((column) => column === percents[0]),
-            `percents must share a right edge (got ${percents.join(", ")})`,
-          );
+          // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside
+          // the OpenCode Go group. A separate `Go Usage` block above it said the
+          // same three numbers twice on one screen.
+          assert.match(screen, /\bGo Plan\b/, "the plan must be drawn inside the Models table");
+          assert.doesNotMatch(screen, /\bGo Usage\b/, "integrated mode must not repeat the plan as its own block");
+        } else {
+          assert.match(screen, MOCK_SIDEBAR, "standalone mode renders the Go Usage block");
+          // The header line the integrated view has no room for: there the plan
+          // lives in a table, and only a capped window carries a countdown.
+          assert.match(screen, /5h resets in 2h5m/, "the block must print the next reset under its header");
         }
-        assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
-        assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
         assertSidebarOrder(screen, order);
 
         if (hostPanel) {

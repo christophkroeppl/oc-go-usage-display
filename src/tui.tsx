@@ -269,8 +269,6 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           api={api}
           theme={props.theme}
           snapshot={usageStore.snapshot}
-          withPlan={false}
-          layout="meters"
           meterWidth={OPENCODE_METER_WIDTH}
           resetLine={planResetLine}
         />

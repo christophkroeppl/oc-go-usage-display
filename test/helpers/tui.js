@@ -370,9 +370,9 @@ export function renderedLine(screen, pattern) {
 // can only echo it back. `before`/`after` are host sidebar headers that must
 // render below/above `Go Usage`; a host that stops rendering one of them is a
 // real layout change and fails loudly.
-export function assertSidebarOrder(screen, { before = [], after = [] } = {}) {
-  const goUsage = renderedLine(screen, /Go Usage/);
-  assert.ok(goUsage >= 0, "Go Usage header must be rendered in the sidebar");
+export function assertSidebarOrder(screen, { before = [], after = [], anchor = /Go Usage/ } = {}) {
+  const goUsage = renderedLine(screen, anchor);
+  assert.ok(goUsage >= 0, `${anchor} must be rendered in the sidebar`);
   for (const header of after) {
     const line = renderedLine(screen, header);
     assert.ok(line >= 0, `host sidebar header ${header} must be rendered`);

@@ -208,6 +208,7 @@ export type SurfaceSelection = {
   statusline: boolean;
 };
 
+// One label/value row, the grammar the host's own panels use.
 export type UsageRow = {
   label: string;
   value: string;
@@ -298,16 +299,6 @@ export function formatStatusline(snapshot: UsageSnapshot): string {
   return `Go ${rolling} | ${weekly} | ${monthly}`;
 }
 
-export function buildUsageRows(snapshot: UsageSnapshot): UsageRow[] {
-  const rows: UsageRow[] = [];
-  if (snapshot.rolling !== null) {
-    const reset = formatResetDuration(snapshot.rolling.resetInSec) ?? snapshot.rolling.resetText;
-    rows.push({ label: "5h", value: `${snapshot.rolling.percent}%${reset ? ` · resets ${reset}` : ""}` });
-  }
-  if (snapshot.weekly !== null) rows.push({ label: "7d", value: `${snapshot.weekly.percent}%` });
-  if (snapshot.monthly !== null) rows.push({ label: "30d", value: `${snapshot.monthly.percent}%` });
-  return rows;
-}
 
 // ---------------------------------------------------------------------------
 // TUI: plan meters (gauge fill + threshold severity)

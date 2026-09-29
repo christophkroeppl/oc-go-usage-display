@@ -54,7 +54,6 @@ import {
   METER_WIDTH,
   PLAN_LABEL_WIDTH,
   buildPlanRows,
-  buildUsageRows,
   formatPercentCell,
   formatStatusline,
   isDisplayMode,
@@ -467,9 +466,16 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: numb
   return (
     <box flexDirection="column">
       <box flexDirection="row">
-        <text fg={props.theme.current.textMuted} wrapMode="none" width={PLAN_LABEL_WIDTH} flexShrink={0}>
-          {props.row.label}
-        </text>
+        {/* The label sits in a fixed-width BOX, not a fixed-width text: opentui
+            treats a text node's `width` as a wrapping bound, so the box after it
+            still starts wherever the label ended -- "5h" and "30d" then draw
+            their meters a cell apart. A box is a real layout box, which is why
+            Kilo's Steps/Cost columns (boxes) line up and these did not. */}
+        <box width={PLAN_LABEL_WIDTH} flexShrink={0} flexDirection="row">
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            {props.row.label}
+          </text>
+        </box>
         <box width={props.barWidth} flexShrink={0} flexDirection="row">
           <text fg={meterColor(props.theme, props.row.severity)} wrapMode="none">
             {props.row.bar}
@@ -586,25 +592,24 @@ export function GoShareRow(props: { theme: TuiTheme; percent: number; width: num
 // The compact `Go Usage` block both hosts lead the sidebar with
 // ---------------------------------------------------------------------------
 
-export type GoUsageLayout = "rows" | "meters";
-
-// `rows`   the plan as label/value lines, with the meters in a `Go Plan`
-//          section below them (Kilo: the block shares its band with a host panel
-//          that draws its own token table, and the sidebar has room for both).
-// `meters` the plan as the meters themselves, one per window, and the next
-//          reset on a single labelled line under the header (opencode: ~30 cells
-//          wide, where a separate heading and a per-row suffix both cost more
-//          rows than they buy).
+// The `Go Usage` block both hosts lead their sidebar with: the next reset on one
+// line, then the plan as the meters themselves, one row per window, stacked in
+// fixed-width columns.
+//
+// One shape for both hosts, on purpose. Kilo's standalone band and opencode's
+// whole sidebar used to be different layouts (label/value rows with a separate
+// `Go Plan` heading, versus meters inline), which meant the plan looked like a
+// different feature depending on where it was drawn. Kilo's integrated mode does
+// not use this block at all -- the plan is drawn once, inside its Models table
+// where it belongs to the provider it meters.
 export function GoUsageBlock(props: {
   api: UsagePanelApi;
   theme: TuiTheme;
   snapshot: () => UsageSnapshot | null;
-  withPlan: boolean;
-  layout?: GoUsageLayout;
   meterWidth?: number;
   resetLine?: () => string | null;
 }) {
-  const layout = props.layout ?? "rows";
+  const barWidth = props.meterWidth ?? METER_WIDTH;
   createEffect(() => {
     const snapshot = props.snapshot();
     if (snapshot !== null && snapshot.source === "unavailable") {
@@ -634,48 +639,20 @@ export function GoUsageBlock(props: {
         </text>
       );
     }
-    if (layout === "meters") {
-      // The per-row `resets in` suffix is dropped here: `resetLine` already
-      // prints the soonest countdown under the header, and printing the same
-      // countdown twice in one block is noise rather than emphasis.
-      const planRows = buildPlanRows(snapshot, props.meterWidth).map((row) => ({
-        ...row,
-        reset: null,
-      }));
-      return (
-        <box flexDirection="column">
-          <Show when={props.resetLine === undefined ? null : props.resetLine()}>
-            {(line) => (
-              <text fg={props.theme.current.textMuted} wrapMode="none">
-                {line()}
-              </text>
-            )}
-          </Show>
-          <For each={planRows}>
-            {(row) => (
-              <GoPlanRow theme={props.theme} row={row} barWidth={props.meterWidth ?? METER_WIDTH} />
-            )}
-          </For>
-        </box>
-      );
-    }
-    const planRows = buildPlanRows(snapshot);
+    // The per-row `resets in` suffix is dropped here: `resetLine` already prints
+    // the soonest countdown under the header, and printing the same countdown
+    // twice in one block is noise rather than emphasis.
+    const planRows = buildPlanRows(snapshot, barWidth).map((row) => ({ ...row, reset: null }));
     return (
       <box flexDirection="column">
-        <For each={buildUsageRows(snapshot)}>
-          {(row) => (
+        <Show when={props.resetLine === undefined ? null : props.resetLine()}>
+          {(line) => (
             <text fg={props.theme.current.textMuted} wrapMode="none">
-              {row.label} {row.value}
+              {line()}
             </text>
           )}
-        </For>
-        <Show when={props.withPlan && planRows.length > 0}>
-          <GoPlanSection
-            theme={props.theme}
-            rows={planRows}
-            barWidth={props.meterWidth ?? METER_WIDTH}
-          />
         </Show>
+        <For each={planRows}>{(row) => <GoPlanRow theme={props.theme} row={row} barWidth={barWidth} />}</For>
       </box>
     );
   });

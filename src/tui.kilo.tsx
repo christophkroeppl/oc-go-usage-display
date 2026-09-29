@@ -79,6 +79,7 @@ import {
   buildModelTokenRows,
   buildPlanRows,
   buildTokenUsageRows,
+  formatNextResetLine,
   formatUsageCost,
   formatUsageCount,
   goSharePercent,
@@ -307,6 +308,13 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     } catch {
       // Mode persistence is best-effort; the panel switch above still happened.
     }
+  }
+
+  // The soonest countdown, on one line under the block header.
+  function planResetLine(): string | null {
+    const snapshot = usageStore.snapshot();
+    if (snapshot === null || snapshot.source === "unavailable") return null;
+    return formatNextResetLine(snapshot);
   }
 
   // The plan meters, or nothing at all: an unavailable snapshot has no windows,
@@ -613,13 +621,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     });
 
     return (
+      // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside the
+      // OpenCode Go group of the Models table. A `Go Usage` block above it (as
+      // there was) said the same three numbers twice, in two different
+      // layouts, on the same screen.
       <box flexDirection="column" gap={1}>
-        <GoUsageBlock
-          api={api}
-          theme={props.theme}
-          snapshot={usageStore.snapshot}
-          withPlan={false}
-        />
         <CollapsibleSection
           theme={props.theme}
           label={INTEGRATED_TOKENS_SECTION_LABEL}
@@ -633,9 +639,19 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
+  // The `Go Usage` block: the plan as meters, the next reset on one line --
+  // the same block opencode's sidebar leads with, so the plan looks identical
+  // whichever host draws it. Kilo's sidebar is wider, so its meters keep the
+  // full 16 cells.
   function GoSidebarPanel(props: { theme: TuiTheme }) {
     return (
-      <GoUsageBlock api={api} theme={props.theme} snapshot={usageStore.snapshot} withPlan={true} />
+      <GoUsageBlock
+        api={api}
+        theme={props.theme}
+        snapshot={usageStore.snapshot}
+        meterWidth={METER_WIDTH}
+        resetLine={planResetLine}
+      />
     );
   }
 

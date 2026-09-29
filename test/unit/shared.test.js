@@ -7,7 +7,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
-import { buildUsageRows } from "../../dist/helpers.js";
 import {
   authJsonPaths,
   errorMessage,
@@ -238,7 +237,6 @@ test("rejected api keys map to an unavailable snapshot with literal reason", () 
   assert.equal(snapshot?.source, "unavailable");
   assert.equal(snapshot?.apiUnavailable, true);
   assert.equal(snapshot?.apiError, "API key rejected (401/403)");
-  assert.deepStrictEqual(buildUsageRows(snapshot), []);
 });
 
 // --- extractWindow ---
@@ -327,11 +325,6 @@ test("a live-shaped payload renders a reset suffix in the server line and sideba
   });
   assert.ok(snapshot !== null);
   assert.equal(formatServerLine(snapshot), "Go 5h 0% (reset 2h5m) | 7d 0% | 30d 100%");
-  assert.deepStrictEqual(buildUsageRows(snapshot), [
-    { label: "5h", value: "0% · resets 2h5m" },
-    { label: "7d", value: "0%" },
-    { label: "30d", value: "100%" },
-  ]);
 });
 
 test("the relative reset spellings are still accepted and win over resetsAt", () => {
@@ -477,11 +470,6 @@ test("mockSnapshot agrees with the parser about the 'active' status", () => {
   }
   assert.equal(mock.rolling.resetInSec, 7543);
   assert.equal(formatResetDuration(mock.rolling.resetInSec), "2h5m");
-  assert.deepStrictEqual(buildUsageRows(mock), [
-    { label: "5h", value: "42% · resets 2h5m" },
-    { label: "7d", value: "15%" },
-    { label: "30d", value: "61%" },
-  ]);
 });
 
 test("hostEnvName scopes every variable to the host that reads it", () => {

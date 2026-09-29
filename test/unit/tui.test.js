@@ -12,7 +12,6 @@ import {
   buildModelTokenRows,
   buildPlanRows,
   buildTokenUsageRows,
-  buildUsageRows,
   cacheRatePercent,
   formatPercentCell,
   PLAN_LABEL_WIDTH,
@@ -97,33 +96,6 @@ test("parseBooleanFlag returns null for anything else", () => {
   assert.equal(parseBooleanFlag(""), null);
   assert.equal(parseBooleanFlag({}), null);
 });
-
-// --- buildUsageRows ---
-
-test("buildUsageRows renders all three windows with sidebar reset text", () => {
-  assert.deepStrictEqual(buildUsageRows(tuiSnapshot()), [
-    { label: "5h", value: "42% · resets 2h5m" },
-    { label: "7d", value: "15%" },
-    { label: "30d", value: "61%" },
-  ]);
-});
-
-test("buildUsageRows falls back to resetText and omits missing windows", () => {
-  const rows = buildUsageRows(
-    tuiSnapshot({
-      rolling: { percent: 10, status: "ok", limited: false, resetInSec: null, resetText: "soon" },
-      weekly: null,
-      monthly: null,
-    }),
-  );
-  assert.deepStrictEqual(rows, [{ label: "5h", value: "10% · resets soon" }]);
-});
-
-test("buildUsageRows returns no rows for an empty snapshot", () => {
-  const empty = tuiSnapshot({ rolling: null, weekly: null, monthly: null });
-  assert.deepStrictEqual(buildUsageRows(empty), []);
-});
-
 // --- formatStatusline: 3 windows, no reset suffix ---
 
 test("formatStatusline shows 5h, 7d and 30d without reset text", () => {
