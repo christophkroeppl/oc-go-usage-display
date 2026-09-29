@@ -48,6 +48,8 @@ import {
   GO_MODEL_BAR_WIDTH,
   GO_MODEL_MIX_BUDGET,
   GO_PROVIDER_ID,
+  KILO_PLAN_BAR_WIDTH,
+  KILO_SHARE_BAR_WIDTH,
   OPENCODE_METER_WIDTH,
   PERCENT_CELL_WIDTH,
   OPENCODE_MODEL_NAME_MAX_CHARS,
@@ -203,8 +205,10 @@ test("usageMeterBar degrades to an empty bar for a non-finite percent", () => {
   assert.equal(usageMeterBar(50, Number.NaN), "");
 });
 
-test("usageMeterBar defaults to the shared width", () => {
-  assert.equal(METER_WIDTH, 16);
+test("usageMeterBar defaults to the widest host budget", () => {
+  // The default is the wider of the two host meters, so a caller that forgets to
+  // name its host overflows nothing -- the bar box shrinks instead.
+  assert.equal(METER_WIDTH, KILO_PLAN_BAR_WIDTH);
   assert.equal(usageMeterBar(100).length, METER_WIDTH);
 });
 
@@ -897,14 +901,37 @@ test("modelDisplayName takes the sidebar's own width budget", () => {
 // --- the opencode layout budget, and the meters it is spent on ---
 
 test("the opencode layout budget is pinned next to the sidebar it belongs to", () => {
-  assert.equal(OPENCODE_METER_WIDTH, 10);
+  assert.equal(OPENCODE_METER_WIDTH, 18);
   assert.equal(OPENCODE_MODEL_NAME_MAX_CHARS, 12);
-  assert.equal(GO_MODEL_BAR_WIDTH, 6);
+  assert.equal(GO_MODEL_BAR_WIDTH, 10);
+  // The meters are sized to the space the host's own panel uses in the same
+  // column, not to a guess: Kilo's Models table is the widest thing its sidebar
+  // draws, and a plan row inside that group may be exactly as wide.
+  assert.equal(KILO_PLAN_BAR_WIDTH, 24);
+  assert.equal(KILO_SHARE_BAR_WIDTH, KILO_MODEL_NAME_MAX_CHARS);
+  // Kilo's Models table fixes glyph(1) + Steps(5) + Cost(9) and three 1-cell
+  // gaps; the name column takes the rest, and the 19 cells the code budgets for
+  // it is what that leaves in a 37-cell sidebar. The plan is drawn inside that
+  // group, so a plan row plus the group's own indent may not exceed it.
+  const tableFixed = 1 + KILO_STEPS_COLUMN_WIDTH + KILO_COST_COLUMN_WIDTH + 3;
+  const sidebarWidth = tableFixed + KILO_MODEL_NAME_MAX_CHARS;
+  const planRow = PLAN_LABEL_WIDTH + KILO_PLAN_BAR_WIDTH + PERCENT_CELL_WIDTH;
+  assert.ok(
+    planRow + 1 <= sidebarWidth,
+    `the plan row plus its group indent must fit the sidebar the table implies (${planRow + 1} > ${sidebarWidth})`,
+  );
+  assert.equal(
+    "Go share".length + 1 + KILO_SHARE_BAR_WIDTH + PERCENT_CELL_WIDTH,
+    planRow,
+    "the share meter and the plan must end on the same column",
+  );
   assert.equal(usageMeterBar(42, OPENCODE_METER_WIDTH).length, OPENCODE_METER_WIDTH);
   assert.notEqual(OPENCODE_METER_WIDTH, METER_WIDTH, "the two sidebars are not the same width");
-  // A model row is the widest thing the section draws: name + bar + percent.
-  const widest = OPENCODE_MODEL_NAME_MAX_CHARS + 1 + GO_MODEL_BAR_WIDTH + 1 + 4;
-  assert.ok(widest <= 30, `a model row must fit opencode's sidebar (${widest} cells)`);
+  // A model row is the widest thing the section draws: name + gap + bar + percent.
+  const modelRow = OPENCODE_MODEL_NAME_MAX_CHARS + 1 + GO_MODEL_BAR_WIDTH + 1 + PERCENT_CELL_WIDTH;
+  assert.ok(modelRow <= 30, `a model row must fit opencode's sidebar (${modelRow} cells)`);
+  const opencodePlanRow = PLAN_LABEL_WIDTH + OPENCODE_METER_WIDTH + PERCENT_CELL_WIDTH;
+  assert.ok(opencodePlanRow <= 30, `a plan row must fit opencode's sidebar (${opencodePlanRow} cells)`);
   // And so is the collapsed mix line it collapses to.
   assert.ok(GO_MODEL_MIX_BUDGET + 2 <= 30);
 });

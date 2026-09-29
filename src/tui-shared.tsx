@@ -453,6 +453,10 @@ export function LabeledValueRow(props: { theme: TuiTheme; row: UsageRow }) {
   );
 }
 
+// The narrowest a meter may become before a row is simply clipped: enough to
+// still read a filled-vs-empty split at a glance.
+export const MIN_METER_WIDTH = 6;
+
 // One plan window as a row of three FIXED-WIDTH columns: label, bar, percent.
 //
 // Not `justifyContent="space-between"` on a label plus a bar: that lets the bar
@@ -476,7 +480,9 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: numb
             {props.row.label}
           </text>
         </box>
-        <box width={props.barWidth} flexShrink={0} flexDirection="row">
+        {/* flexShrink: in a narrower-than-assumed sidebar the bar gives up cells,
+            the percent never does. */}
+        <box width={props.barWidth} flexShrink={1} minWidth={MIN_METER_WIDTH} flexDirection="row">
           <text fg={meterColor(props.theme, props.row.severity)} wrapMode="none">
             {props.row.bar}
           </text>
@@ -576,7 +582,7 @@ export function GoShareRow(props: { theme: TuiTheme; percent: number; width: num
       <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0} flexGrow={1}>
         {INTEGRATED_GO_SHARE_LABEL}
       </text>
-      <box flexDirection="row" flexShrink={0}>
+      <box flexDirection="row" flexShrink={1} minWidth={MIN_METER_WIDTH}>
         <text fg={meterColor(props.theme, meterSeverityForPercent(rounded))} wrapMode="none">
           {usageMeterBar(rounded, props.width)}
         </text>

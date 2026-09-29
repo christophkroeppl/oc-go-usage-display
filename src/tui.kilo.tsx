@@ -75,7 +75,6 @@ import type {
 } from "@kilocode/plugin/tui";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import {
-  METER_WIDTH,
   buildModelTokenRows,
   buildPlanRows,
   buildTokenUsageRows,
@@ -102,9 +101,11 @@ import {
   INTEGRATED_TOKENS_SECTION_LABEL,
   INTEGRATED_UNAVAILABLE_LABEL,
   SIDEBAR_COLLAPSED_GLYPH,
-  KILO_COST_COLUMN_WIDTH,
   SIDEBAR_EXPANDED_GLYPH,
+  KILO_COST_COLUMN_WIDTH,
   KILO_INTEGRATED_SLOT_ORDER,
+  KILO_PLAN_BAR_WIDTH,
+  KILO_SHARE_BAR_WIDTH,
   KILO_SLOT_ORDER,
   KILO_STEPS_COLUMN_WIDTH,
   KILO_USAGE_PANEL_PLUGIN_ID,
@@ -340,7 +341,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           {props.group.providerName}
         </text>
         <Show when={isGo && props.planRows.length > 0}>
-          <GoPlanSection theme={props.theme} rows={props.planRows} barWidth={METER_WIDTH} />
+          <GoPlanSection theme={props.theme} rows={props.planRows} barWidth={KILO_PLAN_BAR_WIDTH} />
         </Show>
         <box flexDirection="row" gap={1}>
           <box width={1} flexShrink={0} />
@@ -443,7 +444,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         </box>
         <Show when={props.isGo}>
           <box paddingLeft={2}>
-            <GoShareRow theme={props.theme} percent={props.goShare()} width={METER_WIDTH} />
+            <GoShareRow
+              theme={props.theme}
+              percent={props.goShare()}
+              width={KILO_SHARE_BAR_WIDTH}
+            />
           </box>
         </Show>
         {reactiveChild(detail)}
@@ -649,7 +654,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         api={api}
         theme={props.theme}
         snapshot={usageStore.snapshot}
-        meterWidth={METER_WIDTH}
+        meterWidth={KILO_PLAN_BAR_WIDTH}
         resetLine={planResetLine}
       />
     );

@@ -25,6 +25,7 @@ import {
   CACHE_RATE_EMPTY,
   GO_MODEL_BAR_WIDTH,
   GO_MODEL_MIX_BUDGET,
+  KILO_PLAN_BAR_WIDTH,
   GO_MODEL_MIX_NAME_MAX_CHARS,
   GO_MODEL_MIX_SEPARATOR,
   GO_PROVIDER_ID,
@@ -309,7 +310,10 @@ export function formatStatusline(snapshot: UsageSnapshot): string {
 
 export type UsageMeterSeverity = "muted" | "warning" | "error";
 
-export const METER_WIDTH = 16;
+// The default meter width, used when a caller does not name its host. The
+// per-host widths live in `shared.ts` (KILO_PLAN_BAR_WIDTH / OPENCODE_METER_WIDTH);
+// this is the one a caller gets by accident, so it is the wider of the two.
+export const METER_WIDTH = KILO_PLAN_BAR_WIDTH;
 
 const METER_FILLED = "█";
 const METER_EMPTY = "░";

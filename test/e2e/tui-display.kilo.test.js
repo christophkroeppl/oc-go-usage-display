@@ -46,8 +46,16 @@ const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/;
 const planRows = (screen) => screen.split("\n").filter((line) => PLAN_ROW.test(line));
 
 function assertStackedMeters(screen) {
+  // A layout assertion that only says "0 !== 3" is useless: the row it looked
+  // for is either missing, truncated (the percent is gone) or off the edge. The
+  // sidebar's own lines go in the message so the next failure says which.
   const rows = planRows(screen);
-  assert.equal(rows.length, 3, "the plan must render three stacked meters");
+  const sidebar = screen
+    .split("\n")
+    .map((line, index) => [index, line.replace(/\s+$/, "")])
+    .filter(([, line]) => /Go Plan|Session Tokens|Models|[\u2588\u2591]|resets in/.test(line))
+    .map(([index, line]) => `${index}|${line}`);
+  assert.equal(rows.length, 3, `the plan must render three stacked meters\n${sidebar.join("\n")}`);
   const meters = rows.map((line) => line.search(/[\u2588\u2591]/));
   assert.ok(
     meters.every((column) => column === meters[0]),
