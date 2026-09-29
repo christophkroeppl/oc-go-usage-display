@@ -129,6 +129,7 @@ import {
   modelDisplayName,
   parseBooleanFlag,
   parseSidebarMode,
+  resolveProviderId,
   surfaceSelectionFromDisplayMode,
   totalGoTokens,
   usageMeterBar,
@@ -506,7 +507,16 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       if (providerPart !== undefined && providerPart.length > 0) setActiveProviderId(providerPart);
     }
   } catch {
-    // State may not be ready; fall back to session.updated events.
+    // State may not be ready; fall back to the event signal.
+  }
+
+  // Which provider is in use, read live on every render rather than latched at
+  // init. Latching left the gate closed for anyone without a config-level model,
+  // and the `session.updated` event only fires on a server-side change, so
+  // opening a session or switching model in the picker never re-armed it --
+  // the plugin looked installed and did nothing.
+  function resolveActiveProviderId(sessionId: string): string | undefined {
+    return resolveProviderId(api.state, sessionId, activeProviderId());
   }
 
   async function refreshUsage(ttlOverride?: number): Promise<void> {
@@ -1119,7 +1129,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(activeProviderId())) return null;
+              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
               if (api.route.current.name !== "session") return null;
               if (isSidebarCollapsed()) return null;
               // Read live so the mode command takes effect at once, the same way
@@ -1151,7 +1161,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(activeProviderId())) return null;
+              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
               if (isStatuslineCollapsed()) return null;
               return <GoStatusline />;
             } catch {

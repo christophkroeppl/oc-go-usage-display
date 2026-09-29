@@ -228,6 +228,41 @@ export function parseSidebarMode(value: unknown): SidebarMode | null {
   return normalized === "integrated" || normalized === "standalone" ? normalized : null;
 }
 
+// Which provider a session is actually running, for the Go-only display gate.
+// Pure so the precedence is unit-testable: the TUI entry reads this on every
+// render rather than latching a value at init.
+export type ProviderSource = {
+  config?: { model?: unknown } | undefined;
+  session?: { get?: ((sessionID: string) => { model?: { providerID?: unknown } | undefined } | undefined) | undefined } | undefined;
+};
+
+export function providerIdFromModel(model: unknown): string | undefined {
+  if (typeof model !== "string" || model.length === 0) return undefined;
+  const provider = model.split("/")[0];
+  return provider !== undefined && provider.length > 0 ? provider : undefined;
+}
+
+export function resolveProviderId(
+  state: ProviderSource | undefined,
+  sessionId: string,
+  fallback: string | undefined,
+): string | undefined {
+  // The session's own model is the one in use, so it outranks the config default.
+  try {
+    const fromSession = state?.session?.get?.(sessionId)?.model?.providerID;
+    if (typeof fromSession === "string" && fromSession.length > 0) return fromSession;
+  } catch {
+    // Fall through: a throwing store is not a reason to hide the panel.
+  }
+  try {
+    const fromConfig = providerIdFromModel(state?.config?.model);
+    if (fromConfig !== undefined) return fromConfig;
+  } catch {
+    // Fall through to the event-signal fallback.
+  }
+  return fallback;
+}
+
 export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
   return { sidebar: mode !== "statusline", statusline: mode !== "sidebar" };
 }

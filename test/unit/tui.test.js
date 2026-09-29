@@ -31,7 +31,9 @@ import {
   usageMeterBar,
   usageMeterSeverity,
   usageTokenCount,
-} from "../../dist/helpers.js";
+
+  providerIdFromModel,
+  resolveProviderId,} from "../../dist/helpers.js";
 import {
   CACHE_RATE_DECIMALS,
   CACHE_RATE_EMPTY,
@@ -593,4 +595,63 @@ test("the Kilo table budget is pinned next to the ladder it belongs to", () => {
   assert.equal(KILO_COST_COLUMN_WIDTH, 9);
   assert.equal(KILO_MODEL_NAME_MAX_CHARS, 19);
   assert.equal(usageMeterBar(100).length, METER_WIDTH);
+});
+
+// The Go-only display gate used to be latched from `config.model` at init, so it
+// stayed closed for anyone without a config model and never re-armed when the
+// model changed -- the plugin looked installed and rendered nothing. It now
+// reads the live session model on every render.
+test("resolveProviderId prefers the session model over the config default", () => {
+  const state = {
+    config: { model: "opencode-go/mimo-v2.6-pro" },
+    session: { get: () => ({ model: { providerID: "kilo" } }) },
+  };
+  assert.equal(resolveProviderId(state, "ses_1", undefined), "kilo");
+});
+
+test("resolveProviderId arms from the session model with no config model", () => {
+  const state = { config: {}, session: { get: () => ({ model: { providerID: "opencode-go" } }) } };
+  assert.equal(resolveProviderId(state, "ses_1", undefined), "opencode-go");
+});
+
+test("resolveProviderId falls back to the config default when the session has no model", () => {
+  const state = { config: { model: "opencode-go/x" }, session: { get: () => undefined } };
+  assert.equal(resolveProviderId(state, "ses_1", undefined), "opencode-go");
+  const empty = { config: { model: "opencode-go/x" }, session: { get: () => ({}) } };
+  assert.equal(resolveProviderId(empty, "ses_1", undefined), "opencode-go");
+});
+
+test("resolveProviderId falls back to the event signal last", () => {
+  const state = { config: {}, session: { get: () => undefined } };
+  assert.equal(resolveProviderId(state, "ses_1", "opencode-go"), "opencode-go");
+  assert.equal(resolveProviderId(undefined, "ses_1", "opencode-go"), "opencode-go");
+});
+
+test("resolveProviderId survives a throwing store rather than hiding the panel", () => {
+  const hostile = {
+    config: { model: "opencode-go/x" },
+    session: {
+      get() {
+        throw new Error("store unavailable");
+      },
+    },
+  };
+  assert.equal(resolveProviderId(hostile, "ses_1", undefined), "opencode-go");
+});
+
+test("resolveProviderId reports nothing usable rather than guessing", () => {
+  const empty = { config: {}, session: { get: () => undefined } };
+  assert.equal(resolveProviderId(empty, "ses_1", undefined), undefined);
+  assert.equal(resolveProviderId(undefined, "ses_1", undefined), undefined);
+});
+
+test("providerIdFromModel takes the provider segment and rejects junk", () => {
+  assert.equal(providerIdFromModel("opencode-go/mimo-v2.6-pro"), "opencode-go");
+  assert.equal(providerIdFromModel("kilo/xiaomi/mimo-v2-pro:free"), "kilo");
+  assert.equal(providerIdFromModel("opencode-go"), "opencode-go");
+  assert.equal(providerIdFromModel(""), undefined);
+  assert.equal(providerIdFromModel("   "), "   ");
+  assert.equal(providerIdFromModel("/leading-slash"), undefined);
+  assert.equal(providerIdFromModel(undefined), undefined);
+  assert.equal(providerIdFromModel(42), undefined);
 });
