@@ -95,11 +95,11 @@ credential store:
 
 | # | Source | Behavior |
 | - | ------ | -------- |
-| 1 | `OPENCODE_GO_MOCK=1` | deterministic mock snapshot (never cached) |
-| 2 | `OPENCODE_GO_API_KEY` | `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <key>` |
+| 1 | `OPENCODE_OC_GO_MOCK=1` | deterministic mock snapshot (never cached) |
+| 2 | `OPENCODE_OC_GO_API_KEY` | `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <key>` |
 | 3 | provider `auth.json` | same Bearer path; `opencode-go` key, else `opencode`. opencode: `$XDG_DATA_HOME/opencode/auth.json` (`~/.local/share/opencode/auth.json`), then `~/.config/opencode/auth.json`. Kilo: the same files under `kilo` (`$KILO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kilo`) |
 | 4 | workspace + cookie | scrape `GET https://opencode.ai/workspace/{workspaceId}/go` with the `auth` cookie; file config from the host's config dir |
-| 5 | none | unavailable snapshot (`not configured (set OPENCODE_GO_API_KEY)`) |
+| 5 | none | unavailable snapshot (`not configured (set OPENCODE_OC_GO_API_KEY)`) |
 
 File config (`oc-go-usage-display.json` in the host's config dir, e.g.
 `~/.config/opencode` or `~/.config/kilo`):
@@ -109,11 +109,37 @@ File config (`oc-go-usage-display.json` in the host's config dir, e.g.
 ```
 
 Successful snapshots cache 60s (memory + `oc-go-usage-display-cache.json` in
-the host's config dir); failures are never cached. Key env vars:
-`OPENCODE_GO_API_KEY`, `OPENCODE_GO_WORKSPACE_ID`, `OPENCODE_GO_AUTH_COOKIE`,
-`OPENCODE_GO_MOCK`, `OPENCODE_GO_SIDEBAR` / `OPENCODE_GO_STATUSLINE` (`0/1`),
-`OPENCODE_GO_DISPLAY` (legacy), `OPENCODE_CONFIG_DIR` / `KILO_CONFIG_DIR`
-(install CLIs).
+the host's config dir); failures are never cached. ### Environment variables
+
+Every variable this plugin reads is **scoped to the coding agent that reads it**,
+so one shell can drive the two hosts independently:
+
+| Suffix | opencode | Kilo |
+| ------ | -------- | ---- |
+| `API_KEY` | `OPENCODE_OC_GO_API_KEY` | `KILO_OC_GO_API_KEY` |
+| `WORKSPACE_ID` | `OPENCODE_OC_GO_WORKSPACE_ID` | `KILO_OC_GO_WORKSPACE_ID` |
+| `AUTH_COOKIE` | `OPENCODE_OC_GO_AUTH_COOKIE` | `KILO_OC_GO_AUTH_COOKIE` |
+| `MOCK` | `OPENCODE_OC_GO_MOCK` | `KILO_OC_GO_MOCK` |
+| `SIDEBAR` | `OPENCODE_OC_GO_SIDEBAR` | `KILO_OC_GO_SIDEBAR` |
+| `STATUSLINE` | `OPENCODE_OC_GO_STATUSLINE` | `KILO_OC_GO_STATUSLINE` |
+| `DISPLAY` (legacy) | `OPENCODE_OC_GO_DISPLAY` | `KILO_OC_GO_DISPLAY` |
+
+A Kilo build only reads `KILO_OC_GO_*`, so an `OPENCODE_OC_GO_*` name can never
+steer it — the two hosts keep separate auth stores and config dirs for the same
+reason.
+
+```sh
+# a different surface selection per host, from one shell
+OPENCODE_OC_GO_SIDEBAR=1 KILO_OC_GO_SIDEBAR=0 opencode
+```
+
+**Deprecated**: the unscoped `OPENCODE_GO_*` spelling still resolves when no
+host-scoped name is set, so upgrading cannot strand a working credential. The
+host-scoped name always wins when both are present. New configuration should use
+the scoped form.
+
+`OPENCODE_CONFIG_DIR` / `KILO_CONFIG_DIR` are read by the install CLIs, not by
+the plugin entry modules.
 
 ## Development
 
@@ -130,14 +156,14 @@ can be checked with `node scripts/verify-tarball.mjs <file.tgz>`.
 | Test command | Tier |
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
-| `bun run test:unit` | helper tests + live usage shape check (skips without `OPENCODE_GO_API_KEY`) |
+| `bun run test:unit` | helper tests + live usage shape check (skips without `OPENCODE_OC_GO_API_KEY`) |
 | `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
 Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects
 fs writes, tmp usage, child processes and sockets). Integration and e2e run only
 inside the container image; host-runnable tests redirect HOME/XDG and force
-`OPENCODE_GO_MOCK=1`, so they never touch the real `~/.config/opencode`.
+`OPENCODE_OC_GO_MOCK=1`, so they never touch the real `~/.config/opencode`.
 
 ## CI
 
@@ -161,7 +187,8 @@ footer to a commit merged to `main`.
   restart the host (`opencode debug config` shows the resolved plugin list;
   `opencode --pure` skips plugins, so it is not a valid check).
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
-  `OPENCODE_GO_API_KEY` (works for both hosts), sign in through the
+  `OPENCODE_OC_GO_API_KEY` and `KILO_OC_GO_API_KEY` (or the deprecated
+  `OPENCODE_GO_API_KEY` for both), sign in through the
   `opencode-go` provider in the host you are running, or configure workspace +
   cookie. Each host reads only its own `auth.json`, so a Kilo login does not
   feed the opencode plugin and vice versa.

@@ -3,7 +3,7 @@
 // For both install modes the suite drives the real bins through
 // `init -> show --json -> status -> remove` and asserts the config entries,
 // exit codes, and link semantics. `test/helpers/run.js` forces HOME/XDG/...
-// inside a mkdtemp root and `OPENCODE_GO_MOCK=1`, so the real
+// inside a mkdtemp root and `OPENCODE_OC_GO_MOCK=1`, so the real
 // `~/.config/opencode` is never touched and no network call is made.
 //
 // Requires a prior `bun run build`: the bins serve dist/plugins/*.

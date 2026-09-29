@@ -7,13 +7,13 @@
 # Jobs:
 #   - unit          : typecheck + build + READONLY unit tests on Node 22. The
 #                     live usage shape check lives in test/unit/live-usage.test.js
-#                     and runs when OPENCODE_GO_API_KEY is available (skips
+#                     and runs when OPENCODE_OC_GO_API_KEY is available (skips
 #                     neutrally otherwise). Unit tests never write to the host.
 #   - container-e2e : the authoritative gate. Builds the root Dockerfile and
 #                     runs the full containerized suite (integration + e2e,
 #                     including the real opencode/kilo TUI display checks via
 #                     tmux). Hermetic: all HOME/XDG/opencode paths and tmux
-#                     sockets live in container/tmp dirs. OPENCODE_GO_API_KEY is
+#                     sockets live in container/tmp dirs. OPENCODE_OC_GO_API_KEY is
 #                     forwarded when present; the live variants skip otherwise.
 #
 # Startup-safety rule: the secrets context must NOT appear in any conditional
@@ -46,7 +46,9 @@ jobs:
       contents: read
     timeout-minutes: 20
     env:
-      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+      # Secret name is unchanged; the job env exposes it under the name the
+      # host-scoped plugin resolves. Renaming the secret would silently skip.
+      OPENCODE_OC_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,7 +86,9 @@ jobs:
       contents: read
     timeout-minutes: 40
     env:
-      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+      # Secret name is unchanged; the job env exposes it under the name the
+      # host-scoped plugin resolves. Renaming the secret would silently skip.
+      OPENCODE_OC_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,6 +98,6 @@ jobs:
         # image: opencode --version && kilo --version && bun install && bun
         # run build && bun run test:integration && bun run test:e2e. No bind
         # mount, so the gate is independent of the runner UID. compose.yml
-        # forwards OPENCODE_GO_API_KEY from this job env. `docker compose run`
+        # forwards OPENCODE_OC_GO_API_KEY from this job env. `docker compose run`
         # propagates the command's exit code.
         run: docker compose run --rm --build test

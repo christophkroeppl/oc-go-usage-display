@@ -5,8 +5,8 @@
 //   - sidebar_content      -> `Go Usage` + `5h 42% · resets 2h5m` rows
 //   - session_prompt_right -> `Go 5h 42% | 7d 15% | 30d 61%`
 //
-// The deterministic variant uses OPENCODE_GO_MOCK=1; the live variant renders
-// the real API snapshot when OPENCODE_GO_API_KEY is present and skips
+// The deterministic variant uses OPENCODE_OC_GO_MOCK=1; the live variant renders
+// the real API snapshot when a GO API key is present and skips
 // neutrally otherwise. Both pick an available `opencode-go` model dynamically
 // (see test/helpers/tui.js) so renamed/retired models cannot cause false
 // negatives. Requires the opencode binary and tmux (the container image has
@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findOpencodeBinary } from "../helpers/opencode.js";
+import { goApiKeyFromEnv } from "../helpers/run.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
   assertSidebarOrder,
@@ -45,7 +46,7 @@ test(
   async () => {
     const tmp = makeConfigDir();
     try {
-      const env = makeTuiEnv({ root: tmp.root, live: false });
+      const env = makeTuiEnv({ root: tmp.root, live: false, host: "opencode" });
       const { model, screen } = await runTuiDisplay({
         host: "opencode",
         binary: BINARY,
@@ -69,11 +70,11 @@ test(
 test(
   "opencode TUI displays live usage from the API",
   {
-    skip: SKIP_NO_HOST || (process.env.OPENCODE_GO_API_KEY ? false : "OPENCODE_GO_API_KEY not set"),
+    skip: SKIP_NO_HOST || (goApiKeyFromEnv().value ? false : "GO API key not set (OPENCODE_OC_GO_API_KEY)"),
     timeout: 600000,
   },
   async (t) => {
-    const snapshot = await fetchLiveUsage(process.env.OPENCODE_GO_API_KEY, {
+    const snapshot = await fetchLiveUsage(goApiKeyFromEnv().value, {
       extractSnapshotFromApiPayload,
     });
     if (snapshot === null) {
@@ -83,7 +84,7 @@ test(
 
     const tmp = makeConfigDir();
     try {
-      const env = makeTuiEnv({ root: tmp.root, live: true });
+      const env = makeTuiEnv({ root: tmp.root, live: true, host: "opencode" });
       const { model, screen } = await runTuiDisplay({
         host: "opencode",
         binary: BINARY,

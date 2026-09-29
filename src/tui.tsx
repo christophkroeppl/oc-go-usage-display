@@ -75,13 +75,14 @@ import type { SurfaceSelection } from "./helpers.js";
 import {
   errorMessage,
   extractSnapshotFromApiPayload,
+  hostEnv,
   isRecord,
   mockSnapshot,
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
 } from "./shared.js";
-import type { UsageSnapshot } from "./shared.js";
+import type { UsageHost, UsageSnapshot } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -93,6 +94,9 @@ const EVENT_TTL_MS = 15_000;
 const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const GO_PROVIDER_ID = "opencode-go";
+
+// This entry is the opencode build, so it resolves `OPENCODE_OC_GO_*`.
+const HOST: UsageHost = "opencode";
 const SLOT_ORDER = 50;
 const KV_DISPLAY_KEY = "display";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
@@ -121,13 +125,13 @@ function resolveSurfaceSelection(options: PluginOptions | undefined, api: TuiPlu
     if (isDisplayMode(options.display)) return surfaceSelectionFromDisplayMode(options.display);
   }
 
-  const sidebarEnv = parseBooleanFlag(process.env.OPENCODE_GO_SIDEBAR);
-  const statuslineEnv = parseBooleanFlag(process.env.OPENCODE_GO_STATUSLINE);
+  const sidebarEnv = parseBooleanFlag(hostEnv(HOST, "SIDEBAR"));
+  const statuslineEnv = parseBooleanFlag(hostEnv(HOST, "STATUSLINE"));
   if (sidebarEnv !== null || statuslineEnv !== null) {
     return { sidebar: sidebarEnv ?? true, statusline: statuslineEnv ?? true };
   }
 
-  const displayEnv = toNonEmptyString(process.env.OPENCODE_GO_DISPLAY);
+  const displayEnv = toNonEmptyString(hostEnv(HOST, "DISPLAY"));
   if (displayEnv !== null && isDisplayMode(displayEnv)) {
     return surfaceSelectionFromDisplayMode(displayEnv);
   }
@@ -197,9 +201,9 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
 }
 
 async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
-  if (process.env.OPENCODE_GO_MOCK === "1") return mockSnapshot();
+  if (hostEnv(HOST, "MOCK") === "1") return mockSnapshot();
 
-  const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY) ?? readAuthJsonApiKey();
+  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY")) ?? readAuthJsonApiKey();
   if (apiKey === null) return null;
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);

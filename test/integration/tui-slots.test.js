@@ -6,7 +6,7 @@
 // order is pinned separately by the e2e tier (assertSidebarOrder in
 // test/helpers/tui.js), which is what actually guards the constant.
 //
-// `OPENCODE_GO_MOCK=1` makes the plugin's refresh path return the mock snapshot
+// `OPENCODE_OC_GO_MOCK=1` makes the plugin's refresh path return the mock snapshot
 // synchronously, so the factory resolves without touching auth.json or fetch.
 // HOME/XDG are redirected into a tmp root before the imports anyway, so a future
 // mock regression cannot reach the developer's real `~/.local/share/{opencode,
@@ -21,13 +21,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "oc-go-usage-display-tui-slots-"));
-process.env.OPENCODE_GO_MOCK = "1";
+process.env.OPENCODE_OC_GO_MOCK = "1";
+process.env.KILO_OC_GO_MOCK = "1";
 process.env.HOME = path.join(ROOT, "home");
 process.env.XDG_CONFIG_HOME = path.join(ROOT, "xdg-config");
 process.env.XDG_DATA_HOME = path.join(ROOT, "xdg-data");
 process.env.OPENCODE_CONFIG_DIR = path.join(ROOT, "config");
-delete process.env.OPENCODE_GO_API_KEY;
-delete process.env.OPENCODE_GO_AUTH_COOKIE;
+
+// Both hosts' env spellings must be neutralized: the plugin resolves a
+// host-scoped name first and falls back to the deprecated unscoped one, so an
+// ambient value under any of the three spellings would reach the entry.
+for (const prefix of ["OPENCODE_OC_GO_", "KILO_OC_GO_", "OPENCODE_GO_"]) {
+  for (const suffix of ["API_KEY", "AUTH_COOKIE", "WORKSPACE_ID", "DISPLAY", "SIDEBAR", "STATUSLINE", "SIDEBAR_MODE"]) {
+    delete process.env[`${prefix}${suffix}`];
+  }
+}
 for (const dir of ["home", "xdg-config", "xdg-data", "config"]) {
   fs.mkdirSync(path.join(ROOT, dir), { recursive: true });
 }

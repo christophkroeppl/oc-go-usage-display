@@ -66,6 +66,45 @@ export function resolveUsageHost(): UsageHost {
   return process.env.OC_GO_USAGE_HOST === "kilo" ? "kilo" : "opencode";
 }
 
+// ---------------------------------------------------------------------------
+// Host-scoped environment variables
+// ---------------------------------------------------------------------------
+//
+// Settings and credentials are namespaced per coding agent, so one shell can
+// drive the two hosts differently:
+//
+//   OPENCODE_OC_GO_SIDEBAR=0 opencode
+//   KILO_OC_GO_SIDEBAR=1 kilo
+//
+// The prefix comes from the host baked into the running bundle, so a Kilo entry
+// only ever reads `KILO_OC_GO_*` and can never be steered by an opencode-prefixed
+// name. Reading a variable the host does not own is a bug, not a feature: the
+// two hosts keep separate auth stores and separate config dirs for exactly this
+// reason.
+//
+// The unscoped `OPENCODE_GO_*` spelling predates host scoping and is still
+// honoured as a fallback, so upgrading cannot silently strand a working
+// credential. It is deprecated: the host-scoped name wins whenever both are set.
+const ENV_PREFIX: Record<UsageHost, string> = {
+  opencode: "OPENCODE_OC_GO_",
+  kilo: "KILO_OC_GO_",
+};
+
+const DEPRECATED_ENV_PREFIX = "OPENCODE_GO_";
+
+export function hostEnvName(host: UsageHost, suffix: string): string {
+  return `${ENV_PREFIX[host]}${suffix}`;
+}
+
+// First match wins: the host-scoped name, then the deprecated unscoped one.
+export function hostEnv(
+  host: UsageHost,
+  suffix: string,
+  env: NodeJS.ProcessEnv | undefined = process.env,
+): string | undefined {
+  return env?.[hostEnvName(host, suffix)] ?? env?.[`${DEPRECATED_ENV_PREFIX}${suffix}`];
+}
+
 // `resolveHomedir` can throw when no home directory is resolvable; plugin
 // entry modules build these paths at import time, so degrade to an empty
 // segment instead of throwing.

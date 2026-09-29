@@ -28,10 +28,17 @@ process.env.XDG_DATA_HOME = path.join(ROOT, "xdg-data");
 process.env.XDG_STATE_HOME = path.join(ROOT, "xdg-state");
 process.env.XDG_CACHE_HOME = path.join(ROOT, "xdg-cache");
 process.env.OPENCODE_CONFIG_DIR = path.join(ROOT, "config");
-process.env.OPENCODE_GO_WORKSPACE_ID = "ws_test";
-process.env.OPENCODE_GO_AUTH_COOKIE = "test-cookie";
-delete process.env.OPENCODE_GO_MOCK;
-delete process.env.OPENCODE_GO_API_KEY;
+
+// Both hosts' env spellings must be neutralized: the plugin resolves a
+// host-scoped name first and falls back to the deprecated unscoped one, so an
+// ambient value under any of the three spellings would reach the entry.
+for (const prefix of ["OPENCODE_OC_GO_", "KILO_OC_GO_", "OPENCODE_GO_"]) {
+  for (const suffix of ["API_KEY", "AUTH_COOKIE", "WORKSPACE_ID", "DISPLAY", "SIDEBAR", "STATUSLINE", "SIDEBAR_MODE"]) {
+    delete process.env[`${prefix}${suffix}`];
+  }
+}
+process.env.OPENCODE_OC_GO_WORKSPACE_ID = "ws_test";
+process.env.OPENCODE_OC_GO_AUTH_COOKIE = "test-cookie";
 
 for (const dir of ["home", "xdg-config", "xdg-data", "xdg-state", "xdg-cache", "config"]) {
   fs.mkdirSync(path.join(ROOT, dir), { recursive: true });
@@ -234,10 +241,10 @@ test("cookie scrape aborts a body that stalls after the headers", async () => {
 });
 
 test("API-key fetch aborts a body that stalls after the headers", async () => {
-  process.env.OPENCODE_GO_API_KEY = "test-key";
+  process.env.OPENCODE_OC_GO_API_KEY = "test-key";
   try {
     await withStalledBody(assertStalledBodyAborts);
   } finally {
-    delete process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_OC_GO_API_KEY;
   }
 });

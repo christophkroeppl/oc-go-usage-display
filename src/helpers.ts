@@ -15,7 +15,9 @@ import * as fs from "node:fs";
 import {
   resolveHostRoots,
   formatResetDuration,
+  hostEnv,
   isRecord,
+  resolveUsageHost,
   safeJoinPath,
   toNonEmptyString,
 } from "./shared.js";
@@ -82,9 +84,11 @@ export function isMalformedAuthCookie(cookie: string): boolean {
   return /[\r\n;,\t\0"]/.test(cookie);
 }
 
-export function hasMalformedAuthCookie(fileConfig: FileConfig = readFileConfig()): boolean {
-  const raw =
-    toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
+export function hasMalformedAuthCookie(
+  fileConfig: FileConfig = readFileConfig(),
+  host: UsageHost = resolveUsageHost(),
+): boolean {
+  const raw = toNonEmptyString(hostEnv(host, "AUTH_COOKIE")) ?? fileConfig.authCookie;
   if (!raw) return false;
   return isMalformedAuthCookie(raw);
 }

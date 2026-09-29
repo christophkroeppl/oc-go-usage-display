@@ -15,6 +15,8 @@ import {
   extractWindow,
   formatResetDuration,
   mockSnapshot,
+  hostEnv,
+  hostEnvName,
   resolveConfigDir,
   resolveHostRoots,
   safeJoinPath,
@@ -457,4 +459,38 @@ test("mockSnapshot agrees with the parser about the 'active' status", () => {
     { label: "7d", value: "15%" },
     { label: "30d", value: "61%" },
   ]);
+});
+
+test("hostEnvName scopes every variable to the host that reads it", () => {
+  assert.equal(hostEnvName("opencode", "SIDEBAR"), "OPENCODE_OC_GO_SIDEBAR");
+  assert.equal(hostEnvName("kilo", "SIDEBAR"), "KILO_OC_GO_SIDEBAR");
+  assert.equal(hostEnvName("kilo", "API_KEY"), "KILO_OC_GO_API_KEY");
+});
+
+test("hostEnv reads the host-scoped name and never the other host's", () => {
+  // A Kilo entry must not be steerable by an opencode-prefixed name, and vice
+  // versa: the two hosts keep separate auth stores and config dirs.
+  const env = { OPENCODE_OC_GO_SIDEBAR: "0", KILO_OC_GO_SIDEBAR: "1" };
+  assert.equal(hostEnv("opencode", "SIDEBAR", env), "0");
+  assert.equal(hostEnv("kilo", "SIDEBAR", env), "1");
+  assert.equal(hostEnv("opencode", "STATUSLINE", env), undefined);
+});
+
+test("hostEnv falls back to the deprecated unscoped name", () => {
+  // Upgrading must not strand a working credential, so the pre-host-scoping
+  // spelling still resolves when no host-scoped name is present.
+  assert.equal(hostEnv("kilo", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), "legacy");
+  assert.equal(hostEnv("opencode", "API_KEY", { OPENCODE_GO_API_KEY: "legacy" }), "legacy");
+});
+
+test("hostEnv prefers the host-scoped name over the deprecated one", () => {
+  const env = { OPENCODE_OC_GO_API_KEY: "scoped", OPENCODE_GO_API_KEY: "legacy" };
+  assert.equal(hostEnv("opencode", "API_KEY", env), "scoped");
+  const kiloEnv = { KILO_OC_GO_API_KEY: "scoped", OPENCODE_GO_API_KEY: "legacy" };
+  assert.equal(hostEnv("kilo", "API_KEY", kiloEnv), "scoped");
+});
+
+test("hostEnv tolerates a missing environment", () => {
+  assert.equal(hostEnv("opencode", "SIDEBAR", undefined), undefined);
+  assert.equal(hostEnv("kilo", "SIDEBAR", {}), undefined);
 });

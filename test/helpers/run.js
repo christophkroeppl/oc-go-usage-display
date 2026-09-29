@@ -1,7 +1,7 @@
 // Isolated child-process harness for the integration tier.
 //
 // Every spawned node bin receives an env whose HOME and every XDG root point
-// inside the caller's tmp directory, plus `OPENCODE_GO_MOCK=1` (deterministic
+// inside the caller's tmp directory, plus `OPENCODE_OC_GO_MOCK=1` (deterministic
 // snapshot, no network). The real `~/.config/opencode` and `~/.opencode` are
 // never reachable: the home/config/data/state/cache paths are explicit and
 // guarded to live under `root`, credential plus behavior-toggle env vars are
@@ -33,21 +33,38 @@ const HERMETIC_KEYS = [
 // Secret-bearing vars are removed so an ambient developer shell can never leak
 // credentials into (or be observed by) a test child. Only an explicit
 // `allowSecrets` opt-in re-admits a key for the live usage/TUI tests.
+// Every spelling the plugin can resolve, per host plus the deprecated unscoped
+// one: `hostEnv` falls back to `OPENCODE_GO_*`, so an ambient legacy var in a
+// developer shell would otherwise survive into a test child.
+const HOST_ENV_PREFIXES = ["OPENCODE_OC_GO_", "KILO_OC_GO_", "OPENCODE_GO_"];
+
+// The Go key a live test should use, whichever host prefix carries it. A shell
+// may reasonably export either name, and the live checks are host-agnostic.
+export function goApiKeyFromEnv(env = process.env) {
+  for (const key of ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY", "OPENCODE_GO_API_KEY"]) {
+    const value = (env[key] ?? "").trim();
+    if (value.length > 0) return { key, value };
+  }
+  return { key: null, value: "" };
+}
+
+const hostScopedKeys = (suffixes) =>
+  HOST_ENV_PREFIXES.flatMap((prefix) => suffixes.map((suffix) => `${prefix}${suffix}`));
+
 const SECRET_KEYS = [
   "OPENCODE_API_KEY",
-  "OPENCODE_GO_API_KEY",
-  "OPENCODE_GO_AUTH_COOKIE",
-  "OPENCODE_GO_WORKSPACE_ID",
+  ...hostScopedKeys(["API_KEY", "AUTH_COOKIE", "WORKSPACE_ID"]),
 ];
 
 // Non-secret vars that silently change plugin behavior (surface selection).
 // Stripped from the inherited env so a TUI integration test gets the defaults
 // unless it opts in via an explicit `overrides` value.
-const BEHAVIOR_KEYS = [
-  "OPENCODE_GO_DISPLAY",
-  "OPENCODE_GO_SIDEBAR",
-  "OPENCODE_GO_STATUSLINE",
-];
+const BEHAVIOR_KEYS = hostScopedKeys([
+  "DISPLAY",
+  "SIDEBAR",
+  "STATUSLINE",
+  "SIDEBAR_MODE",
+]);
 
 // Vars that override opencode's own config/database/permission resolution.
 // An inherited value can redirect a child at the real host config, disable the
@@ -86,7 +103,10 @@ export function isolatedEnv(root, overrides = {}, { allowSecrets = [] } = {}) {
     XDG_STATE_HOME: path.join(root, "xdg-state"),
     XDG_CACHE_HOME: path.join(root, "xdg-cache"),
     OPENCODE_CONFIG_DIR: path.join(root, "config"),
-    OPENCODE_GO_MOCK: "1",
+    // Both hosts are mocked: a child may be either binary, and each entry only
+    // reads its own prefix.
+    OPENCODE_OC_GO_MOCK: "1",
+    KILO_OC_GO_MOCK: "1",
   }, overrides);
   for (const key of SECRET_KEYS) {
     if (!allowSecrets.includes(key)) delete env[key];

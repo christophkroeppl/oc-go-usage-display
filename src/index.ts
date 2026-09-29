@@ -49,6 +49,8 @@ import {
   errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
+  hostEnv,
+  hostEnvName,
   isLimitedStatus,
   isRecord,
   mockSnapshot,
@@ -103,16 +105,16 @@ type Credentials =
 // ---------------------------------------------------------------------------
 
 function resolveCredentials(fileConfig: FileConfig = readFileConfig(HOST)): Credentials {
-  if (process.env.OPENCODE_GO_MOCK === "1") return { kind: "mock" };
+  if (hostEnv(HOST, "MOCK") === "1") return { kind: "mock" };
 
-  const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY);
+  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY"));
   if (apiKey) return { kind: "apiKey", apiKey };
 
   const authJsonKey = readAuthJsonApiKey(HOST);
   if (authJsonKey) return { kind: "apiKey", apiKey: authJsonKey };
 
-  const workspaceId = toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
-  const authCookie = toNonEmptyString(process.env.OPENCODE_GO_AUTH_COOKIE) ?? fileConfig.authCookie;
+  const workspaceId = toNonEmptyString(hostEnv(HOST, "WORKSPACE_ID")) ?? fileConfig.workspaceId;
+  const authCookie = toNonEmptyString(hostEnv(HOST, "AUTH_COOKIE")) ?? fileConfig.authCookie;
   if (workspaceId && authCookie) {
     // Reject header-injection / cookie-jar confusion payloads. The cookie
     // value is never logged; malformed values fall through to "none".
@@ -456,7 +458,7 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
   // Mock bypasses cache for determinism: a stale disk/memory entry must
   // never shadow the deterministic mock snapshot during tests. The mock
   // never reads or writes the cache.
-  if (process.env.OPENCODE_GO_MOCK === "1") {
+  if (hostEnv(HOST, "MOCK") === "1") {
     return mockSnapshot();
   }
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
@@ -476,11 +478,11 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
     // present (the user actually attempted cookie auth); a fully
     // unconfigured setup reports the generic reason.
     const workspaceId =
-      toNonEmptyString(process.env.OPENCODE_GO_WORKSPACE_ID) ?? fileConfig.workspaceId;
+      toNonEmptyString(hostEnv(HOST, "WORKSPACE_ID")) ?? fileConfig.workspaceId;
     if (workspaceId && hasMalformedAuthCookie(fileConfig)) {
       return unavailableSnapshot("not configured (malformed auth cookie)");
     }
-    return unavailableSnapshot("not configured (set OPENCODE_GO_API_KEY)");
+    return unavailableSnapshot(`not configured (set ${hostEnvName(HOST, "API_KEY")})`);
   }
 
   const snapshot =

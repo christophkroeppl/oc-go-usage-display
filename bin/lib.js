@@ -544,9 +544,9 @@ export function ensureTuiEntry(
 
 export function secretPresence(configDir) {
   const candidates = [
-    process.env.OPENCODE_GO_API_KEY,
-    process.env.OPENCODE_GO_AUTH_COOKIE,
-    process.env.OPENCODE_GO_WORKSPACE_ID,
+    process.env.OPENCODE_OC_GO_API_KEY,
+    process.env.OPENCODE_OC_GO_AUTH_COOKIE,
+    process.env.OPENCODE_OC_GO_WORKSPACE_ID,
   ];
   const envPresent = candidates.some((value) => toNonEmptyString(value) !== null);
   const fileConfig = path.join(configDir, "oc-go-usage-display.json");

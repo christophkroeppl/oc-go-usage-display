@@ -20,7 +20,7 @@ import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isolatedEnv } from "./run.js";
+import { goApiKeyFromEnv, isolatedEnv } from "./run.js";
 import { OPENCODE_LOAD_ENV } from "./opencode.js";
 
 export const TUI_COLS = 200;
@@ -45,8 +45,8 @@ export function skipWithNotice(t, message) {
 
 // Hermetic TUI env: HOME/XDG/config/tmp/tmux all under `root`, deterministic
 // mock by default, provider catalog key present (dummy), credentials stripped.
-// `live` removes the mock and admits OPENCODE_GO_API_KEY when the caller has it.
-export function makeTuiEnv({ root, live = false }) {
+// `live` removes the mock and admits OPENCODE_OC_GO_API_KEY when the caller has it.
+export function makeTuiEnv({ root, live = false, host = "opencode" }) {
   const overrides = {
     ...OPENCODE_LOAD_ENV,
     TMPDIR: path.join(root, "tmp"),
@@ -55,13 +55,21 @@ export function makeTuiEnv({ root, live = false }) {
     OPENCODE_API_KEY: process.env.OPENCODE_API_KEY || DUMMY_PROVIDER_KEY,
   };
   if (live) {
-    delete overrides.OPENCODE_GO_MOCK;
-    if (process.env.OPENCODE_GO_API_KEY) overrides.OPENCODE_GO_API_KEY = process.env.OPENCODE_GO_API_KEY;
+    delete overrides.OPENCODE_OC_GO_MOCK;
+    delete overrides.KILO_OC_GO_MOCK;
+    // Re-admit the key under the prefix the child host actually reads.
+    const goKey = goApiKeyFromEnv();
+    if (goKey.value) overrides[`${host === "kilo" ? "KILO" : "OPENCODE"}_OC_GO_API_KEY`] = goKey.value;
   }
   const env = isolatedEnv(root, overrides, {
-    allowSecrets: live ? ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"] : ["OPENCODE_API_KEY"],
+    allowSecrets: live
+      ? ["OPENCODE_API_KEY", "OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY", "OPENCODE_GO_API_KEY"]
+      : ["OPENCODE_API_KEY"],
   });
-  if (live) delete env.OPENCODE_GO_MOCK;
+  if (live) {
+    delete env.OPENCODE_OC_GO_MOCK;
+    delete env.KILO_OC_GO_MOCK;
+  }
   fs.mkdirSync(env.TMPDIR, { recursive: true });
   fs.mkdirSync(env.TMUX_TMPDIR, { recursive: true });
   return env;

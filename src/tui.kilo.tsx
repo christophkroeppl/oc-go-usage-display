@@ -87,8 +87,9 @@ import {
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
+  hostEnv,
 } from "./shared.js";
-import type { UsageSnapshot } from "./shared.js";
+import type { UsageHost, UsageSnapshot } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,6 +101,10 @@ const EVENT_TTL_MS = 15_000;
 const DEBOUNCE_MS = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const GO_PROVIDER_ID = "opencode-go";
+
+// This entry is the Kilo build, so it resolves `KILO_OC_GO_*` and never reads
+// an opencode-prefixed name.
+const HOST: UsageHost = "kilo";
 const SLOT_ORDER = 125;
 const KV_DISPLAY_KEY = "display";
 const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
@@ -128,13 +133,13 @@ function resolveSurfaceSelection(options: PluginOptions | undefined, api: TuiPlu
     if (isDisplayMode(options.display)) return surfaceSelectionFromDisplayMode(options.display);
   }
 
-  const sidebarEnv = parseBooleanFlag(process.env.OPENCODE_GO_SIDEBAR);
-  const statuslineEnv = parseBooleanFlag(process.env.OPENCODE_GO_STATUSLINE);
+  const sidebarEnv = parseBooleanFlag(hostEnv(HOST, "SIDEBAR"));
+  const statuslineEnv = parseBooleanFlag(hostEnv(HOST, "STATUSLINE"));
   if (sidebarEnv !== null || statuslineEnv !== null) {
     return { sidebar: sidebarEnv ?? true, statusline: statuslineEnv ?? true };
   }
 
-  const displayEnv = toNonEmptyString(process.env.OPENCODE_GO_DISPLAY);
+  const displayEnv = toNonEmptyString(hostEnv(HOST, "DISPLAY"));
   if (displayEnv !== null && isDisplayMode(displayEnv)) {
     return surfaceSelectionFromDisplayMode(displayEnv);
   }
@@ -204,9 +209,9 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
 }
 
 async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
-  if (process.env.OPENCODE_GO_MOCK === "1") return mockSnapshot();
+  if (hostEnv(HOST, "MOCK") === "1") return mockSnapshot();
 
-  const apiKey = toNonEmptyString(process.env.OPENCODE_GO_API_KEY) ?? readAuthJsonApiKey("kilo");
+  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY")) ?? readAuthJsonApiKey(HOST);
   if (apiKey === null) return null;
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);

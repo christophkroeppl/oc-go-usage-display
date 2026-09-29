@@ -31,7 +31,7 @@ export const KILO_LOAD_ENV = {
   OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
   OPENCODE_DISABLE_AUTOUPDATE: "1",
   OPENCODE_DISABLE_MODELS_FETCH: "1",
-  OPENCODE_GO_MOCK: "1",
+  KILO_OC_GO_MOCK: "1",
 };
 
 const SENTINEL_PATTERN = /server listening on (http:\/\/[0-9.]+:[0-9]+)/;

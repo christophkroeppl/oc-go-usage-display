@@ -1,6 +1,6 @@
 // Unit tier (readonly): live usage API shape check.
 //
-// Runs on the host and in CI as long as OPENCODE_GO_API_KEY is present; skips
+// Runs on the host and in CI as long as OPENCODE_OC_GO_API_KEY is present; skips
 // neutrally otherwise. Strictly readonly: a single GET request, no filesystem,
 // no tmp, no child processes, no env mutation. The raw response is never
 // printed (it may contain account identifiers).
@@ -14,9 +14,13 @@ import assert from "node:assert/strict";
 import { extractSnapshotFromApiPayload } from "../../dist/shared.js";
 
 const API_URL = "https://opencode.ai/zen/go/v1/usage";
-const API_KEY = (process.env.OPENCODE_GO_API_KEY ?? "").trim();
-const SKIP =
-  API_KEY.length === 0 ? "OPENCODE_GO_API_KEY not set (live usage check skipped)" : false;
+// Inlined rather than imported: the unit tier is purity-checked and
+// test/helpers/run.js performs fs work. Any host prefix may carry the key.
+const GO_KEY_NAME = ["OPENCODE_OC_GO_API_KEY", "KILO_OC_GO_API_KEY", "OPENCODE_GO_API_KEY"].find(
+  (name) => (process.env[name] ?? "").trim().length > 0,
+);
+const API_KEY = GO_KEY_NAME === undefined ? "" : process.env[GO_KEY_NAME].trim();
+const SKIP = API_KEY.length === 0 ? "no OPENCODE_OC_GO_API_KEY / KILO_OC_GO_API_KEY (live usage check skipped)" : false;
 
 // Present windows must be well-formed even when the overall payload has no
 // usable window (no Go subscription). Mirrors the CI shape check this replaced.

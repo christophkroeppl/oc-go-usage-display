@@ -15,7 +15,7 @@
 # outside. The TUI display tests still redirect HOME/XDG into tmp dirs, so a
 # local `bun run test:e2e` never touches the developer's real config.
 #
-# OPENCODE_GO_API_KEY is forwarded from the host when set; the live TUI/usage
+# OPENCODE_OC_GO_API_KEY is forwarded from the host when set; the live TUI/usage
 # tests run only then and skip neutrally otherwise.
 services:
   test:
@@ -26,6 +26,6 @@ services:
     mem_limit: 3g
     memswap_limit: 3g
     environment:
-      - OPENCODE_GO_API_KEY
+      - OPENCODE_OC_GO_API_KEY
       - OC_GO_TEST_CONTAINER=1
     command: sh -c "opencode --version && kilo --version && bun install && bun run build && bun run test:integration && bun run test:e2e"
