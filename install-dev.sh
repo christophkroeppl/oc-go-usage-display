@@ -258,11 +258,28 @@ print_reminder() {
 install_dev() {
   (
     cd "$SCRIPT_DIR" || exit 1
-    npm install --no-save "file:$(resolve_abs "$TARBALL")" || exit 1
-    npx --no-install oc-go-usage-display-init --copy ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
-    npx --no-install oc-go-usage-display-show --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
+    # Peer resolution is irrelevant here: `bin/*` imports only node builtins and
+    # this install exists solely to put the CLI on PATH. Plain `npm install`
+    # aborts with ERESOLVE because the package pins the `solid-js` peer exactly
+    # (1.9.12) while this repo's devDependency resolves to a newer 1.9.x.
+    npm install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
+
+    # Invoke the installed CLI by path. `npx --no-install <name>` resolves THIS
+    # repo's bin of the same name (the root package.json declares it), so it
+    # would install the local dist/ and silently ignore the downloaded artifact
+    # -- exactly what a dev install must not do. Called by path, the CLI
+    # derives its own package root and copies the tarball's bundles.
+    local pkg_dir="$SCRIPT_DIR/node_modules/$(node -p 'require("./package.json").name')"
+    local bin_dir="$pkg_dir/bin"
+    if [[ ! -f "$bin_dir/oc-go-usage-display-init.js" ]]; then
+      echo "error: dev package was not installed at $pkg_dir" >&2
+      exit 1
+    fi
+    echo "installing from: $pkg_dir"
+    node "$bin_dir/oc-go-usage-display-init.js" --copy ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
+    node "$bin_dir/oc-go-usage-display-show.js" --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
       || echo "warning: show --json failed (best-effort)"
-    npx --no-install oc-go-usage-display-status ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
+    node "$bin_dir/oc-go-usage-display-status.js" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
       || echo "warning: status failed (best-effort)"
   )
 }
