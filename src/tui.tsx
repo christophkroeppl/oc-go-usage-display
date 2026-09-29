@@ -2,46 +2,21 @@
 //
 // OpenCode Go usage TUI plugin (dual-surface display).
 //
-// Renders subscription usage in two additive multi-render slots. `SLOT_ORDER`
-// (50) sits in the free band above every host panel, so the block renders at
-// the top of the sidebar; OpenCode's own `sidebar_content` ladder starts at
-// 100 (`sidebar-context`) and continues 200 mcp / 300 lsp / 400 todo /
-// 500 files, and it registers no `session_prompt_right` panel at all, so the
-// statusline has nothing to stack against. Worktrunk renders elsewhere so
-// multi-render stacking is unaffected:
-//   - `sidebar_content`      -> titled block, e.g. `Go Usage` header plus one
-//     muted row per window (`5h 42%`, `7d 15%`, `30d 61%`). The header box
-//     carries no paddingLeft/gap so `Go Usage` aligns flush left like the
-//     `Context` header.
-//   - `session_prompt_right` -> compact single line next to the context status
-//     info (e.g. `Go 5h 42% | 7d 15% | 30d 61%`), where the `80.6K (8%) · $0.09` readout
-//     lives. Additive multi-render only; `sidebar_footer` (single_winner,
-//     replaces name/version) is never used.
+// Everything shared with the Kilo entry -- the refresh policy, the settings
+// ladder, the plan meters, the row grammar, the failure boundaries -- lives in
+// `./tui-shared.jsx` and is inlined into this bundle. What is left here is what
+// is genuinely opencode-specific:
 //
-// Display surface is user-configurable (default both on; static selection
-// still requires restart):
-//   1. TUI plugin options in tui.json: `[..., {"sidebar": true, "statusline": true}]`
-//   2. `OPENCODE_GO_SIDEBAR` / `OPENCODE_GO_STATUSLINE` env vars (0/1/false/true)
-//   3. Legacy `display` option (`"sidebar"|"statusline"|"both"`) in tui.json,
-//      `OPENCODE_GO_DISPLAY` env var, or persisted `api.kv` key `display`
-//      (checked in that order when the new toggles are absent)
-// Only the selected surface(s) register a slot. Both slots are additive
-// multi-render (`sidebar_content` + `session_prompt_right`), so no
-// `single_winner` slot is ever used; each slot returns null when its own
-// collapse flag is set or when empty so it collapses instead of reserving
-// space.
-// (`session_prompt_right` is the primary statusline slot; if a future host
-// drops it, the additive fallbacks would be `home_footer` / `home_bottom`.)
-//
-// Collapse is independent per surface and persisted in `api.kv`:
-//   - `collapsed_sidebar` toggled by `oc-go-usage-display.toggle-sidebar`
-//     (title `Go usage: toggle sidebar`), checked only by `sidebar_content`.
-//   - `collapsed_statusline` toggled by `oc-go-usage-display.toggle-statusline`
-//     (title `Go usage: toggle statusline`), checked only by
-//     `session_prompt_right`.
-// The legacy single `collapsed` key is migrated once on startup (when true,
-// both new keys are set true, then the legacy key is cleared) and ignored
-// afterwards.
+//   - `SLOT_ORDER` (50) sits in the free band above every host panel, so the
+//     block renders at the top of the sidebar. OpenCode's own `sidebar_content`
+//     ladder starts at 100 (`sidebar-context`) and continues 200 mcp / 300 lsp /
+//     400 todo / 500 files, and it registers no `session_prompt_right` panel at
+//     all, so the statusline has nothing to stack against. Worktrunk renders
+//     elsewhere so multi-render stacking is unaffected.
+//   - both surfaces are additive multi-render (`sidebar_content` +
+//     `session_prompt_right`); no `single_winner` slot is ever used.
+//   - this host has no usage panel of its own to retire, so there is no
+//     sidebar_mode axis: the block is one thing, at one order.
 //
 // Data: auth.json (dataShare ~/.local/share/opencode/auth.json, then legacy
 // ~/.config/opencode/auth.json, `opencode-go` key else `opencode` key) as
@@ -62,191 +37,32 @@ import type {
   TuiSlotContext,
   TuiTheme,
 } from "@opencode-ai/plugin/tui";
-import { For, Show, createEffect, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
+import { errorMessage } from "./shared.js";
 import {
-  buildUsageRows,
-  formatStatusline,
-  isDisplayMode,
-  isSnapshotEmpty,
-  parseBooleanFlag,
-  resolveProviderId,
-  surfaceSelectionFromDisplayMode,
-} from "./helpers.js";
-import type { SurfaceSelection } from "./helpers.js";
-import {
-  errorMessage,
-  extractSnapshotFromApiPayload,
-  hostEnv,
-  isRecord,
-  mockSnapshot,
-  readAuthJsonApiKey,
-  toNonEmptyString,
-  unavailableSnapshot,
-} from "./shared.js";
-import type { UsageHost, UsageSnapshot } from "./shared.js";
+  GoStatusline,
+  GoUsageBlock,
+  createCollapseState,
+  createUsageStore,
+  isGoUsageProvider,
+  logUsageError,
+  makeProviderResolver,
+  resolveSurfaceSelection,
+} from "./tui-shared.js";
+import { EVENT_TTL_MS, POLL_INTERVAL_MS } from "./tui-shared.js";
+import type { DisplayOptions } from "./tui-shared.js";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const API_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
-const POLL_INTERVAL_MS = 60_000;
-const EVENT_TTL_MS = 15_000;
-const DEBOUNCE_MS = 5_000;
-const FETCH_TIMEOUT_MS = 10_000;
-const GO_PROVIDER_ID = "opencode-go";
-
-// This entry is the opencode build, so it resolves `OPENCODE_OC_GO_*`.
-const HOST: UsageHost = "opencode";
+// This entry is the opencode build, so it resolves `OPENCODE_OC_GO_*` and never
+// reads a Kilo-prefixed name.
+const HOST = "opencode" as const;
 const SLOT_ORDER = 50;
-const KV_DISPLAY_KEY = "display";
-const KV_COLLAPSED_SIDEBAR_KEY = "collapsed_sidebar";
-const KV_COLLAPSED_STATUSLINE_KEY = "collapsed_statusline";
-const KV_COLLAPSED_LEGACY_KEY = "collapsed";
-const LOG_SERVICE = "oc-go-usage-display";
-
-// ---------------------------------------------------------------------------
-// Trusted types (parsed at the boundary, trusted internally; usage shapes
-// live in `./shared.js` so server and TUI parse identically; display-mode
-// helpers live in `./helpers.js` to keep this entry module export-free)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Settings boundary (new toggles > legacy display; tui.json options > env >
-// api.kv > default both on)
-// ---------------------------------------------------------------------------
-
-function resolveSurfaceSelection(options: PluginOptions | undefined, api: TuiPluginApi): SurfaceSelection {
-  if (options !== undefined) {
-    const sidebarOption = parseBooleanFlag(options.sidebar);
-    const statuslineOption = parseBooleanFlag(options.statusline);
-    if (sidebarOption !== null || statuslineOption !== null) {
-      return { sidebar: sidebarOption ?? true, statusline: statuslineOption ?? true };
-    }
-    if (isDisplayMode(options.display)) return surfaceSelectionFromDisplayMode(options.display);
-  }
-
-  const sidebarEnv = parseBooleanFlag(hostEnv(HOST, "SIDEBAR"));
-  const statuslineEnv = parseBooleanFlag(hostEnv(HOST, "STATUSLINE"));
-  if (sidebarEnv !== null || statuslineEnv !== null) {
-    return { sidebar: sidebarEnv ?? true, statusline: statuslineEnv ?? true };
-  }
-
-  const displayEnv = toNonEmptyString(hostEnv(HOST, "DISPLAY"));
-  if (displayEnv !== null && isDisplayMode(displayEnv)) {
-    return surfaceSelectionFromDisplayMode(displayEnv);
-  }
-
-  try {
-    const stored = api.kv.get(KV_DISPLAY_KEY, "both");
-    if (isDisplayMode(stored)) return surfaceSelectionFromDisplayMode(stored);
-  } catch {
-    // Persisted settings are best-effort; fall through to the default.
-  }
-  return { sidebar: true, statusline: true };
-}
-
-function readCollapsedFlag(api: TuiPluginApi, key: string): boolean {
-  try {
-    return api.kv.get<boolean>(key, false) === true;
-  } catch {
-    return false;
-  }
-}
-
-function migrateLegacyCollapsedFlag(api: TuiPluginApi): void {
-  let legacyCollapsed = false;
-  try {
-    legacyCollapsed = api.kv.get<boolean>(KV_COLLAPSED_LEGACY_KEY, false) === true;
-  } catch {
-    return;
-  }
-  if (!legacyCollapsed) return;
-  try {
-    api.kv.set(KV_COLLAPSED_SIDEBAR_KEY, true);
-    api.kv.set(KV_COLLAPSED_STATUSLINE_KEY, true);
-    api.kv.set(KV_COLLAPSED_LEGACY_KEY, false);
-  } catch {
-    // Collapse state is best-effort persistence only.
-  }
-}
-
-function isGoUsageProvider(providerId: string | undefined): boolean {
-  return providerId === GO_PROVIDER_ID;
-}
-
-// ---------------------------------------------------------------------------
-// Data boundary (auth.json -> Bearer usage fetch; throws nothing)
-// ---------------------------------------------------------------------------
-
-async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknown | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-    });
-    if (response.status === 401 || response.status === 403) return { __rejected: true };
-    if (!response.ok) return null;
-    try {
-      return (await response.json()) as unknown;
-    } catch {
-      return null;
-    }
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function loadUsageSnapshot(): Promise<UsageSnapshot | null> {
-  if (hostEnv(HOST, "MOCK") === "1") return mockSnapshot();
-
-  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY")) ?? readAuthJsonApiKey();
-  if (apiKey === null) return null;
-
-  const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);
-  if (payload === null) return null;
-  // Mirror the server: a rejected key is a distinct unavailable snapshot
-  // (surfaced via `apiError`) rather than a silent null.
-  if (isRecord(payload) && payload.__rejected === true) {
-    return unavailableSnapshot("API key rejected (401/403)");
-  }
-  return extractSnapshotFromApiPayload(payload);
-}
-
-async function logUsageError(api: TuiPluginApi, message: string): Promise<void> {
-  try {
-    await api.client.app.log({ service: LOG_SERVICE, level: "error", message });
-  } catch {
-    // Logging is best-effort; the usage display must never break the host.
-  }
-}
-
-// ---------------------------------------------------------------------------
-// TUI plugin
-// ---------------------------------------------------------------------------
-
 // The factory body lives here so the exported `goUsageTui` can wrap the whole
 // initialization in a single fail-safe boundary. A throwing factory would
 // destabilize the host's plugin load, so it must never reject.
 async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefined): Promise<void> {
-  const surfaces = resolveSurfaceSelection(options, api);
-  migrateLegacyCollapsedFlag(api);
-
-  const [usageSnapshot, setUsageSnapshot] = createSignal<UsageSnapshot | null>(null);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = createSignal<boolean>(
-    readCollapsedFlag(api, KV_COLLAPSED_SIDEBAR_KEY),
-  );
-  const [isStatuslineCollapsed, setIsStatuslineCollapsed] = createSignal<boolean>(
-    readCollapsedFlag(api, KV_COLLAPSED_STATUSLINE_KEY),
-  );
-
-  let cachedAt = 0;
-  let lastFetchAt = 0;
-  let refreshInFlight = false;
+  const surfaces = resolveSurfaceSelection(options as DisplayOptions | undefined, api, HOST);
+  const usageStore = createUsageStore(api, HOST);
+  const collapse = createCollapseState(api);
 
   const [activeProviderId, setActiveProviderId] = createSignal<string | undefined>(undefined);
   try {
@@ -256,135 +72,12 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       if (providerPart !== undefined && providerPart.length > 0) setActiveProviderId(providerPart);
     }
   } catch {
-    // State may not be ready; fall back to the event signal.
+    // State may not be ready; fall through to the event signal.
   }
-
-  // Which provider is in use, read live on every render rather than latched at
-  // init. Latching left the gate closed for anyone without a config-level model,
-  // and `session.updated` only fires on a server-side change, so opening a
-  // session or switching model in the picker never re-armed it -- the plugin
-  // loaded, showed as `active` in the Plugins menu, and rendered nothing.
-  function resolveActiveProviderId(sessionId: string): string | undefined {
-    return resolveProviderId(api.state, sessionId, activeProviderId());
-  }
-
-  async function refreshUsage(ttlOverride?: number): Promise<void> {
-    if (refreshInFlight) return;
-    const effectiveTtl = ttlOverride ?? POLL_INTERVAL_MS;
-    if (ttlOverride !== undefined) {
-      if (Date.now() - lastFetchAt < DEBOUNCE_MS) return;
-      if (Date.now() - cachedAt < effectiveTtl && usageSnapshot() !== null) return;
-    } else if (Date.now() - cachedAt < POLL_INTERVAL_MS && usageSnapshot() !== null) {
-      return;
-    }
-    refreshInFlight = true;
-    try {
-      const snapshot = await loadUsageSnapshot();
-      if (snapshot === null) {
-        if (usageSnapshot() === null) {
-          await logUsageError(api, "Go usage unavailable (not configured or request failed)");
-        }
-        return;
-      }
-      cachedAt = Date.now();
-      setUsageSnapshot(snapshot);
-    } catch {
-      // Keep stale data; the panel simply shows the last known snapshot.
-    } finally {
-      lastFetchAt = Date.now();
-      refreshInFlight = false;
-    }
-  }
-
-  // Fire-and-forget refresh that cannot surface an unhandled rejection.
-  // The background poll (ttlOverride undefined) keeps the 60s TTL guard;
-  // session.updated passes 0 to bypass the TTL entirely (debounce-only);
-  // message.updated passes EVENT_TTL_MS for a 15s effective window.
-  function refreshSafely(ttlOverride?: number): void {
-    void refreshUsage(ttlOverride).catch(() => {
-      // refreshUsage already swallows failures; this guards a regression.
-    });
-  }
-
-  function toggleSidebarCollapsed(): void {
-    try {
-      const next = !isSidebarCollapsed();
-      setIsSidebarCollapsed(next);
-      api.kv.set(KV_COLLAPSED_SIDEBAR_KEY, next);
-    } catch {
-      // Collapse state is best-effort persistence only.
-    }
-  }
-
-  function toggleStatuslineCollapsed(): void {
-    try {
-      const next = !isStatuslineCollapsed();
-      setIsStatuslineCollapsed(next);
-      api.kv.set(KV_COLLAPSED_STATUSLINE_KEY, next);
-    } catch {
-      // Collapse state is best-effort persistence only.
-    }
-  }
+  const resolveActiveProviderId = makeProviderResolver(api.state, activeProviderId);
 
   function GoSidebarPanel(props: { theme: TuiTheme }) {
-    createEffect(() => {
-      const snapshot = usageSnapshot();
-      if (snapshot !== null && snapshot.source === "unavailable") {
-        void logUsageError(
-          api,
-          snapshot.apiError ? `Go usage unavailable (${snapshot.apiError})` : "Go usage snapshot unavailable",
-        );
-      }
-    });
-    return (
-      <box flexDirection="column">
-        <text fg={props.theme.current.text}>
-          <b>Go Usage</b>
-        </text>
-        <Show
-          when={usageSnapshot()}
-          fallback={
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Go loading…
-            </text>
-          }
-        >
-          {(snapshot) => {
-            const snap = snapshot();
-            // Rejected keys (and other unavailable snapshots) must surface a
-            // row instead of a bare header with zero rows. Statusline stays
-            // hidden for unavailable (isSnapshotEmpty -> null).
-            if (snap.source === "unavailable") {
-              return (
-                <text fg={props.theme.current.textMuted} wrapMode="none">
-                  Go n/a ({snap.apiError ?? "unavailable"})
-                </text>
-              );
-            }
-            return (
-              <For each={buildUsageRows(snap)}>
-                {(row) => (
-                  <text fg={props.theme.current.textMuted} wrapMode="none">
-                    {row.label} {row.value}
-                  </text>
-                )}
-              </For>
-            );
-          }}
-        </Show>
-      </box>
-    );
-  }
-
-  function GoStatusline() {
-    return (
-      <Show when={usageSnapshot()} fallback={null}>
-        {(snapshot) => {
-          if (isSnapshotEmpty(snapshot())) return null;
-          return <text>{formatStatusline(snapshot())}</text>;
-        }}
-      </Show>
-    );
+    return <GoUsageBlock api={api} theme={props.theme} snapshot={usageStore.snapshot} withPlan={true} />;
   }
 
   if (surfaces.sidebar) {
@@ -402,7 +95,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
               if (props.session_id.length === 0) return null;
               if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
               if (api.route.current.name !== "session") return null;
-              if (isSidebarCollapsed()) return null;
+              if (collapse.isSidebarCollapsed()) return null;
               return <GoSidebarPanel theme={ctx.theme} />;
             } catch {
               return null;
@@ -427,8 +120,8 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             try {
               if (props.session_id.length === 0) return null;
               if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (isStatuslineCollapsed()) return null;
-              return <GoStatusline />;
+              if (collapse.isStatuslineCollapsed()) return null;
+              return <GoStatusline snapshot={usageStore.snapshot} />;
             } catch {
               return null;
             }
@@ -449,13 +142,13 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         title: "Go usage: toggle sidebar",
         value: "oc-go-usage-display.toggle-sidebar",
         category: "Go",
-        onSelect: () => toggleSidebarCollapsed(),
+        onSelect: () => collapse.toggleSidebar(),
       },
       {
         title: "Go usage: toggle statusline",
         value: "oc-go-usage-display.toggle-statusline",
         category: "Go",
-        onSelect: () => toggleStatuslineCollapsed(),
+        onSelect: () => collapse.toggleStatusline(),
       },
     ]);
     if (typeof unregister === "function") unregisterToggleCommand = unregister;
@@ -469,14 +162,14 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     const unsubscribe = api.event.on("session.updated", (event) => {
       const providerId = event?.properties?.info?.model?.providerID;
       if (providerId !== undefined) setActiveProviderId(providerId);
-      refreshSafely(0);
+      usageStore.refreshSafely(0);
     });
     if (typeof unsubscribe === "function") unsubscribeSession = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
   }
   try {
-    const unsubscribe = api.event.on("message.updated", () => refreshSafely(EVENT_TTL_MS));
+    const unsubscribe = api.event.on("message.updated", () => usageStore.refreshSafely(EVENT_TTL_MS));
     if (typeof unsubscribe === "function") unsubscribeMessage = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
@@ -484,7 +177,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   try {
-    pollTimer = setInterval(() => refreshSafely(), POLL_INTERVAL_MS);
+    pollTimer = setInterval(() => usageStore.refreshSafely(), POLL_INTERVAL_MS);
   } catch {
     // No poll timer: the on-demand refresh below still runs.
   }
@@ -519,7 +212,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     }
   }
 
-  await refreshUsage();
+  await usageStore.refresh();
 }
 
 const goUsageTui: TuiPlugin = async (api, options) => {
