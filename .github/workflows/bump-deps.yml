@@ -62,11 +62,8 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 60
-    env:
-      # Secret name is unchanged; the job env exposes it under the name the
-      # host-scoped plugin resolves. Renaming the secret would silently skip.
-      # As in test.yml: the secrets context never appears in a conditional.
-      OPENCODE_OC_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+    # No secret: the container gate runs entirely on mocked usage, so this job
+    # needs no credentials at all.
     steps:
       - name: Checkout develop
         uses: actions/checkout@v4

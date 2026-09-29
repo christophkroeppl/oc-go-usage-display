@@ -218,7 +218,7 @@ docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/
 | Test command | Tier |
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
-| `bun run test:unit` | helper tests + live usage shape check (skips without `OPENCODE_OC_GO_API_KEY`) |
+| `bun run test:unit` | helper tests + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
 | `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
@@ -226,6 +226,11 @@ Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects
 fs writes, tmp usage, child processes and sockets). Integration and e2e run only
 inside the container image; host-runnable tests redirect HOME/XDG and force
 `OPENCODE_OC_GO_MOCK=1`, so they never touch the real `~/.config/opencode`.
+
+**The API key buys one thing:** a shape check that the live usage payload is
+still what we parse. Every TUI display test runs on the mock instead, because it
+asserts layout, which does not need live numbers — so the container gate is
+hermetic and needs no secret at all.
 
 ## CI
 

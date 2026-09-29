@@ -34,6 +34,19 @@ prove usage actually renders, and they need the image's pinned binaries
 (opencode + kilo + tmux). Hosts with older opencode/kilo versions skip the TUI
 tests with an explicit reason.
 
+## The API key: one shape check, no live surfaces
+
+The key exists for exactly one thing: proving the usage API still returns the
+JSON we parse (`test/unit/live-usage.test.js`, a single GET, in the `unit` job
+on the host). Nothing else touches it:
+
+- every TUI display test runs on `OPENCODE_OC_GO_MOCK=1`, because it asserts
+  LAYOUT, and a layout assertion does not need live numbers;
+- the container gate therefore needs no secret at all (compose.yml forwards
+  none), which also makes it hermetic by construction;
+- one call per workflow run is the budget: do not add a "live" display variant
+  back, and do not fan a single check out over several hosts.
+
 ## Hermeticity
 
 Tests must never read or write the developer's real config:

@@ -380,24 +380,6 @@ export function assertSidebarOrder(screen, { before = [], after = [] } = {}) {
   }
 }
 
-// Readonly live-usage preflight for the live e2e variant: returns the parsed
-// snapshot (null when the account has no usable windows) and throws on
-// transport/HTTP/shape failures so a broken key fails loudly.
-export async function fetchLiveUsage(apiKey, { extractSnapshotFromApiPayload, timeoutMs = 20000 }) {
-  const response = await fetch("https://opencode.ai/zen/go/v1/usage", {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) throw new Error(`usage endpoint returned HTTP ${response.status}`);
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error("usage endpoint did not return valid JSON");
-  }
-  return extractSnapshotFromApiPayload(payload);
-}
-
 // End-to-end display flow against one host. Returns the model used and the
 // final captured screen; throws with the last screen when the surfaces never
 // render. The caller owns the tmp root and env.

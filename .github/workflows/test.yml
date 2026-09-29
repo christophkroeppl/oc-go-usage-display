@@ -13,8 +13,8 @@
 #                     runs the full containerized suite (integration + e2e,
 #                     including the real opencode/kilo TUI display checks via
 #                     tmux). Hermetic: all HOME/XDG/opencode paths and tmux
-#                     sockets live in container/tmp dirs. OPENCODE_OC_GO_API_KEY is
-#                     forwarded when present; the live variants skip otherwise.
+#                     sockets live in container/tmp dirs, and no secret reaches
+#                     it -- every test in there runs against mocked usage.
 #
 # Startup-safety rule: the secrets context must NOT appear in any conditional
 # expression (job-level or step-level). Each job maps the secret once via
@@ -85,10 +85,6 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 40
-    env:
-      # Secret name is unchanged; the job env exposes it under the name the
-      # host-scoped plugin resolves. Renaming the secret would silently skip.
-      OPENCODE_OC_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,7 +93,7 @@ jobs:
         # Builds the root Dockerfile and runs the checkout baked into the
         # image: opencode --version && kilo --version && bun install && bun
         # run build && bun run test:integration && bun run test:e2e. No bind
-        # mount, so the gate is independent of the runner UID. compose.yml
-        # forwards OPENCODE_OC_GO_API_KEY from this job env. `docker compose run`
-        # propagates the command's exit code.
+        # mount, so the gate is independent of the runner UID, and no secret is
+        # forwarded (mocked usage throughout). `docker compose run` propagates
+        # the command's exit code.
         run: docker compose run --rm --build test
