@@ -92,7 +92,12 @@ Environment variables and the legacy `display` option apply only when the
 
 One shared implementation renders the block on both hosts; only the sidebar's
 width differs (~30 cells on opencode, ~40 on Kilo), and that is what decides the
-layout.
+layout. Both screenshots below are real captures of the pinned hosts, taken by
+`scripts/capture-shots.mjs` (mocked usage, no subscription touched).
+
+| opencode | Kilo (integrated) |
+| -------- | ----------------- |
+| ![opencode sidebar](docs/sidebar-opencode.png) | ![Kilo sidebar](docs/sidebar-kilo.png) |
 
 **opencode** — the plan as meters, with the next reset on its own line, and a
 model section that starts collapsed:
@@ -201,6 +206,14 @@ bun run check     # typecheck only
 `bun run build` fails unless all four bundles exist, are self-contained and
 export only the default module (`scripts/verify-bundles.mjs`); packed tarballs
 can be checked with `node scripts/verify-tarball.mjs <file.tgz>`.
+
+To refresh the README screenshots (boots both hosts in tmux, writes the panes
+with their colors intact to `tmp/`):
+
+```sh
+docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/out" \
+  test bun scripts/capture-shots.mjs
+```
 
 | Test command | Tier |
 | ------------ | ---- |

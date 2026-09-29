@@ -14,6 +14,7 @@ lowercase, no trailing period). `scope` is required for `sidebar`, `statusline`,
 - Each entry module exports exactly one thing: the default `{ id, server | tui }` module. Extra exports are invoked by the loader as plugin factories and can crash startup. Importing never throws; factories and renders are fail-safe.
 - Secrets are never logged; tests never touch the real `~/.config/opencode` or credentials. Details: `.agents/skills/plugin-contract`, `.agents/skills/testing-and-dev-install`.
 - Install surfaces: `bin/` CLIs, package `exports` (`./server`, `./tui`, `./kilo-tui`), `install.sh`, `install-dev.sh`.
+- README screenshots come from `scripts/capture-shots.mjs` (real hosts, real tmux, `OPENCODE_OC_GO_MOCK=1`); it reuses the e2e harness, so the shots cannot drift from what the display tests drive.
 
 ## Versioning (release-please)
 

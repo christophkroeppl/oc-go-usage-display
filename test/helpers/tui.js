@@ -296,6 +296,12 @@ export class TuiSession {
     return this.tmux("capture-pane", "-p", "-t", this.name).stdout ?? "";
   }
 
+  // The same pane with SGR color escapes intact, for rendering a real screenshot
+  // instead of guessing the theme's colors (scripts/capture-shots.mjs).
+  captureAnsi() {
+    return this.tmux("capture-pane", "-e", "-p", "-t", this.name).stdout ?? "";
+  }
+
   sendKeys(...keys) {
     this.tmux("send-keys", "-t", this.name, ...keys);
   }
