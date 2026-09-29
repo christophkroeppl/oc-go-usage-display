@@ -62,7 +62,39 @@ const kiloTui = kiloTuiModule.default.tui;
 // here rather than inferred from a rendered pane. `modelUsage` is the payload
 // it answers with; setting it to `null` makes the call reject, which is the
 // failure the panel has to survive.
+const SESSION_MESSAGES = [
+  { id: "m1", sessionID: "ses_stub", role: "user" },
+  {
+    id: "m2",
+    sessionID: "ses_stub",
+    role: "assistant",
+    providerID: "opencode-go",
+    modelID: "mimo-v2.6-pro",
+    cost: 0.5,
+    tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 200, write: 10 } },
+  },
+  {
+    id: "m3",
+    sessionID: "ses_stub",
+    role: "assistant",
+    providerID: "opencode-go",
+    modelID: "mimo-v2.6-pro",
+    cost: 0.25,
+    tokens: { input: 50, output: 5, reasoning: 0, cache: { read: 100, write: 5 } },
+  },
+  {
+    id: "m4",
+    sessionID: "ses_stub",
+    role: "assistant",
+    providerID: "opencode-go",
+    modelID: "qwen3-max",
+    cost: 0.1,
+    tokens: { input: 10, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+  },
+];
+
 function makeStubApi({
+  messages = SESSION_MESSAGES,
   pluginStates = { "internal:kilo-sidebar-usage": true },
   modelUsage = {
     sessionIDs: ["ses_stub"],
@@ -86,6 +118,7 @@ function makeStubApi({
   const pluginTransitions = [];
   const logs = [];
   const modelUsageCalls = [];
+  const messageReads = [];
 
   const pluginEntry = (id, enabled) => ({
     id,
@@ -163,11 +196,21 @@ function makeStubApi({
       // renders null and nothing below it is reachable.
       config: { model: "opencode-go/mimo-v2.6-pro" },
       provider: [{ id: "opencode-go", name: "OpenCode Go", models: { "mimo-v2.6-pro": { name: "MiMo-V2.6-Pro" } } }],
-      session: { get: () => undefined },
+      session: {
+        get: () => undefined,
+        // The opencode panel's model mix is a fold over this, so the stub models
+        // it and records which session the panel asked about: the numbers come
+        // from the rendered session's own messages, and a panel that read
+        // another session's would be a silent, wrong readout.
+        messages(sessionID) {
+          messageReads.push(sessionID);
+          return messages;
+        },
+      },
     },
   };
 
-  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls };
+  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls, messageReads };
 }
 
 // Slot names captured by one `slots.register` call.
@@ -209,6 +252,66 @@ test("opencode tui factory registers only sidebar_content when statusline is off
     assert.deepStrictEqual(registeredSlotNames(slotRegistrations[0]), ["sidebar_content"]);
   } finally {
     for (const dispose of disposers) dispose();
+  }
+});
+
+// --- the opencode model mix ---
+
+// The opencode panel has no `model-usage` endpoint to call: it folds the host's
+// own message store for the session it is rendering. What is worth pinning here
+// is which store it reaches for and that a store which fails cannot take the
+// sidebar down -- the weights themselves are pure helpers (readonly unit tier),
+// and their rendering is the e2e's job, against a session with real usage.
+//
+// The stub has no renderer, so the slot returns null here (opentui's element
+// factory needs one) and a null return is the only thing an assertion can look
+// at. That is the fail-safe path, and it is why these tests read the store
+// instead of the output.
+test("the opencode sidebar reads the message store of the session it renders", async () => {
+  const stub = makeStubApi();
+
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const render = sidebarRender(stub.slotRegistrations);
+    assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_stub" }));
+    assert.deepStrictEqual(stub.messageReads, ["ses_stub"], "the mix must be measured on the rendered session");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("the opencode sidebar survives a message store that throws", async () => {
+  const stub = makeStubApi();
+  stub.api.state.session.messages = () => {
+    throw new Error("message store unavailable");
+  };
+
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const render = sidebarRender(stub.slotRegistrations);
+    // The mix is an optional readout: a store that fails must leave the plan
+    // rendering, not blank the block or throw into the host's render pass.
+    assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_stub" }));
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("a collapsed opencode sidebar reads no session store at all", async () => {
+  const stub = makeStubApi();
+
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const commands = stub.commandRegistrations.flatMap((register) => register());
+    const toggle = commands.find((command) => command.value === "oc-go-usage-display.toggle-sidebar");
+    assert.ok(toggle, "the sidebar toggle must be registered");
+
+    toggle.onSelect();
+    const render = sidebarRender(stub.slotRegistrations);
+    assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_stub" }));
+    assert.deepStrictEqual(stub.messageReads, [], "a collapsed block must not walk the session's messages");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
   }
 });
 

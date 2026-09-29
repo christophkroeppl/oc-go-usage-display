@@ -54,12 +54,14 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
       "package/dist/tui.js",
       "package/dist/tui.kilo.js",
       "package/dist/helpers.js",
+      "package/dist/tui-shared.js",
       "package/dist/plugins/oc-go-usage-display.ts",
       "package/dist/plugins/oc-go-usage-display.kilo.ts",
       "package/dist/plugins/oc-go-usage-display.tsx",
       "package/dist/plugins/oc-go-usage-display.kilo.tsx",
       "package/bin/oc-go-usage-display-init.js",
       "package/src/shared.ts",
+      "package/src/tui-shared.tsx",
     ]) {
       assert.ok(listing.has(entry), `tarball missing ${entry}`);
     }

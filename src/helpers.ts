@@ -23,9 +23,14 @@ import {
   toUsageCount,
   CACHE_RATE_DECIMALS,
   CACHE_RATE_EMPTY,
+  GO_MODEL_BAR_WIDTH,
+  GO_MODEL_MIX_BUDGET,
+  GO_MODEL_MIX_NAME_MAX_CHARS,
+  GO_MODEL_MIX_SEPARATOR,
   GO_PROVIDER_ID,
   KILO_MODEL_NAME_MAX_CHARS,
   KILO_TOKEN_USAGE_ROWS,
+  TOP_GO_MODELS_LIMIT,
 } from "./shared.js";
 import type { ModelUsage, UsageHost, UsageSnapshot, UsageTokens, UsageWindow } from "./shared.js";
 
@@ -356,7 +361,10 @@ export type PlanRow = {
   reset: string | null;
 };
 
-export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
+// `meterWidth` is the sidebar's budget, not the bar's design: 16 cells fit next
+// to Kilo's model table, 10 fit opencode's ~30-cell sidebar. The glyphs and the
+// saturating fill are identical, so two widths are the same bar at two sizes.
+export function buildPlanRows(snapshot: UsageSnapshot, meterWidth: number = METER_WIDTH): PlanRow[] {
   const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
     ["5h", snapshot.rolling],
     ["7d", snapshot.weekly],
@@ -367,7 +375,7 @@ export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
     if (window === null) continue;
     rows.push({
       label,
-      bar: usageMeterBar(window.percent),
+      bar: usageMeterBar(window.percent, meterWidth),
       percent: window.percent,
       severity: usageMeterSeverity(window),
       // A countdown only tells the user something once the window is capped;
@@ -376,6 +384,38 @@ export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
     });
   }
   return rows;
+}
+
+// The soonest countdown in the plan, labelled with the window it belongs to
+// (`5h resets in 2h5m`), for hosts that print it on one line under the header
+// instead of under a capped row. One line, one window: a sidebar ~30 cells wide
+// cannot afford a suffix on every row, and an unlabelled countdown would be
+// ambiguous about which window is running out.
+//
+// Only `resetInSec` counts. It is the field the live `resetsAt` instant is
+// derived into at the parse boundary, so a window that only carries the scrape's
+// free-text `resetText` is skipped rather than compared as a string.
+export function formatNextResetLine(snapshot: UsageSnapshot): string | null {
+  const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
+    ["5h", snapshot.rolling],
+    ["7d", snapshot.weekly],
+    ["30d", snapshot.monthly],
+  ];
+  let label: string | null = null;
+  let soonest: number | null = null;
+  for (const [name, window] of windows) {
+    if (window === null) continue;
+    const seconds = window.resetInSec;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) continue;
+    if (soonest === null || seconds < soonest) {
+      soonest = seconds;
+      label = name;
+    }
+  }
+  if (label === null || soonest === null) return null;
+  const duration = formatResetDuration(soonest);
+  if (duration === null) return null;
+  return `${label} resets in ${duration}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -490,9 +530,158 @@ export function displayModelName(name: string): string {
     .replace(/\s+/g, " ");
 }
 
-export function modelDisplayName(catalogName: string | null, modelID: string): string {
+export function modelDisplayName(catalogName: string | null, modelID: string, max: number = KILO_MODEL_NAME_MAX_CHARS): string {
   const raw = toNonEmptyString(catalogName) ?? toNonEmptyString(modelID) ?? "";
-  return truncateModelName(displayModelName(raw));
+  return truncateModelName(displayModelName(raw), max);
+}
+
+// The first segment of a model name, for a mix line that has to fit several of
+// them in one line: `mimo-v2.6-pro` -> `mimo`, `qwen3-max` -> `qwen3`, `gpt-5.1`
+// -> `gpt`. A name with no separator is already short and is only truncated.
+// Lowercased: the rest of the sidebar is lowercase, and the mix line is a
+// ranking of three labels rather than three model names to copy out of.
+export function shortModelName(value: string, max: number = GO_MODEL_MIX_NAME_MAX_CHARS): string {
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0) return "";
+  const head = trimmed.split(/[-._/]/)[0] ?? trimmed;
+  return truncateModelName(head, max);
+}
+
+// A token count as a weight, not an invoice: short enough to sit next to a bar
+// in a 30-cell sidebar, precise enough to rank models. `610K` rather than
+// `0.61M` — below a million the integer form is both shorter and the one people
+// say out loud.
+export function formatTokenCount(value: unknown): string {
+  const count = toUsageCount(value);
+  if (count >= 1_000_000_000) return `${trimTrailingZeros((count / 1_000_000_000).toFixed(2))}B`;
+  if (count >= 1_000_000) return `${trimTrailingZeros((count / 1_000_000).toFixed(2))}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}K`;
+  return COUNT_FORMAT.format(count);
+}
+
+// `1.20M` claims a precision the API never had, and spends a cell on it. Only
+// `toFixed` output goes through this, which always carries a decimal point -- so
+// the trailing zeros it strips are always fractional ones, never `100`.
+function trimTrailingZeros(value: string): string {
+  return value.replace(/\.?0+$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// TUI: per-model weights (the opencode sidebar's model mix)
+// ---------------------------------------------------------------------------
+//
+// A model's WEIGHT is its share of the Go tokens spent in this session. It is
+// not a share of the plan, a quota, or a price, and it never carries a currency:
+// the plan's absolute limits are not client-visible, so a number that looked
+// like one would be a guess dressed as a measurement. The bars reuse the plan's
+// glyphs and the same threshold coloring, which is why a heavily used model
+// paints like a hot plan window.
+
+export type GoModelWeight = {
+  providerID: string;
+  modelID: string;
+  tokens: number;
+  share: number;
+  bar: string;
+  steps: number;
+  cost: number;
+};
+
+export type GoModelWeights = {
+  // The heaviest Go models, already ranked and sliced to `limit`.
+  models: GoModelWeight[];
+  // How many Go models the session used in total, so a section titled
+  // `Top Go models (7)` above three rows is explained by the rows themselves.
+  goModels: number;
+  goTokens: number;
+  listedTokens: number;
+  listedShare: number;
+  otherCount: number;
+  // Session totals over EVERY Go model, not just the listed ones: the footer is
+  // about the session, the rows are about the ranking.
+  steps: number;
+  cost: number;
+};
+
+// The heaviest Go models by token count. Ties break on steps and then on the
+// model id, so the same session always ranks the same way — a list that reshuffles
+// between renders would make the weights unreadable. `otherCount` counts the
+// models the limit dropped, and `goTokens`/`steps`/`cost` cover all of them.
+export function weightGoModels(
+  models: readonly ModelUsage[],
+  limit: number = TOP_GO_MODELS_LIMIT,
+  barWidth: number = GO_MODEL_BAR_WIDTH,
+): GoModelWeights {
+  const goModels = models.filter((model) => model.providerID === GO_PROVIDER_ID);
+  const goTokens = goModels.reduce((sum, model) => sum + usageTokenCount(model.tokens), 0);
+  const ranked = [...goModels].sort(
+    (left, right) =>
+      usageTokenCount(right.tokens) - usageTokenCount(left.tokens) ||
+      toUsageCount(right.steps) - toUsageCount(left.steps) ||
+      left.modelID.localeCompare(right.modelID),
+  );
+  const top = ranked.slice(0, Math.max(Math.floor(limit), 0));
+  const listedTokens = top.reduce((sum, model) => sum + usageTokenCount(model.tokens), 0);
+  return {
+    models: top.map((model) => {
+      const tokens = usageTokenCount(model.tokens);
+      const share = goSharePercent(tokens, goTokens);
+      return {
+        providerID: model.providerID,
+        modelID: model.modelID,
+        tokens,
+        share,
+        bar: usageMeterBar(share, barWidth),
+        steps: toUsageCount(model.steps),
+        cost: toUsageCount(model.cost),
+      };
+    }),
+    goModels: goModels.length,
+    goTokens,
+    listedTokens,
+    listedShare: goSharePercent(listedTokens, goTokens),
+    otherCount: Math.max(goModels.length - top.length, 0),
+    steps: goModels.reduce((sum, model) => sum + toUsageCount(model.steps), 0),
+    cost: goModels.reduce((sum, model) => sum + toUsageCount(model.cost), 0),
+  };
+}
+
+// The collapsed mix line: `mimo 59%·qwen 25%·gpt 12%`, as many entries as fit
+// `budget` cells. Built cell by cell rather than joined from a fixed list because
+// a narrow sidebar truncates mid-entry, and a half-written `qwen 2…` reads as a
+// different number than `qwen 25%`.
+//
+// The leader is always included even when it alone overruns the budget: a mix
+// line without the heaviest model is not a summary of anything, and the entry
+// cannot actually be that wide because the names are capped (see
+// `shortModelName`), so the budget only ever decides the second entry onwards.
+export function buildModelMixSummary(
+  entries: ReadonlyArray<{ name: string; share: number }>,
+  budget: number = GO_MODEL_MIX_BUDGET,
+): string {
+  const first = entries[0];
+  if (first === undefined) return "";
+  const parts: string[] = [];
+  let used = 0;
+  for (const entry of entries) {
+    const part = `${entry.name} ${Math.round(entry.share)}%`;
+    const width = part.length + (parts.length === 0 ? 0 : GO_MODEL_MIX_SEPARATOR.length);
+    if (parts.length > 0 && used + width > budget) break;
+    parts.push(part);
+    used += width;
+  }
+  return parts.join(GO_MODEL_MIX_SEPARATOR);
+}
+
+// Two muted lines under the rows: what the listed models account for, and the
+// session's own Go totals. Both are counts of this session's tokens and cost —
+// never of the plan.
+export function buildGoModelFooters(weights: GoModelWeights): string[] {
+  if (weights.models.length === 0) return [];
+  return [
+    `${formatTokenCount(weights.listedTokens)} of ${formatTokenCount(weights.goTokens)} Go tokens`,
+    `${formatUsageCount(weights.steps)} steps · ${formatUsageCost(weights.cost)}`,
+  ];
 }
 
 // One row per entry of KILO_TOKEN_USAGE_ROWS, in that order. A label with no

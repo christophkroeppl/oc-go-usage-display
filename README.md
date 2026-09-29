@@ -88,6 +88,53 @@ Toggle them from the command palette (`Go usage: toggle sidebar` /
 Environment variables and the legacy `display` option apply only when the
 `tui.json` toggles are absent. Restart opencode after changing static config.
 
+## What the sidebar shows
+
+One shared implementation renders the block on both hosts; only the sidebar's
+width differs (~30 cells on opencode, ~40 on Kilo), and that is what decides the
+layout.
+
+**opencode** — the plan as meters, with the next reset on its own line, and a
+model section that starts collapsed:
+
+```
+Go Usage
+ 5h resets in 2h5m
+ 5h             ████░░░░░░ 42%
+ 7d             ██░░░░░░░░ 15%
+ 30d            ██████░░░░ 61%
+
+▶ Top Go models (7)
+  mimo 59%·qwen 25%
+```
+
+Fold the section open (the header is a disclosure control, like the host's own
+`MCP` / `Models` sections) for one row per model:
+
+```
+▾ Top Go models (7)
+  mimo-v2.6-p █████░ 59%
+  qwen3-max   ███░░░░░ 25%
+  gpt-5.1     █░░░░░░ 12%
+  2.31M of 2.4M Go tokens
+  161 steps · $1.51
+```
+
+A model's **weight** is its share of the Go tokens spent in this session, taken
+from the host's own message store over the rendered session — the same scope as
+opencode's `Context` panel next to it. It is a share of tokens: never a share of
+the plan, a quota, or a price, because the plan's absolute limits are not
+client-visible. Bars use the plan's threshold coloring (muted < 75% ≤ warning <
+90% ≤ error), and a capped window is always the error color however low its
+percent reads.
+
+**Kilo** — the same plan as label/value rows with a `Go Plan` section, plus
+`sidebar_mode`: `standalone` (default `integrated`) renders in a free band, and
+`integrated` takes over the host's own `Token Usage` band, retiring that panel
+and replacing it with `Go Usage` / `Session Tokens` / `Models`, where the plan
+meters sit inside the OpenCode Go group and every Go model row carries its
+`Go share`. Toggle it with `Go usage: toggle sidebar mode`.
+
 ## Auth and config
 
 First match wins (secrets are never logged); each host reads only its own

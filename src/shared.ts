@@ -303,15 +303,48 @@ export const KILO_MODEL_NAME_MAX_CHARS = 19;
 export const KILO_STEPS_COLUMN_WIDTH = 5;
 export const KILO_COST_COLUMN_WIDTH = 9;
 
-// Kilo's disclosure glyphs: the section caret and the per-model fold marker.
-export const KILO_COLLAPSED_GLYPH = "▶";
-export const KILO_EXPANDED_GLYPH = "▾";
+// The sidebar's disclosure glyphs: the section caret and the per-model fold
+// marker. Both hosts draw their own sections with these (Kilo's `Token Usage`
+// and `Models` panels, opencode's `MCP` panel), so the plugin uses the hosts'
+// shapes rather than inventing a third: a caret that does not match the ones
+// around it reads as a different control than the one it is.
+export const SIDEBAR_COLLAPSED_GLYPH = "▶";
+export const SIDEBAR_EXPANDED_GLYPH = "▾";
 
 // Cache rate is a share of the three buckets a cache hit can be served from, so
 // it is meaningless when all of them are zero — and a zero denominator is the
 // normal state of a session that never hit a cache. A dash, not "0.0%".
 export const CACHE_RATE_DECIMALS = 1;
 export const CACHE_RATE_EMPTY = "-";
+
+// ---------------------------------------------------------------------------
+// opencode sidebar layout
+// ---------------------------------------------------------------------------
+//
+// opencode's sidebar is ~30 cells wide where Kilo's is ~40, so the same meters
+// are shorter here and a model name gets 12 cells instead of Kilo's 19. These
+// are data, like the Kilo ladder above: the sidebar width is the host's, and a
+// host that changes it is a change a test can notice rather than a truncation
+// nobody sees.
+export const OPENCODE_METER_WIDTH = 10;
+export const OPENCODE_MODEL_NAME_MAX_CHARS = 12;
+export const GO_MODEL_BAR_WIDTH = 6;
+
+// The collapsed mix line: how many models it lists, and how many cells it may
+// spend. The budget is why the mix line is built cell by cell (see
+// `buildModelMixSummary`) instead of joined from a fixed list.
+export const TOP_GO_MODELS_LIMIT = 3;
+export const GO_MODEL_MIX_NAME_MAX_CHARS = 6;
+export const GO_MODEL_MIX_BUDGET = 28;
+// No spaces around the separator: the same three entries cost 29 cells with
+// them and 25 without, and 25 is what fits beside the section's indent in a
+// ~30-cell sidebar. A cut-off third entry is a worse summary than tight dots.
+export const GO_MODEL_MIX_SEPARATOR = "·";
+
+// The section title says "Go models" on purpose: the weight of a model is its
+// share of the Go tokens, so a model from another provider has no weight to
+// show and is not counted here.
+export const TOP_GO_MODELS_LABEL = "Top Go models";
 
 // Section titles of the integrated panel. The token section is deliberately NOT
 // "Token Usage": integrated mode retires the host panel of that name, and
@@ -322,11 +355,13 @@ export const INTEGRATED_MODELS_SECTION_LABEL = "Models";
 export const GO_PLAN_HEADING = "Go Plan";
 export const INTEGRATED_GO_SHARE_LABEL = "Go share";
 
-// Kilo's own load/failure/empty wording for this block, so the integrated panel
-// reads identically whether it or the host panel is on screen.
+// Wording for a model section with nothing to show. Both hosts use it (opencode's
+// mix folds its own message store, Kilo's integrated panel the host endpoint),
+// and Kilo's own load/failure wording is borrowed too, so the section reads the
+// same on either host whether the host panel or ours is on screen.
+export const MODELS_EMPTY_LABEL = "No model usage yet";
 export const INTEGRATED_LOADING_LABEL = "Loading usage...";
 export const INTEGRATED_UNAVAILABLE_LABEL = "Usage unavailable";
-export const INTEGRATED_EMPTY_LABEL = "No model usage yet";
 
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
@@ -570,4 +605,76 @@ export function parseSessionModelUsage(payload: unknown): SessionModelUsage | nu
     totals: parseUsageTotals(payload.totals),
     models,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The same split, derived from opencode's own message store
+// ---------------------------------------------------------------------------
+//
+// opencode has no `model-usage` endpoint to call, and it does not need one: every
+// assistant message already carries the provider, the model, the cost and the
+// five token buckets, so the per-model table is a fold over
+// `api.state.session.messages(sessionID)` instead of a request. The result is
+// the SAME `SessionModelUsage` shape Kilo's endpoint returns, which is what lets
+// both hosts share one renderer.
+//
+// SCOPE: the rendered session only, not the session tree. That is the scope
+// opencode's own Context panel reports (`Session.tokens` / `Session.cost`), so
+// the mix is measured exactly like the number the user already sees next to it,
+// and this plugin measures nothing the host does not. Kilo differs here only
+// because its endpoint sums the tree and a client cannot ask for less.
+//
+// Tolerant for the same reason `parseSessionModelUsage` is: a message without a
+// provider or a model cannot be weighted, so it is skipped rather than folded
+// into an unnamed bucket that would silently take share from real models.
+
+function addUsageTokens(left: UsageTokens, right: UsageTokens): UsageTokens {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    reasoning: left.reasoning + right.reasoning,
+    cache: { read: left.cache.read + right.cache.read, write: left.cache.write + right.cache.write },
+  };
+}
+
+export function aggregateModelUsageFromMessages(messages: readonly unknown[]): SessionModelUsage {
+  const byModel = new Map<string, ModelUsage>();
+  const sessionIDs: string[] = [];
+  for (const entry of messages) {
+    if (!isRecord(entry) || entry.role !== "assistant") continue;
+    const providerID = toNonEmptyString(entry.providerID);
+    const modelID = toNonEmptyString(entry.modelID);
+    if (providerID === null || modelID === null) continue;
+    const parsed = parseUsageTotals(entry);
+    const key = `${providerID}/${modelID}`;
+    const existing = byModel.get(key);
+    if (existing === undefined) {
+      byModel.set(key, {
+        providerID,
+        modelID,
+        steps: 1,
+        cost: parsed.cost,
+        tokens: { ...parsed.tokens, cache: { ...parsed.tokens.cache } },
+      });
+    } else {
+      // In place: the map owns the row, and a fresh object per message would
+      // make a long session allocate one row per step.
+      existing.steps += 1;
+      existing.cost += parsed.cost;
+      existing.tokens = addUsageTokens(existing.tokens, parsed.tokens);
+    }
+    const sessionID = toNonEmptyString(entry.sessionID);
+    if (sessionID !== null && !sessionIDs.includes(sessionID)) sessionIDs.push(sessionID);
+  }
+
+  const models = [...byModel.values()];
+  const totals = models.reduce<UsageTotals>(
+    (sum, model) => ({
+      steps: sum.steps + model.steps,
+      cost: sum.cost + model.cost,
+      tokens: addUsageTokens(sum.tokens, model.tokens),
+    }),
+    { steps: 0, cost: 0, tokens: { ...EMPTY_TOKENS, cache: { ...EMPTY_TOKENS.cache } } },
+  );
+  return { sessionIDs, totals, models };
 }

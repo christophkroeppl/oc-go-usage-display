@@ -7,11 +7,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildGoModelFooters,
+  buildModelMixSummary,
   buildModelTokenRows,
   buildPlanRows,
   buildTokenUsageRows,
   buildUsageRows,
   cacheRatePercent,
+  formatNextResetLine,
+  formatTokenCount,
   DEFAULT_SIDEBAR_MODE,
   displayModelName,
   formatStatusline,
@@ -25,19 +29,26 @@ import {
   modelDisplayName,
   parseBooleanFlag,
   parseSidebarMode,
+  shortModelName,
   surfaceSelectionFromDisplayMode,
   totalGoTokens,
   truncateModelName,
   usageMeterBar,
   usageMeterSeverity,
   usageTokenCount,
+  weightGoModels,
 
   providerIdFromModel,
   resolveProviderId,} from "../../dist/helpers.js";
 import {
+  aggregateModelUsageFromMessages,
   CACHE_RATE_DECIMALS,
   CACHE_RATE_EMPTY,
+  GO_MODEL_BAR_WIDTH,
+  GO_MODEL_MIX_BUDGET,
   GO_PROVIDER_ID,
+  OPENCODE_METER_WIDTH,
+  OPENCODE_MODEL_NAME_MAX_CHARS,
   KILO_COST_COLUMN_WIDTH,
   KILO_MODEL_NAME_MAX_CHARS,
   KILO_STEPS_COLUMN_WIDTH,
@@ -654,4 +665,314 @@ test("providerIdFromModel takes the provider segment and rejects junk", () => {
   assert.equal(providerIdFromModel("/leading-slash"), undefined);
   assert.equal(providerIdFromModel(undefined), undefined);
   assert.equal(providerIdFromModel(42), undefined);
+});
+
+// --- aggregateModelUsageFromMessages (the opencode side of the model mix) ---
+//
+// opencode has no model-usage endpoint: every assistant message in the host's
+// store already carries the provider, the model, the cost and the five token
+// buckets, so the per-model split is a fold over the session's own messages.
+// The point of the assertions below is that the fold produces exactly the shape
+// Kilo's endpoint returns, and that an unusable message cannot take share from
+// a model that is real.
+
+function assistantMessage(overrides = {}) {
+  return {
+    id: "msg_1",
+    sessionID: "ses_1",
+    role: "assistant",
+    providerID: "opencode-go",
+    modelID: "mimo-v2.6-pro",
+    cost: 0.5,
+    tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 200, write: 10 } },
+    ...overrides,
+  };
+}
+
+test("aggregateModelUsageFromMessages folds a session's assistant messages per model", () => {
+  const usage = aggregateModelUsageFromMessages([
+    { id: "m0", sessionID: "ses_1", role: "user" },
+    assistantMessage(),
+    assistantMessage({ id: "m2", cost: 0.25, tokens: { input: 50, output: 5, reasoning: 0, cache: { read: 100, write: 5 } } }),
+    assistantMessage({ id: "m3", modelID: "qwen3-max", cost: 0.1, tokens: { input: 10, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }),
+  ]);
+
+  assert.deepStrictEqual(usage.sessionIDs, ["ses_1"]);
+  assert.equal(usage.models.length, 2);
+  const [mimo, qwen] = usage.models;
+  assert.equal(mimo.modelID, "mimo-v2.6-pro");
+  assert.equal(mimo.steps, 2, "one step per assistant message, not per model");
+  assert.equal(mimo.cost, 0.75);
+  assert.deepStrictEqual(mimo.tokens, { input: 150, output: 25, reasoning: 5, cache: { read: 300, write: 15 } });
+  assert.equal(qwen.steps, 1);
+
+  // The totals row is the sum of the models, exactly like the host endpoint's.
+  assert.equal(usage.totals.steps, 3);
+  assert.equal(usage.totals.cost, 0.85);
+  assert.deepStrictEqual(usage.totals.tokens, {
+    input: 160,
+    output: 26,
+    reasoning: 5,
+    cache: { read: 300, write: 15 },
+  });
+});
+
+test("aggregateModelUsageFromMessages produces the same shape as the host endpoint", () => {
+  const fromMessages = aggregateModelUsageFromMessages([assistantMessage()]);
+  const fromEndpoint = parseSessionModelUsage({
+    sessionIDs: ["ses_1"],
+    totals: { steps: 1, cost: 0.5, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 200, write: 10 } } },
+    models: [{ providerID: "opencode-go", modelID: "mimo-v2.6-pro", steps: 1, cost: 0.5, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 200, write: 10 } } }],
+  });
+  // Same renderer, same numbers: the two hosts' model sections are interchangeable.
+  assert.deepStrictEqual(fromMessages, fromEndpoint);
+});
+
+test("aggregateModelUsageFromMessages drops messages it cannot weigh", () => {
+  const usage = aggregateModelUsageFromMessages([
+    assistantMessage(),
+    { role: "assistant" },
+    { role: "assistant", modelID: "b" },
+    { role: "assistant", providerID: "opencode-go" },
+    { role: "assistant", providerID: "  ", modelID: "b" },
+    assistantMessage({ id: "m9", cost: Number.NaN, tokens: { input: Number.POSITIVE_INFINITY, cache: { read: -1 } } }),
+    "garbage",
+    null,
+  ]);
+  // Only the two weighted messages survive; the unlabelled ones would otherwise
+  // fold into a bucket no row can show, silently stealing share.
+  assert.equal(usage.models.length, 1);
+  assert.equal(usage.models[0].steps, 2);
+  assert.equal(usage.models[0].cost, 0.5, "a NaN cost must not poison the total");
+  assert.equal(usage.models[0].tokens.input, 100);
+  assert.equal(usage.models[0].tokens.cache.read, 200, "a negative bucket clamps to 0");
+});
+
+test("aggregateModelUsageFromMessages returns an empty shape for a session with no usage", () => {
+  for (const input of [[], [{ role: "user" }], [null], undefined]) {
+    const usage = aggregateModelUsageFromMessages(input ?? []);
+    assert.deepStrictEqual(usage, {
+      sessionIDs: [],
+      totals: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      models: [],
+    });
+  }
+});
+
+// --- weightGoModels (the sidebar's model mix) ---
+
+function goModel(modelID, tokens, overrides = {}) {
+  return {
+    providerID: "opencode-go",
+    modelID,
+    steps: 1,
+    cost: 0.1,
+    tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    ...overrides,
+  };
+}
+
+const MIX_MODELS = [
+  goModel("mimo-v2.6-pro", 1_420_000, { steps: 96, cost: 0.91 }),
+  goModel("qwen3-max", 610_000, { steps: 41, cost: 0.38 }),
+  goModel("gpt-5.1", 280_000, { steps: 18, cost: 0.19 }),
+  goModel("haiku-4.5", 60_000, { steps: 4, cost: 0.02 }),
+  goModel("longcat-2.5", 30_000, { steps: 2, cost: 0.01 }),
+];
+
+test("weightGoModels ranks the heaviest Go models and weights them against the Go total", () => {
+  const weights = weightGoModels(MIX_MODELS);
+  assert.deepStrictEqual(
+    weights.models.map((model) => model.modelID),
+    ["mimo-v2.6-pro", "qwen3-max", "gpt-5.1"],
+    "the list is capped at the top three, heaviest first",
+  );
+  assert.equal(weights.goModels, 5, "the header counts every Go model, not the rows");
+  assert.equal(weights.otherCount, 2);
+  assert.equal(weights.goTokens, 2_400_000);
+  assert.equal(weights.listedTokens, 2_310_000);
+  assert.equal(Math.round(weights.listedShare), 96);
+  assert.equal(Math.round(weights.models[0].share), 59);
+  assert.equal(Math.round(weights.models[2].share), 12);
+  // Session totals cover every Go model, not only the listed three.
+  assert.equal(weights.steps, 161);
+  assert.equal(weights.cost, 1.51);
+  assert.equal(weights.models[0].bar, usageMeterBar(59, GO_MODEL_BAR_WIDTH));
+  assert.equal(weights.models[0].bar.length, GO_MODEL_BAR_WIDTH);
+});
+
+test("weightGoModels ignores models from another provider", () => {
+  // A model from another provider has no weight here: the section is the Go
+  // plan's mix, and folding a foreign provider in would silently shrink every
+  // share the user is shown.
+  const weights = weightGoModels([
+    ...MIX_MODELS,
+    { ...goModel("claude-sonnet-4", 9_000_000), providerID: "anthropic" },
+  ]);
+  assert.equal(weights.goTokens, 2_400_000);
+  assert.equal(weights.goModels, 5);
+  assert.equal(weights.models[0].modelID, "mimo-v2.6-pro");
+});
+
+test("weightGoModels breaks ties so the ranking does not reshuffle between renders", () => {
+  const weights = weightGoModels([
+    goModel("b-model", 100, { steps: 1 }),
+    goModel("a-model", 100, { steps: 1 }),
+    goModel("c-model", 100, { steps: 5 }),
+  ]);
+  assert.deepStrictEqual(
+    weights.models.map((model) => model.modelID),
+    ["c-model", "a-model", "b-model"],
+    "more steps first, then the model id",
+  );
+});
+
+test("weightGoModels reports 0% rather than NaN when no Go token is attributed", () => {
+  const weights = weightGoModels([goModel("mimo-v2.6-pro", 0)]);
+  assert.equal(weights.models.length, 1);
+  assert.equal(weights.models[0].share, 0);
+  assert.equal(weights.models[0].bar, usageMeterBar(0, GO_MODEL_BAR_WIDTH));
+  assert.equal(weightGoModels([]).models.length, 0);
+  assert.equal(weightGoModels([]).goTokens, 0);
+  assert.equal(weightGoModels([], 3, 0).models[0]?.bar, undefined);
+});
+
+test("weightGoModels honors an explicit limit", () => {
+  const weights = weightGoModels(MIX_MODELS, 1);
+  assert.equal(weights.models.length, 1);
+  assert.equal(weights.otherCount, 4);
+  assert.equal(Math.round(weights.listedShare), 59);
+});
+
+// --- buildModelMixSummary (the collapsed line) ---
+
+test("buildModelMixSummary joins the mix and stops before it overflows the sidebar", () => {
+  const entries = [
+    { name: "mimo", share: 59.2 },
+    { name: "qwen", share: 25.4 },
+    { name: "gpt", share: 11.8 },
+  ];
+  assert.equal(buildModelMixSummary(entries), "mimo 59%\u00b7qwen 25%\u00b7gpt 12%");
+  assert.ok(buildModelMixSummary(entries).length <= GO_MODEL_MIX_BUDGET);
+  // A narrower sidebar drops whole entries: a truncated `qwen 2…` would read as a
+  // different number than `qwen 25%`.
+  const narrow = buildModelMixSummary(entries, 18);
+  assert.equal(narrow, "mimo 59%\u00b7qwen 25%");
+  assert.ok(!narrow.includes("…"), "an entry is never half-printed");
+});
+
+test("buildModelMixSummary always keeps the leader", () => {
+  // The names the caller passes are capped, so the leader fits; the budget only
+  // ever decides the second entry onwards.
+  assert.equal(buildModelMixSummary([{ name: "abcdef", share: 100 }], 4), "abcdef 100%");
+  assert.equal(
+    buildModelMixSummary([{ name: "mimo", share: 59 }, { name: "qwen", share: 25 }], 4),
+    "mimo 59%",
+    "a mix line without the leader says nothing",
+  );
+  assert.equal(buildModelMixSummary([], GO_MODEL_MIX_BUDGET), "");
+});
+
+// --- buildGoModelFooters ---
+
+test("buildGoModelFooters reports what the rows cover and what the session spent", () => {
+  const weights = weightGoModels(MIX_MODELS);
+  assert.deepStrictEqual(buildGoModelFooters(weights), ["2.31M of 2.4M Go tokens", "161 steps · $1.51"]);
+  assert.ok(buildGoModelFooters(weights).every((line) => line.length <= 30), "both footers fit the sidebar");
+  // Nothing to cover means no footers: an empty section must not print zeroes.
+  assert.deepStrictEqual(buildGoModelFooters(weightGoModels([])), []);
+});
+
+// --- the short names and counts the mix line is built from ---
+
+test("shortModelName takes the leading segment of a model name", () => {
+  assert.equal(shortModelName("MiMo-V2.6-Pro"), "mimo");
+  assert.equal(shortModelName("Qwen3 Max"), "qwen3…", "capped to the mix line's name budget");
+  assert.equal(shortModelName("GPT-5.1"), "gpt");
+  assert.equal(shortModelName("sonnet"), "sonnet");
+  assert.equal(shortModelName("claude/sonnet-4"), "claude");
+  assert.equal(shortModelName("  spaced-name  "), "spaced");
+  assert.equal(shortModelName(""), "");
+  assert.equal(shortModelName("   "), "");
+  // A first segment longer than the budget is truncated, not cut in half.
+  assert.equal(shortModelName("anthropic/claude-sonnet-4"), "anthr…");
+});
+
+test("formatTokenCount stays inside a sidebar cell budget", () => {
+  assert.equal(formatTokenCount(1_420_000), "1.42M");
+  assert.equal(formatTokenCount(610_000), "610K", "below a million the integer form is shorter");
+  assert.equal(formatTokenCount(1_200_000), "1.2M", "trailing zeros claim precision the API never had");
+  assert.equal(formatTokenCount(999), "999");
+  assert.equal(formatTokenCount(0), "0");
+  assert.equal(formatTokenCount(1_500_000_000), "1.5B");
+  assert.equal(formatTokenCount(-5), "0");
+  assert.equal(formatTokenCount(Number.NaN), "0");
+  assert.equal(formatTokenCount(undefined), "0");
+  for (const value of [1_420_000, 610_000, 12, 4_200_000_000]) {
+    assert.ok(formatTokenCount(value).length <= 6, `${value} must fit next to a bar`);
+  }
+});
+
+test("modelDisplayName takes the sidebar's own width budget", () => {
+  assert.equal(modelDisplayName("MiMo-V2.6-Pro", "mimo-v2.6-pro", OPENCODE_MODEL_NAME_MAX_CHARS), "MiMo-V2.6-P…");
+  assert.equal(modelDisplayName(null, "mimo-v2.6-pro", 12), "mimo-v2.6-p…");
+  assert.equal(modelDisplayName("MiMo-V2.6-Pro", "mimo-v2.6-pro"), "MiMo-V2.6-Pro", "Kilo's default width is unchanged");
+});
+
+// --- the opencode layout budget, and the meters it is spent on ---
+
+test("the opencode layout budget is pinned next to the sidebar it belongs to", () => {
+  assert.equal(OPENCODE_METER_WIDTH, 10);
+  assert.equal(OPENCODE_MODEL_NAME_MAX_CHARS, 12);
+  assert.equal(GO_MODEL_BAR_WIDTH, 6);
+  assert.equal(usageMeterBar(42, OPENCODE_METER_WIDTH).length, OPENCODE_METER_WIDTH);
+  assert.notEqual(OPENCODE_METER_WIDTH, METER_WIDTH, "the two sidebars are not the same width");
+  // A model row is the widest thing the section draws: name + bar + percent.
+  const widest = OPENCODE_MODEL_NAME_MAX_CHARS + 1 + GO_MODEL_BAR_WIDTH + 1 + 4;
+  assert.ok(widest <= 30, `a model row must fit opencode's sidebar (${widest} cells)`);
+  // And so is the collapsed mix line it collapses to.
+  assert.ok(GO_MODEL_MIX_BUDGET + 2 <= 30);
+});
+
+test("buildPlanRows takes the host's meter width", () => {
+  const rows = buildPlanRows(tuiSnapshot(), OPENCODE_METER_WIDTH);
+  assert.deepStrictEqual(rows.map((row) => row.label), ["5h", "7d", "30d"]);
+  for (const row of rows) assert.equal(row.bar.length, OPENCODE_METER_WIDTH);
+  assert.equal(buildPlanRows(tuiSnapshot())[0].bar.length, METER_WIDTH, "Kilo's default width is unchanged");
+});
+
+test("formatNextResetLine names the window the countdown belongs to", () => {
+  assert.equal(formatNextResetLine(tuiSnapshot()), "5h resets in 2h5m");
+  // The soonest window wins, and the label travels with it.
+  const weeklyFirst = tuiSnapshot({
+    rolling: { percent: 10, status: "active", limited: false, resetInSec: 90000, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: 120, resetText: null },
+  });
+  assert.equal(formatNextResetLine(weeklyFirst), "7d resets in 2m");
+});
+
+test("formatNextResetLine stays silent when there is no usable countdown", () => {
+  const none = tuiSnapshot({
+    rolling: { percent: 10, status: "active", limited: false, resetInSec: null, resetText: null },
+    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+    monthly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
+  });
+  assert.equal(formatNextResetLine(none), null);
+  // A stale payload, clock skew or a reset that fired mid-flight can all send a
+  // negative span; an elapsed countdown is as unusable as an unreadable one.
+  assert.equal(
+    formatNextResetLine(
+      tuiSnapshot({ rolling: { percent: 10, status: "active", limited: false, resetInSec: -30, resetText: null } }),
+    ),
+    null,
+  );
+  assert.equal(
+    formatNextResetLine(
+      tuiSnapshot({
+        rolling: { percent: 10, status: "active", limited: false, resetInSec: Number.NaN, resetText: "soon" },
+      }),
+    ),
+    null,
+    "only resetInSec is compared: the scrape's free text is not a countdown",
+  );
 });

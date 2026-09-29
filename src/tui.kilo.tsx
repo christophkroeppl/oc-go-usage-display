@@ -93,17 +93,16 @@ import type { ModelProviderGroup, PlanRow, SidebarMode } from "./helpers.js";
 import {
   hostEnv,
   parseSessionModelUsage,
-  toNonEmptyString,
   errorMessage,
   GO_PROVIDER_ID,
-  INTEGRATED_EMPTY_LABEL,
+  MODELS_EMPTY_LABEL,
   INTEGRATED_LOADING_LABEL,
   INTEGRATED_MODELS_SECTION_LABEL,
   INTEGRATED_TOKENS_SECTION_LABEL,
   INTEGRATED_UNAVAILABLE_LABEL,
-  KILO_COLLAPSED_GLYPH,
+  SIDEBAR_COLLAPSED_GLYPH,
   KILO_COST_COLUMN_WIDTH,
-  KILO_EXPANDED_GLYPH,
+  SIDEBAR_EXPANDED_GLYPH,
   KILO_INTEGRATED_SLOT_ORDER,
   KILO_SLOT_ORDER,
   KILO_STEPS_COLUMN_WIDTH,
@@ -122,6 +121,8 @@ import {
   isGoUsageProvider,
   logUsageError,
   makeProviderResolver,
+  readModelDisplayName,
+  readProviderDisplayNames,
   reactiveChild,
   resolveSurfaceSelection,
   EVENT_TTL_MS,
@@ -217,30 +218,6 @@ async function applyHostUsagePanel(api: TuiPluginApi, mode: SidebarMode): Promis
 // Session model usage (the integrated panel's replacement for Kilo's own
 // token-usage band)
 // ---------------------------------------------------------------------------
-
-function readProviderDisplayNames(api: TuiPluginApi): ReadonlyMap<string, string> {
-  const names = new Map<string, string>();
-  try {
-    for (const provider of api.state?.provider ?? []) {
-      const id = toNonEmptyString(provider.id);
-      if (id === null) continue;
-      names.set(id, toNonEmptyString(provider.name) ?? id);
-    }
-  } catch {
-    // The catalog is optional: a group falls back to its raw provider id.
-  }
-  return names;
-}
-
-function readModelCatalogName(api: TuiPluginApi, model: ModelUsage): string | null {
-  try {
-    const provider = api.state?.provider?.find((entry) => entry.id === model.providerID);
-    return toNonEmptyString(provider?.models?.[model.modelID]?.name);
-  } catch {
-    return null;
-  }
-}
-
 
 // This is the same typed call Kilo's own panel makes
 // (`client.kilocode.sessionModelUsage`), which the SDK resolves to
@@ -423,11 +400,16 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       <box flexDirection="column" gap={1}>
         <box flexDirection="row" gap={1} flexShrink={0} onMouseDown={props.onToggle}>
           <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
-            {reactiveChild(() => (props.expanded() ? KILO_EXPANDED_GLYPH : KILO_COLLAPSED_GLYPH))}
+            {reactiveChild(() => (props.expanded() ? SIDEBAR_EXPANDED_GLYPH : SIDEBAR_COLLAPSED_GLYPH))}
           </text>
           <box flexGrow={1} minWidth={0} overflow="hidden">
             <text fg={props.theme.current.text} wrapMode="none">
-              <b>{modelDisplayName(readModelCatalogName(api, props.model), props.model.modelID)}</b>
+              <b>
+                {modelDisplayName(
+                  readModelDisplayName(api, props.model.providerID, props.model.modelID),
+                  props.model.modelID,
+                )}
+              </b>
             </text>
           </box>
           <box
@@ -505,7 +487,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         <box flexDirection="column" gap={1} paddingTop={1}>
           <Show when={models.length === 0}>
             <text fg={props.theme.current.textMuted} wrapMode="none">
-              {INTEGRATED_EMPTY_LABEL}
+              {MODELS_EMPTY_LABEL}
             </text>
           </Show>
           <For each={groups}>

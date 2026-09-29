@@ -80,8 +80,8 @@ import {
   GO_PLAN_HEADING,
   GO_PROVIDER_ID,
   INTEGRATED_GO_SHARE_LABEL,
-  KILO_COLLAPSED_GLYPH,
-  KILO_EXPANDED_GLYPH,
+  SIDEBAR_COLLAPSED_GLYPH,
+  SIDEBAR_EXPANDED_GLYPH,
 } from "./shared.js";
 import type { UsageHost, UsageSnapshot } from "./shared.js";
 
@@ -389,6 +389,51 @@ export function makeProviderResolver(
 }
 
 // ---------------------------------------------------------------------------
+// Provider / model display names
+// ---------------------------------------------------------------------------
+
+// The provider catalog as far as the panels need it. Both hosts expose the same
+// shape (`state.provider[].id|name|models[modelID].name`); the fields are read
+// through `toNonEmptyString`, so a host that renames or drops one degrades to
+// the raw id rather than rendering `undefined`.
+export type ProviderCatalogSource = {
+  state?: {
+    provider?: ReadonlyArray<{
+      id?: unknown;
+      name?: unknown;
+      models?: Readonly<Record<string, { name?: unknown } | undefined>>;
+    }>;
+  };
+};
+
+export function readProviderDisplayNames(source: ProviderCatalogSource): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  try {
+    for (const provider of source.state?.provider ?? []) {
+      const id = toNonEmptyString(provider.id);
+      if (id === null) continue;
+      names.set(id, toNonEmptyString(provider.name) ?? id);
+    }
+  } catch {
+    // The catalog is optional: a group falls back to its raw provider id.
+  }
+  return names;
+}
+
+export function readModelDisplayName(
+  source: ProviderCatalogSource,
+  providerID: string,
+  modelID: string,
+): string | null {
+  try {
+    const provider = source.state?.provider?.find((entry) => entry.id === providerID);
+    return toNonEmptyString(provider?.models?.[modelID]?.name);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Row grammar
 // ---------------------------------------------------------------------------
 
@@ -458,7 +503,7 @@ export function SectionHeader(props: {
   return (
     <box flexDirection="row" gap={1} flexShrink={0} onMouseDown={props.onToggle}>
       <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
-        {reactiveChild(() => (props.expanded() ? KILO_EXPANDED_GLYPH : KILO_COLLAPSED_GLYPH))}
+        {reactiveChild(() => (props.expanded() ? SIDEBAR_EXPANDED_GLYPH : SIDEBAR_COLLAPSED_GLYPH))}
       </text>
       <text fg={props.theme.current.text} wrapMode="none">
         <b>
@@ -525,18 +570,25 @@ export function GoShareRow(props: { theme: TuiTheme; percent: number; width: num
 // The compact `Go Usage` block both hosts lead the sidebar with
 // ---------------------------------------------------------------------------
 
-// The compact `Go Usage` block both hosts lead the sidebar with
-// ---------------------------------------------------------------------------
+export type GoUsageLayout = "rows" | "meters";
 
-// The plan as label/value lines. `withPlan` additionally renders the meters in
-// a `Go Plan` section: hosts whose sidebar has room for a separate heading do
-// (Kilo), hosts that render this inside a model table do not.
+// `rows`   the plan as label/value lines, with the meters in a `Go Plan`
+//          section below them (Kilo: the block shares its band with a host panel
+//          that draws its own token table, and the sidebar has room for both).
+// `meters` the plan as the meters themselves, one per window, and the next
+//          reset on a single labelled line under the header (opencode: ~30 cells
+//          wide, where a separate heading and a per-row suffix both cost more
+//          rows than they buy).
 export function GoUsageBlock(props: {
   api: UsagePanelApi;
   theme: TuiTheme;
   snapshot: () => UsageSnapshot | null;
   withPlan: boolean;
+  layout?: GoUsageLayout;
+  meterWidth?: number;
+  resetLine?: () => string | null;
 }) {
+  const layout = props.layout ?? "rows";
   createEffect(() => {
     const snapshot = props.snapshot();
     if (snapshot !== null && snapshot.source === "unavailable") {
@@ -564,6 +616,27 @@ export function GoUsageBlock(props: {
         <text fg={props.theme.current.textMuted} wrapMode="none">
           Go n/a ({snapshot.apiError ?? "unavailable"})
         </text>
+      );
+    }
+    if (layout === "meters") {
+      // The per-row `resets in` suffix is dropped here: `resetLine` already
+      // prints the soonest countdown under the header, and printing the same
+      // countdown twice in one block is noise rather than emphasis.
+      const planRows = buildPlanRows(snapshot, props.meterWidth).map((row) => ({
+        ...row,
+        reset: null,
+      }));
+      return (
+        <box flexDirection="column">
+          <Show when={props.resetLine === undefined ? null : props.resetLine()}>
+            {(line) => (
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                {line()}
+              </text>
+            )}
+          </Show>
+          <For each={planRows}>{(row) => <GoPlanRow theme={props.theme} row={row} />}</For>
+        </box>
       );
     }
     const planRows = buildPlanRows(snapshot);

@@ -20,8 +20,10 @@ stylistic (they prevent a hard crash of `opencode` startup).
   every other runtime export as a plugin factory when the default is not a
   `{ id, server | tui }` module; a factory returning a non-Hooks value used to
   crash `Provider.list`. Do not add `export` statements to the entry files —
-  put helpers in `src/helpers.ts` / `src/shared.ts` (both are inlined into the
-  deployed bundles).
+  put helpers in `src/helpers.ts` / `src/shared.ts` / `src/tui-shared.tsx`
+  (all are inlined into the deployed bundles). `src/tui-shared.tsx` is the
+  layer both TUI entries share; add host-specific code to the entry, not a
+  second copy of a component.
 - **Target-exclusive:** `dist/index.js` exposes only `server`, `dist/tui.js`
   only `tui`. The package `exports` map (`./server`, `./tui`) is how opencode
   1.18 resolves the targets (server falls back to `main`; TUI themes come from
