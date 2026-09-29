@@ -81,6 +81,24 @@ for (const { mode, order, hostPanel, settled } of MODES) {
         });
         assert.match(screen, MOCK_SIDEBAR, "sidebar must render the Go Usage block");
         assert.match(screen, /5h 42% · resets 2h5m/, "sidebar must render the rolling row");
+        // The `Go Plan` meters are fixed-width columns: they must stack on one
+        // left edge, whatever the labels are.
+        if (mode === "integrated") {
+          const rows = screen
+            .split("\n")
+            .filter((line) => /^\s*(?:5h|7d|30d)\s+[\u2588\u2591]+\s+\d+%\s*$/.test(line));
+          assert.equal(rows.length, 3, "the plan must render three stacked meters");
+          const columns = rows.map((line) => line.search(/[\u2588\u2591]/));
+          assert.ok(
+            columns.every((column) => column === columns[0]),
+            `meters must share a left edge (got ${columns.join(", ")})`,
+          );
+          const percents = rows.map((line) => line.search(/\d+%\s*$/));
+          assert.ok(
+            percents.every((column) => column === percents[0]),
+            `percents must share a right edge (got ${percents.join(", ")})`,
+          );
+        }
         assert.match(screen, /7d 15%/, "sidebar must render the weekly row");
         assert.match(screen, /30d 61%/, "sidebar must render the monthly row");
         assertSidebarOrder(screen, order);

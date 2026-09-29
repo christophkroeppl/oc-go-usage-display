@@ -14,6 +14,8 @@ import {
   buildTokenUsageRows,
   buildUsageRows,
   cacheRatePercent,
+  formatPercentCell,
+  PLAN_LABEL_WIDTH,
   formatNextResetLine,
   formatTokenCount,
   DEFAULT_SIDEBAR_MODE,
@@ -48,6 +50,7 @@ import {
   GO_MODEL_MIX_BUDGET,
   GO_PROVIDER_ID,
   OPENCODE_METER_WIDTH,
+  PERCENT_CELL_WIDTH,
   OPENCODE_MODEL_NAME_MAX_CHARS,
   KILO_COST_COLUMN_WIDTH,
   KILO_MODEL_NAME_MAX_CHARS,
@@ -975,4 +978,40 @@ test("formatNextResetLine stays silent when there is no usable countdown", () =>
     null,
     "only resetInSec is compared: the scrape's free text is not a countdown",
   );
+});
+
+// --- the stacked meter columns ---
+//
+// The plan meters used to be a label plus a `space-between` meter group, so the
+// bar started wherever the label ended and the three rows only looked stacked
+// when the labels happened to match. The rows are now fixed-width columns, and
+// the percent is padded in the STRING: a text node's `width` reserves cells but
+// does not right-align what is inside them, so "42%" and "100%" would still end
+// on different columns.
+
+test("formatPercentCell right-aligns every percent in one column", () => {
+  assert.equal(formatPercentCell(0), "   0%");
+  assert.equal(formatPercentCell(9), "   9%");
+  assert.equal(formatPercentCell(42), "  42%");
+  assert.equal(formatPercentCell(100), " 100%");
+  // Every value in the column is the same width, so nothing shifts.
+  const widths = new Set([0, 1, 9, 10, 42, 99, 100].map((p) => formatPercentCell(p).length));
+  assert.equal(widths.size, 1, "percent cells must all be the same width");
+  assert.equal(formatPercentCell(100).length, PERCENT_CELL_WIDTH);
+});
+
+test("formatPercentCell keeps a broken percent out of the column", () => {
+  // NaN or Infinity would print "NaN%"/"∞%" and stretch the row it sits in.
+  assert.equal(formatPercentCell(Number.NaN), "   0%");
+  assert.equal(formatPercentCell(Number.POSITIVE_INFINITY), "   0%");
+  assert.equal(formatPercentCell(-7), "  -7%");
+  assert.equal(formatPercentCell(42.6), "  43%", "the same rounding the bars use");
+  assert.equal(formatPercentCell(42, 3), "42%", "an explicit width still pads");
+});
+
+test("the plan label column is wide enough for the longest label", () => {
+  assert.ok(PLAN_LABEL_WIDTH >= 3, "30d is three cells");
+  for (const label of ["5h", "7d", "30d"]) {
+    assert.ok(label.length <= PLAN_LABEL_WIDTH, `${label} must fit the label column`);
+  }
 });

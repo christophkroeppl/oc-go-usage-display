@@ -51,8 +51,11 @@ import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { TuiTheme } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import {
+  METER_WIDTH,
+  PLAN_LABEL_WIDTH,
   buildPlanRows,
   buildUsageRows,
+  formatPercentCell,
   formatStatusline,
   isDisplayMode,
   isSnapshotEmpty,
@@ -451,21 +454,30 @@ export function LabeledValueRow(props: { theme: TuiTheme; row: UsageRow }) {
   );
 }
 
-export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
+// One plan window as a row of three FIXED-WIDTH columns: label, bar, percent.
+//
+// Not `justifyContent="space-between"` on a label plus a bar: that lets the bar
+// start wherever the label happened to end, so the three meters only look
+// stacked when every label is the same width -- and a terminal font that draws
+// the empty meter glyph narrower than the full one shifts the bar of a 0% row
+// against a 100% one (seen at 30d 100% next to 5h 0%). Fixed columns make the
+// meters stack whatever the font does, and the percentages right-align on one
+// edge.
+export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow; barWidth: number }) {
   return (
     <box flexDirection="column">
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={props.theme.current.textMuted} wrapMode="none">
+      <box flexDirection="row">
+        <text fg={props.theme.current.textMuted} wrapMode="none" width={PLAN_LABEL_WIDTH} flexShrink={0}>
           {props.row.label}
         </text>
-        <box flexDirection="row">
+        <box width={props.barWidth} flexShrink={0} flexDirection="row">
           <text fg={meterColor(props.theme, props.row.severity)} wrapMode="none">
             {props.row.bar}
           </text>
-          <text fg={props.theme.current.textMuted} wrapMode="none" marginLeft={1}>
-            {props.row.percent}%
-          </text>
         </box>
+        <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+          {formatPercentCell(props.row.percent)}
+        </text>
       </box>
       <Show when={props.row.reset}>
         {(reset) => (
@@ -478,7 +490,7 @@ export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
   );
 }
 
-export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[] }) {
+export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[]; barWidth: number }) {
   return (
     <box flexDirection="column">
       <text fg={props.theme.current.text} wrapMode="none">
@@ -486,7 +498,7 @@ export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[] }) {
       </text>
       <box flexDirection="column" paddingLeft={1}>
         <For each={props.rows}>
-          {(row) => <GoPlanRow theme={props.theme} row={row} />}
+          {(row) => <GoPlanRow theme={props.theme} row={row} barWidth={props.barWidth} />}
         </For>
       </box>
     </box>
@@ -547,19 +559,23 @@ export function CollapsibleSection(props: {
 // A model's share of the Go tokens spent in this session tree, drawn with the
 // same block bar and the same threshold coloring as the plan meters. It is a
 // share of tokens and nothing else: not of the plan, not a quota, not a price.
+// A model's Go share: the bar and the percent pinned to the RIGHT edge of the
+// row, so they line up with the Steps/Cost columns of the table above instead of
+// trailing the label wherever it happens to end. The label takes the slack
+// (`flexGrow`), the meter group never shrinks.
 export function GoShareRow(props: { theme: TuiTheme; percent: number; width: number }) {
   const rounded = Math.round(props.percent);
   return (
     <box flexDirection="row" gap={1}>
-      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0} flexGrow={1}>
         {INTEGRATED_GO_SHARE_LABEL}
       </text>
       <box flexDirection="row" flexShrink={0}>
         <text fg={meterColor(props.theme, meterSeverityForPercent(rounded))} wrapMode="none">
           {usageMeterBar(rounded, props.width)}
         </text>
-        <text fg={props.theme.current.textMuted} wrapMode="none" marginLeft={1}>
-          {rounded}%
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {formatPercentCell(rounded)}
         </text>
       </box>
     </box>
@@ -635,7 +651,11 @@ export function GoUsageBlock(props: {
               </text>
             )}
           </Show>
-          <For each={planRows}>{(row) => <GoPlanRow theme={props.theme} row={row} />}</For>
+          <For each={planRows}>
+            {(row) => (
+              <GoPlanRow theme={props.theme} row={row} barWidth={props.meterWidth ?? METER_WIDTH} />
+            )}
+          </For>
         </box>
       );
     }
@@ -650,7 +670,11 @@ export function GoUsageBlock(props: {
           )}
         </For>
         <Show when={props.withPlan && planRows.length > 0}>
-          <GoPlanSection theme={props.theme} rows={planRows} />
+          <GoPlanSection
+            theme={props.theme}
+            rows={planRows}
+            barWidth={props.meterWidth ?? METER_WIDTH}
+          />
         </Show>
       </box>
     );

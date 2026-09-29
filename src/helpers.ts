@@ -28,6 +28,7 @@ import {
   GO_MODEL_MIX_NAME_MAX_CHARS,
   GO_MODEL_MIX_SEPARATOR,
   GO_PROVIDER_ID,
+  PERCENT_CELL_WIDTH,
   KILO_MODEL_NAME_MAX_CHARS,
   KILO_TOKEN_USAGE_ROWS,
   TOP_GO_MODELS_LIMIT,
@@ -545,6 +546,19 @@ export function shortModelName(value: string, max: number = GO_MODEL_MIX_NAME_MA
   if (trimmed.length === 0) return "";
   const head = trimmed.split(/[-._/]/)[0] ?? trimmed;
   return truncateModelName(head, max);
+}
+
+// The plan window label cell ("5h", "30d"): wide enough for the longest label
+// the plan has, so every meter starts on the same column.
+export const PLAN_LABEL_WIDTH = 4;
+
+// A percent padded into a fixed-width cell, right-aligned by construction. A
+// non-finite percent renders as 0 rather than "NaN%", which would break the
+// column it sits in.
+export function formatPercentCell(percent: number, width: number = PERCENT_CELL_WIDTH): string {
+  const cells = Math.max(Math.floor(width), 1);
+  const rounded = Number.isFinite(percent) ? Math.round(percent) : 0;
+  return `${`${rounded}%`}`.padStart(cells, " ");
 }
 
 // A token count as a weight, not an invoice: short enough to sit next to a bar

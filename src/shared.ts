@@ -327,6 +327,10 @@ export const CACHE_RATE_EMPTY = "-";
 // host that changes it is a change a test can notice rather than a truncation
 // nobody sees.
 export const OPENCODE_METER_WIDTH = 10;
+// A percent in its own fixed-width cell, so "0%", "42%" and "100%" end on the
+// same column. A text node's `width` reserves cells but does NOT right-align the
+// text inside them, so the padding has to be in the string.
+export const PERCENT_CELL_WIDTH = 5;
 export const OPENCODE_MODEL_NAME_MAX_CHARS = 12;
 export const GO_MODEL_BAR_WIDTH = 6;
 
@@ -363,11 +367,32 @@ export const MODELS_EMPTY_LABEL = "No model usage yet";
 export const INTEGRATED_LOADING_LABEL = "Loading usage...";
 export const INTEGRATED_UNAVAILABLE_LABEL = "Usage unavailable";
 
+// Two most significant units, always: `4h57m` under an hour, `2d 6h` under a
+// week, `1w 1d` above it. A 30-day window resets ~720h out, and "resets in
+// 720h00m" is a number nobody can read at a glance -- the countdown exists to
+// say "you do not have to think about this yet", and a week count says that in
+// five characters. Below an hour the minutes (and then seconds) still matter, so
+// they are what is shown.
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86400;
+const SECONDS_PER_WEEK = 604800;
+
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);
-  const hours = Math.floor(sec / 3600);
-  const minutes = Math.floor((sec % 3600) / 60);
+  if (sec >= SECONDS_PER_WEEK) {
+    const weeks = Math.floor(sec / SECONDS_PER_WEEK);
+    const days = Math.floor((sec % SECONDS_PER_WEEK) / SECONDS_PER_DAY);
+    return `${weeks}w ${days}d`;
+  }
+  if (sec >= SECONDS_PER_DAY) {
+    const days = Math.floor(sec / SECONDS_PER_DAY);
+    const hours = Math.floor((sec % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
+    return `${days}d ${hours}h`;
+  }
+  const hours = Math.floor(sec / SECONDS_PER_HOUR);
+  const minutes = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
   if (hours > 0) return `${hours}h${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return `${sec}s`;

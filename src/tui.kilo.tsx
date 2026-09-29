@@ -332,7 +332,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           {props.group.providerName}
         </text>
         <Show when={isGo && props.planRows.length > 0}>
-          <GoPlanSection theme={props.theme} rows={props.planRows} />
+          <GoPlanSection theme={props.theme} rows={props.planRows} barWidth={METER_WIDTH} />
         </Show>
         <box flexDirection="row" gap={1}>
           <box width={1} flexShrink={0} />

@@ -146,6 +146,22 @@ test("formatResetDuration formats hours/minutes/seconds", () => {
   assert.equal(formatResetDuration(0), "0s");
 });
 
+// A 30-day window resets ~720h out. "resets in 720h00m" is unreadable at a
+// glance, and the countdown's whole job is to say how long you can ignore it.
+test("formatResetDuration switches to days and weeks past a day", () => {
+  // 214h45m is 8.9 days, so it reads as weeks: past a week the day count alone
+  // is the wrong unit, not a longer spelling of the right one.
+  assert.equal(formatResetDuration(214 * 3600 + 45 * 60), "1w 1d", "214h45m from a real sidebar");
+  assert.equal(formatResetDuration(6 * 86400 + 22 * 3600), "6d 22h", "just under a week stays in days");
+  assert.equal(formatResetDuration(86400), "1d 0h");
+  assert.equal(formatResetDuration(2 * 86400 + 6 * 3600), "2d 6h");
+  assert.equal(formatResetDuration(7 * 86400), "1w 0d", "a week is the next unit up, not hours");
+  assert.equal(formatResetDuration(30 * 86400), "4w 2d");
+  // The hour/minute form is unchanged below a day, so the 5h window still reads
+  // the way it always has.
+  assert.equal(formatResetDuration(86399), "23h59m");
+});
+
 test("formatResetDuration returns null for null/negative/non-finite", () => {
   assert.equal(formatResetDuration(null), null);
   assert.equal(formatResetDuration(-1), null);
