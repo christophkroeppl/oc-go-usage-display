@@ -160,6 +160,26 @@ jobs:
           fi
           # npm versions are immutable, so this proves (rather than repairs)
           # that the registry copy ships both hosts.
-          URL="$(npm view "$NAME@$VER" dist.tarball)"
+          #
+          # The registry's write path runs ahead of its read path: v2.0.0 was
+          # accepted and given a provenance statement, and `npm view` still
+          # answered 404 for it 1.1s later, so the single read below turned a
+          # published release into a red run. Poll until the copy is served, and
+          # only call it missing once it has had minutes to show up. `|| true`
+          # because a 404 here is an expected state, not a failure, and `set -e`
+          # is on.
+          URL=""
+          for attempt in $(seq 1 30); do
+            URL="$(npm view "$NAME@$VER" dist.tarball 2>/dev/null || true)"
+            if [ -n "$URL" ]; then
+              break
+            fi
+            echo "::notice::registry has not served $NAME@$VER yet (attempt $attempt/30)."
+            sleep 10
+          done
+          if [ -z "$URL" ]; then
+            echo "::error::$NAME@$VER never appeared on the registry within 5 minutes of publishing."
+            exit 1
+          fi
           curl -fsSL "$URL" -o "$RUNNER_TEMP/published.tgz"
           node scripts/verify-tarball.mjs "$RUNNER_TEMP/published.tgz"
