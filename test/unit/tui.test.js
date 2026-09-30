@@ -902,6 +902,16 @@ test("formatNextResetLine stays silent when there is no usable countdown", () =>
 // does not right-align what is inside them, so "42%" and "100%" would still end
 // on different columns.
 
+test("the percent cell's right edge is what aligns, not its left", () => {
+  // `  0%` and `100%` start two cells apart and must still end together: the
+  // sidebar grid is checked on END columns, because that is what right-alignment
+  // means. (The e2e used to assert starts and only passed because the mock's
+  // percents are all two digits.)
+  const ends = new Set([0, 7, 42, 100].map((p) => formatPercentCell(p).length));
+  assert.equal(ends.size, 1, "every percent cell is the same width, so the ends align");
+  assert.equal(formatPercentCell(0).length, formatPercentCell(100).length);
+});
+
 test("formatPercentCell right-aligns every percent in one column", () => {
   assert.equal(formatPercentCell(0), "   0%");
   assert.equal(formatPercentCell(9), "   9%");

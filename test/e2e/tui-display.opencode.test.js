@@ -82,10 +82,13 @@ function assertPlanGrid(screen) {
     labels.every((column) => column === labels[0]),
     `the plan labels must share a left edge (got ${labels.join(", ")})`,
   );
-  const percents = rows.map((line) => line.search(/\d+%\s*$/));
+  // END columns, not start: the cell is right-aligned, so `  0%` and `100%`
+  // start two columns apart and are still aligned. Asserting starts only passed
+  // because the mock's percents are all two digits.
+  const percentEnds = rows.map((line) => line.search(/\d+%\s*$/) + line.match(/\d+%\s*$/)[0].length);
   assert.ok(
-    percents.every((column) => column === percents[0]),
-    `the plan percents must share a left edge (got ${percents.join(", ")})`,
+    percentEnds.every((column) => column === percentEnds[0]),
+    `the plan percents must share a right edge (got ${percentEnds.join(", ")})`,
   );
 }
 
