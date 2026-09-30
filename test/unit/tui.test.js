@@ -14,8 +14,8 @@ import {
   buildTokenUsageRows,
   cacheRatePercent,
   formatPercentCell,
+  relevantReset,
   PLAN_LABEL_WIDTH,
-  formatNextResetLine,
   formatTokenCount,
   DEFAULT_SIDEBAR_MODE,
   displayModelName,
@@ -93,10 +93,10 @@ test("parseBooleanFlag returns null for anything else", () => {
   assert.equal(parseBooleanFlag(""), null);
   assert.equal(parseBooleanFlag({}), null);
 });
-// --- formatStatusline: 3 windows, no reset suffix ---
+// --- formatStatusline: 3 windows plus one countdown ---
 
-test("formatStatusline shows 5h, 7d and 30d without reset text", () => {
-  assert.equal(formatStatusline(tuiSnapshot()), "Go 5h 42% | 7d 15% | 30d 61%");
+test("formatStatusline appends the soonest reset when no window is capped", () => {
+  assert.equal(formatStatusline(tuiSnapshot()), "Go 5h 42% | 7d 15% | 30d 61% · resets in 2h5m");
 });
 
 test("formatStatusline keeps n/a fallbacks per window", () => {
@@ -104,6 +104,85 @@ test("formatStatusline keeps n/a fallbacks per window", () => {
   assert.equal(formatStatusline(partial), "Go 5h n/a | 7d 15% | 30d n/a");
   const empty = tuiSnapshot({ rolling: null, weekly: null, monthly: null });
   assert.equal(formatStatusline(empty), "Go 5h n/a | 7d n/a | 30d n/a");
+});
+
+test("formatStatusline leaves the line alone when no window carries a reset", () => {
+  const noResets = tuiSnapshot({
+    rolling: { percent: 42, status: "active", limited: false, resetInSec: null, resetText: null },
+  });
+  assert.equal(formatStatusline(noResets), "Go 5h 42% | 7d 15% | 30d 61%");
+});
+
+test("formatStatusline counts down the exhausted 30d, not the sooner 5h", () => {
+  const exhaustedMonth = tuiSnapshot({
+    monthly: { percent: 100, status: "exhausted", limited: true, resetInSec: 777600, resetText: null },
+  });
+  assert.equal(
+    formatStatusline(exhaustedMonth),
+    "Go 5h 42% | 7d 15% | 30d 100% · resets in 1w 2d",
+  );
+});
+
+test("formatStatusline counts down the exhausted 7d over the 5h", () => {
+  const exhaustedWeek = tuiSnapshot({
+    weekly: { percent: 100, status: "rate-limited", limited: true, resetInSec: 262800, resetText: null },
+  });
+  assert.equal(
+    formatStatusline(exhaustedWeek),
+    "Go 5h 42% | 7d 100% | 30d 61% · resets in 3d 1h",
+  );
+});
+
+test("formatStatusline counts down the exhausted 5h when it is the only cap", () => {
+  const exhaustedRolling = tuiSnapshot({
+    rolling: { percent: 100, status: "limited", limited: true, resetInSec: 7543, resetText: null },
+  });
+  assert.equal(
+    formatStatusline(exhaustedRolling),
+    "Go 5h 100% | 7d 15% | 30d 61% · resets in 2h5m",
+  );
+});
+
+test("formatStatusline picks the longest cap when several windows are exhausted", () => {
+  const bothCapped = tuiSnapshot({
+    rolling: { percent: 100, status: "exhausted", limited: true, resetInSec: 7543, resetText: null },
+    weekly: { percent: 100, status: "exhausted", limited: true, resetInSec: 262800, resetText: null },
+    monthly: { percent: 100, status: "exhausted", limited: true, resetInSec: 777600, resetText: null },
+  });
+  assert.equal(
+    formatStatusline(bothCapped),
+    "Go 5h 100% | 7d 100% | 30d 100% · resets in 1w 2d",
+  );
+});
+
+test("formatStatusline uses the host's free-text reset when the window has no instant", () => {
+  const textOnly = tuiSnapshot({
+    monthly: { percent: 100, status: "capped", limited: true, resetInSec: null, resetText: "Oct 2" },
+  });
+  assert.equal(
+    formatStatusline(textOnly),
+    "Go 5h 42% | 7d 15% | 30d 100% · resets in Oct 2",
+  );
+});
+
+test("formatStatusline falls through to the soonest reset when a cap has no reset", () => {
+  const silentCap = tuiSnapshot({
+    monthly: { percent: 100, status: "capped", limited: true, resetInSec: null, resetText: null },
+  });
+  assert.equal(
+    formatStatusline(silentCap),
+    "Go 5h 42% | 7d 15% | 30d 100% · resets in 2h5m",
+  );
+});
+
+test("formatStatusline prints the same countdown the sidebar shows", () => {
+  const monthSpent = tuiSnapshot({
+    monthly: { percent: 100, status: "exhausted", limited: true, resetInSec: 777600, resetText: null },
+  });
+  // One selector, two surfaces: the statusline drops the window label the
+  // sidebar keeps, and the countdown itself has to be the same string.
+  const sidebar = relevantReset(monthSpent);
+  assert.equal(formatStatusline(monthSpent), `Go 5h 42% | 7d 15% | 30d 100% · resets in ${sidebar.text}`);
 });
 
 // --- isSnapshotEmpty / surfaceSelectionFromDisplayMode ---
@@ -857,33 +936,67 @@ test("modelDisplayName takes the sidebar's own width budget", () => {
 
 // --- the opencode layout budget, and the meters it is spent on ---
 
-test("formatNextResetLine names the window the countdown belongs to", () => {
-  assert.equal(formatNextResetLine(tuiSnapshot()), "5h resets in 2h5m");
+test("relevantReset names the window the countdown belongs to", () => {
+  assert.deepEqual(relevantReset(tuiSnapshot()), { label: "5h", text: "2h5m" });
   // The soonest window wins, and the label travels with it.
   const weeklyFirst = tuiSnapshot({
     rolling: { percent: 10, status: "active", limited: false, resetInSec: 90000, resetText: null },
     weekly: { percent: 15, status: "active", limited: false, resetInSec: 120, resetText: null },
   });
-  assert.equal(formatNextResetLine(weeklyFirst), "7d resets in 2m");
+  assert.deepEqual(relevantReset(weeklyFirst), { label: "7d", text: "2m" });
 });
 
-test("formatNextResetLine stays silent when there is no usable countdown", () => {
+test("relevantReset prefers the exhausted 30d over the sooner 5h", () => {
+  // The whole reason this selector exists: a spent month is what stops work, so
+  // the countdown it prints is the month's, not the 5h's comfort.
+  const monthSpent = tuiSnapshot({
+    rolling: { percent: 0, status: "active", limited: false, resetInSec: 7080, resetText: null },
+    monthly: { percent: 100, status: "exhausted", limited: true, resetInSec: 777600, resetText: null },
+  });
+  assert.deepEqual(relevantReset(monthSpent), { label: "30d", text: "1w 2d" });
+});
+
+test("relevantReset takes the longest cap when several windows are capped", () => {
+  const allSpent = tuiSnapshot({
+    rolling: { percent: 100, status: "exhausted", limited: true, resetInSec: 7080, resetText: null },
+    weekly: { percent: 100, status: "exhausted", limited: true, resetInSec: 262800, resetText: null },
+    monthly: { percent: 100, status: "exhausted", limited: true, resetInSec: 777600, resetText: null },
+  });
+  assert.deepEqual(relevantReset(allSpent), { label: "30d", text: "1w 2d" });
+});
+
+test("relevantReset prints a cap's free-text reset when it has no instant", () => {
+  const textOnly = tuiSnapshot({
+    monthly: { percent: 100, status: "capped", limited: true, resetInSec: null, resetText: "Oct 2" },
+  });
+  assert.deepEqual(relevantReset(textOnly), { label: "30d", text: "Oct 2" });
+});
+
+test("relevantReset falls through to the soonest reset when a cap has none", () => {
+  const silentCap = tuiSnapshot({
+    rolling: { percent: 10, status: "active", limited: false, resetInSec: 7080, resetText: null },
+    monthly: { percent: 100, status: "capped", limited: true, resetInSec: null, resetText: null },
+  });
+  assert.deepEqual(relevantReset(silentCap), { label: "5h", text: "1h58m" });
+});
+
+test("relevantReset stays silent when there is no usable countdown", () => {
   const none = tuiSnapshot({
     rolling: { percent: 10, status: "active", limited: false, resetInSec: null, resetText: null },
     weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
     monthly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
   });
-  assert.equal(formatNextResetLine(none), null);
+  assert.equal(relevantReset(none), null);
   // A stale payload, clock skew or a reset that fired mid-flight can all send a
   // negative span; an elapsed countdown is as unusable as an unreadable one.
   assert.equal(
-    formatNextResetLine(
+    relevantReset(
       tuiSnapshot({ rolling: { percent: 10, status: "active", limited: false, resetInSec: -30, resetText: null } }),
     ),
     null,
   );
   assert.equal(
-    formatNextResetLine(
+    relevantReset(
       tuiSnapshot({
         rolling: { percent: 10, status: "active", limited: false, resetInSec: Number.NaN, resetText: "soon" },
       }),

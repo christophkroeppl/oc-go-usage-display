@@ -291,11 +291,66 @@ export function isSnapshotEmpty(snapshot: UsageSnapshot): boolean {
   return snapshot.rolling === null && snapshot.weekly === null && snapshot.monthly === null;
 }
 
+// The countdown the plan is currently waiting on, as the label of the window it
+// belongs to plus the text to print. `null` when the plan has no usable reset
+// at all, and every surface then prints nothing rather than a placeholder.
+export type ResetCountdown = { label: string; text: string };
+
+// Which window's countdown the plan is waiting on. One decision, read by the
+// sidebar's reset line, by the per-row suffixes under a capped meter and by the
+// statusline, so no two of them can name different windows.
+//
+// A capped window outranks a nearer one, and the longest cap outranks the
+// shorter ones: an exhausted `30d` is what actually stops work, so a `5h` that
+// rolls over in two hours is not the fact worth the cells. With nothing capped
+// the soonest reset is the answer, because that is the first moment the
+// percentages printed beside it will move.
+//
+// The capped case is read back out of `buildPlanRows` instead of re-deriving
+// what "capped" means, so the statusline cannot drift from the sidebar. Only
+// `resetInSec` is ever compared; a window that carries nothing but the host's
+// free text can be printed once it has been chosen, never compared as a string.
+export function relevantReset(snapshot: UsageSnapshot): ResetCountdown | null {
+  const rows = buildPlanRows(snapshot);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (row?.reset != null) return { label: row.label, text: row.reset };
+  }
+  return soonestReset(snapshot);
+}
+
+// The soonest reset across the windows, capped or not. A stale payload, clock
+// skew or a reset that fired mid-flight can all send a negative span, and an
+// elapsed countdown is as unusable as an unreadable one.
+function soonestReset(snapshot: UsageSnapshot): ResetCountdown | null {
+  const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
+    ["5h", snapshot.rolling],
+    ["7d", snapshot.weekly],
+    ["30d", snapshot.monthly],
+  ];
+  let soonest: { label: string; seconds: number } | null = null;
+  for (const [name, window] of windows) {
+    if (window === null) continue;
+    const seconds = window.resetInSec;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) continue;
+    if (soonest !== null && seconds >= soonest.seconds) continue;
+    soonest = { label: name, seconds };
+  }
+  if (soonest === null) return null;
+  const text = formatResetDuration(soonest.seconds);
+  return text === null ? null : { label: soonest.label, text };
+}
+
 export function formatStatusline(snapshot: UsageSnapshot): string {
   const rolling = snapshot.rolling === null ? "5h n/a" : `5h ${snapshot.rolling.percent}%`;
   const weekly = snapshot.weekly === null ? "7d n/a" : `7d ${snapshot.weekly.percent}%`;
   const monthly = snapshot.monthly === null ? "30d n/a" : `30d ${snapshot.monthly.percent}%`;
-  return `Go ${rolling} | ${weekly} | ${monthly}`;
+  const windows = `Go ${rolling} | ${weekly} | ${monthly}`;
+  // The same countdown the sidebar shows, without its window label: the
+  // percentages are right there in the same order, so naming the window again
+  // would spend cells restating what the line already says.
+  const reset = relevantReset(snapshot);
+  return reset === null ? windows : `${windows} · resets in ${reset.text}`;
 }
 
 
@@ -372,38 +427,6 @@ export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
     });
   }
   return rows;
-}
-
-// The soonest countdown in the plan, labelled with the window it belongs to
-// (`5h resets in 2h5m`), for hosts that print it on one line under the header
-// instead of under a capped row. One line, one window: a sidebar ~30 cells wide
-// cannot afford a suffix on every row, and an unlabelled countdown would be
-// ambiguous about which window is running out.
-//
-// Only `resetInSec` counts. It is the field the live `resetsAt` instant is
-// derived into at the parse boundary, so a window that only carries the scrape's
-// free-text `resetText` is skipped rather than compared as a string.
-export function formatNextResetLine(snapshot: UsageSnapshot): string | null {
-  const windows: ReadonlyArray<readonly [string, UsageWindow | null]> = [
-    ["5h", snapshot.rolling],
-    ["7d", snapshot.weekly],
-    ["30d", snapshot.monthly],
-  ];
-  let label: string | null = null;
-  let soonest: number | null = null;
-  for (const [name, window] of windows) {
-    if (window === null) continue;
-    const seconds = window.resetInSec;
-    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) continue;
-    if (soonest === null || seconds < soonest) {
-      soonest = seconds;
-      label = name;
-    }
-  }
-  if (label === null || soonest === null) return null;
-  const duration = formatResetDuration(soonest);
-  if (duration === null) return null;
-  return `${label} resets in ${duration}`;
 }
 
 // ---------------------------------------------------------------------------

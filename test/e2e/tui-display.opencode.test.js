@@ -48,7 +48,11 @@ const SKIP_NO_HOST =
   hostVersionSkipReason({ host: "opencode", binary: BINARY, repoDir: REPO_DIR }) ||
   (hasTmux() ? false : "tmux not available (run inside the container image)");
 
-const MOCK_STATUSLINE = /Go 5h 42% \| 7d 15% \| 30d 61%/;
+// The statusline also carries one countdown. The mock caps nothing and only
+// the 5h window has an instant, so the line must end in the 5h reset --
+// the rendering of a capped window is a pure-selection case the unit tier
+// pins, while this is here to prove the host slot really prints the suffix.
+const MOCK_STATUSLINE = /Go 5h 42% \| 7d 15% \| 30d 61% · resets in 2h5m/;
 // The whole sidebar block, so the capture cannot land between the header and
 // the rows: the model section is what proves the block finished rendering.
 // Wait for a plan ROW, not just the section header: the sidebar paints in

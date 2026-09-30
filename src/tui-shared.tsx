@@ -66,6 +66,7 @@ import {
 import type {
   PlanRow,
   ProviderSource,
+  ResetCountdown,
   SurfaceSelection,
   UsageMeterSeverity,
   UsageRow,
@@ -630,7 +631,7 @@ export function GoUsageBlock(props: {
   api: UsagePanelApi;
   theme: TuiTheme;
   snapshot: () => UsageSnapshot | null;
-  resetLine?: () => string | null;
+  resetLine?: () => ResetCountdown | null;
 }) {
   createEffect(() => {
     const snapshot = props.snapshot();
@@ -662,15 +663,17 @@ export function GoUsageBlock(props: {
       );
     }
     // The per-row `resets in` suffix is dropped here: `resetLine` already prints
-    // the soonest countdown under the header, and printing the same countdown
-    // twice in one block is noise rather than emphasis.
+    // the plan's countdown under the header, and printing one countdown twice in
+    // a single block is noise rather than emphasis. Both that line and the
+    // statusline read `relevantReset`, so the block and the statusline can only
+    // ever be counting down to the same window.
     const planRows = buildPlanRows(snapshot).map((row) => ({ ...row, reset: null }));
     return (
       <box flexDirection="column">
         <Show when={props.resetLine === undefined ? null : props.resetLine()}>
-          {(line) => (
+          {(reset) => (
             <text fg={props.theme.current.textMuted} wrapMode="none">
-              {line()}
+              {reset().label} resets in {reset().text}
             </text>
           )}
         </Show>

@@ -78,7 +78,7 @@ import {
   buildModelTokenRows,
   buildPlanRows,
   buildTokenUsageRows,
-  formatNextResetLine,
+  relevantReset,
   formatUsageCost,
   formatUsageCount,
   goSharePercent,
@@ -89,7 +89,7 @@ import {
   usageTokenCount,
   DEFAULT_SIDEBAR_MODE,
 } from "./helpers.js";
-import type { ModelProviderGroup, PlanRow, SidebarMode } from "./helpers.js";
+import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarMode } from "./helpers.js";
 import {
   hostEnv,
   parseSessionModelUsage,
@@ -309,11 +309,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     }
   }
 
-  // The soonest countdown, on one line under the block header.
-  function planResetLine(): string | null {
+  // The countdown the plan is waiting on, on one line under the block header.
+  function planResetLine(): ResetCountdown | null {
     const snapshot = usageStore.snapshot();
     if (snapshot === null || snapshot.source === "unavailable") return null;
-    return formatNextResetLine(snapshot);
+    return relevantReset(snapshot);
   }
 
   // The plan meters, or nothing at all: an unavailable snapshot has no windows,

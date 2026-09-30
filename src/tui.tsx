@@ -64,7 +64,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import {
   buildGoModelFooters,
   buildModelMixSummary,
-  formatNextResetLine,
+  relevantReset,
   formatPercentCell,
   meterSeverityForPercent,
   modelDisplayName,
@@ -254,7 +254,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     const planResetLine = createMemo(() => {
       const snapshot = usageStore.snapshot();
       if (snapshot === null || snapshot.source === "unavailable") return null;
-      return formatNextResetLine(snapshot);
+      return relevantReset(snapshot);
     });
     const sessionUsage = createMemo(() => {
       stateToken();
