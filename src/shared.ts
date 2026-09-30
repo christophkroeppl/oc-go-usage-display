@@ -514,16 +514,80 @@ export function extractSnapshotFromApiPayload(
 // Snapshot builders
 // ---------------------------------------------------------------------------
 
+// The mock's plan percents, in the order the windows are read: rolling, weekly,
+// monthly. Lifted out as named values because the display tests drive a ladder
+// over them (`MOCK_PERCENTS`) and a literal in the middle of the snapshot
+// builder is the one number nobody can find when a meter assertion fails.
+export const MOCK_PERCENTS: readonly [number, number, number] = [42, 15, 61];
+
+// `MOCK_PERCENTS` override: `rolling,weekly,monthly`, one rung per window, e.g.
+// `"0,50,90"`. Parsed here rather than at the read sites so the shape is pinned
+// once -- a partially parsed ladder (a missing field, a non-numeric cell, `NaN`)
+// falls back to the defaults whole, because a half-applied ladder would render a
+// block whose numbers match no rung the test asked for, which is the worst
+// possible failure mode for a display assertion.
+//
+// Out-of-range values are NOT clamped here: the parser that stands in for the API
+// accepts whatever the wire says, and the meter/percent pair is responsible for
+// rendering a value outside 0-100 without breaking its column.
+export function parseMockPercents(raw: string | undefined): [number, number, number] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const values = parts.map((part) => Number(part.trim()));
+  const rolling = values[0];
+  const weekly = values[1];
+  const monthly = values[2];
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  if (!Number.isFinite(rolling) || !Number.isFinite(weekly) || !Number.isFinite(monthly)) return null;
+  return [rolling, weekly, monthly];
+}
+
+export type MockSnapshotOverrides = {
+  percents?: [number, number, number];
+};
+
+// The Go share override, and the one seam that is NOT a plan number: the share is
+// a fold over the host's own message store, so a display test can only pin its
+// row's layout without a session that holds real assistant messages -- which
+// means a provider call per rung. Same mock-only rule as `MOCK_PERCENTS`, and the
+// real arithmetic stays covered where it belongs: `goSharePercent` in the unit
+// tier and the collapsed model-mix e2e against a local fake provider.
+export function parseMockShare(raw: string | undefined): number | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const value = Number(text.trim());
+  return Number.isFinite(value) ? value : null;
+}
+
+// The Go share a display test asked for, or `null` for the real fold over the
+// host's message store. Gated on the mock FLAG rather than on the override being
+// set, so a stray `*_OC_GO_MOCK_SHARE` in a developer's shell cannot change what a
+// real session renders.
+export function mockGoShare(host: UsageHost, env: NodeJS.ProcessEnv = process.env): number | null {
+  if (hostEnv(host, "MOCK", env) !== "1") return null;
+  return parseMockShare(hostEnv(host, "MOCK_SHARE", env));
+}
+
 // `"active"` is the status this mock (and the cookie scrape) has always
 // reported, and it must map to `limited: false` exactly like the parser does —
 // the unit tier pins that agreement so the mock cannot drift from live shape.
 // `resetInSec` stays a literal (not derived from `resetsAt`) so the mock reset
 // suffix is deterministic for the TUI display tests.
-export function mockSnapshot(): UsageSnapshot {
+export function mockSnapshot(overrides: MockSnapshotOverrides = {}): UsageSnapshot {
+  const percents = overrides.percents ?? MOCK_PERCENTS;
+  const window = (percent: number, resetInSec: number | null): UsageWindow => ({
+    percent,
+    status: "active",
+    limited: false,
+    resetInSec,
+    resetText: null,
+  });
   return {
-    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
-    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
-    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
+    rolling: window(percents[0], 7543),
+    weekly: window(percents[1], null),
+    monthly: window(percents[2], null),
     source: "mock",
     fetchedAt: Date.now(),
   };

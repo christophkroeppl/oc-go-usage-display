@@ -51,6 +51,7 @@ import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { TuiTheme } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import {
+  GO_SHARE_LABEL_WIDTH,
   PLAN_LABEL_WIDTH,
   buildPlanRows,
   formatPercentCell,
@@ -76,6 +77,7 @@ import {
   hostEnv,
   isRecord,
   mockSnapshot,
+  parseMockPercents,
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
@@ -178,7 +180,10 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
 }
 
 async function loadUsageSnapshot(host: UsageHost): Promise<UsageSnapshot | null> {
-  if (hostEnv(host, "MOCK") === "1") return mockSnapshot();
+  if (hostEnv(host, "MOCK") === "1") {
+    const percents = parseMockPercents(hostEnv(host, "MOCK_PERCENTS"));
+    return mockSnapshot(percents === null ? undefined : { percents });
+  }
 
   const apiKey = toNonEmptyString(hostEnv(host, "API_KEY")) ?? readAuthJsonApiKey(host);
   if (apiKey === null) return null;
@@ -457,20 +462,55 @@ export function LabeledValueRow(props: { theme: TuiTheme; row: UsageRow }) {
 // a filled-vs-empty split at a glance.
 export const MIN_METER_WIDTH = 6;
 
-// A meter as two boxes: the filled part at the window's percentage, the track for
-// the rest. Both fill whatever the row has, so the bar reaches the sidebar's
-// right edge on any host, at any sidebar width, with nothing to measure and
-// nothing to guess -- the failure modes a fixed-width glyph string has (too short
-// on a wide sidebar, clipped on a narrow one) cannot happen.
+// The meter's two parts, as a SPLIT rather than as two flexible boxes.
+//
+// The FILL and the TRACK are flex WEIGHTS that sum to 100, on a zero basis, and a
+// part that comes out at zero is not rendered at all. That is the whole point, and
+// each of the two obvious alternatives moved the block:
+//
+//   - two `flexGrow` parts on their default basis: the track keeps a one-cell
+//     basis that flex will not shrink away, so at 100% the fill wants the whole
+//     meter and the track still claims a cell. It paints itself into the padding
+//     beside the percent -- the cell of the wrong color to the right of a full bar
+//     -- and makes the meter a cell wider at 100% than anywhere else.
+//   - both parts as `width: "<n>%"`: no overflow, but two independent
+//     percentage-to-cell roundings that need not agree. At 50% of a 27-cell meter
+//     the fill took 13 and the track 13, so the pair was 26 and the bar sat a cell
+//     short. A percentage cannot express "the rest of this box".
+//
+// A zero basis makes each part's width purely its share of the space the row gave
+// the meter, so the two add up to the meter at every reading.
+//
+// The meter is two BOXES rather than a string of block glyphs. A glyph string has a
+// fixed cell count, and a plugin cannot measure the sidebar it renders into
+// (opentui resolves a text node's `width` as a wrapping bound, and no layout
+// callback reaches a plugin), so a glyph meter is either too short for a wide
+// sidebar or clipped by a narrow one. Boxes fill whatever the row gives them,
+// which is why the meter reaches the sidebar's right edge on any host at any width.
 //
 // The track is a surface tone rather than the severity colour, so an empty meter
 // reads as an empty track instead of blank space.
 export function MeterBar(props: { theme: TuiTheme; percent: number; severity: UsageMeterSeverity }) {
   const fill = createMemo(() => meterFillPercent(props.percent));
+  const track = createMemo(() => 100 - fill());
   return (
     <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={MIN_METER_WIDTH}>
-      <box width={`${fill()}%`} backgroundColor={meterColor(props.theme, props.severity)} />
-      <box flexGrow={1} backgroundColor={props.theme.current.backgroundElement} />
+      <Show when={fill() > 0}>
+        <box
+          flexGrow={fill()}
+          flexBasis={0}
+          flexShrink={0}
+          backgroundColor={meterColor(props.theme, props.severity)}
+        />
+      </Show>
+      <Show when={track() > 0}>
+        <box
+          flexGrow={track()}
+          flexBasis={0}
+          flexShrink={0}
+          backgroundColor={props.theme.current.backgroundElement}
+        />
+      </Show>
     </box>
   );
 }
@@ -585,25 +625,27 @@ export function CollapsibleSection(props: {
   );
 }
 
-// A model's share of the Go tokens spent in this session tree, drawn with the
-// same block bar and the same threshold coloring as the plan meters. It is a
-// share of tokens and nothing else: not of the plan, not a quota, not a price.
-// A model's Go share: the bar and the percent pinned to the RIGHT edge of the
-// row, so they line up with the Steps/Cost columns of the table above instead of
-// trailing the label wherever it happens to end. The label takes the slack
-// (`flexGrow`), the meter group never shrinks.
+// A model's Go share: the bar and the percent pinned to the RIGHT edge of the row,
+// so they line up with the Steps/Cost columns of the table above instead of
+// trailing the label wherever it happens to end.
+//
+// The label sits in a FIXED-width cell and only the meter grows -- the same shape
+// as `GoPlanRow`, and deliberately not a `flexGrow` label with a `gap`. Two
+// flexible children divide the slack between them, and the share meter was doing
+// exactly that: 18 cells wide at 50% and 20 at 100%, with its percent sliding a
+// column each time. This row's number is a share of tokens, not of the plan, so
+// its bar is not comparable with the plan meters' -- but its own geometry must
+// still not depend on its own value.
 export function GoShareRow(props: { theme: TuiTheme; percent: number }) {
   const rounded = Math.round(props.percent);
   return (
-    <box flexDirection="row" gap={1}>
-      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0} flexGrow={1}>
-        {INTEGRATED_GO_SHARE_LABEL}
-      </text>
-      <MeterBar
-        theme={props.theme}
-        percent={rounded}
-        severity={meterSeverityForPercent(rounded)}
-      />
+    <box flexDirection="row">
+      <box width={GO_SHARE_LABEL_WIDTH} marginRight={1} flexShrink={0} flexDirection="row">
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {INTEGRATED_GO_SHARE_LABEL}
+        </text>
+      </box>
+      <MeterBar theme={props.theme} percent={rounded} severity={meterSeverityForPercent(rounded)} />
       <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
         {formatPercentCell(rounded)}
       </text>

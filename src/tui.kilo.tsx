@@ -107,6 +107,7 @@ import {
   KILO_SLOT_ORDER,
   KILO_STEPS_COLUMN_WIDTH,
   KILO_USAGE_PANEL_PLUGIN_ID,
+  mockGoShare,
 } from "./shared.js";
 import type { ModelUsage, SessionModelUsage } from "./shared.js";
 import {
@@ -376,7 +377,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
                 model={model}
                 isGo={isGo}
                 expanded={() => props.expandedModels().has(key)}
-                goShare={() => goSharePercent(usageTokenCount(model.tokens), props.goTotal)}
+                goShare={() => mockGoShare(HOST) ?? goSharePercent(usageTokenCount(model.tokens), props.goTotal)}
                 onToggle={() => props.onToggleModel(key)}
               />
             );

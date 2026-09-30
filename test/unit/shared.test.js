@@ -14,6 +14,10 @@ import {
   extractWindow,
   formatResetDuration,
   mockSnapshot,
+  MOCK_PERCENTS,
+  parseMockPercents,
+  mockGoShare,
+  parseMockShare,
   hostEnv,
   hostEnvName,
   KILO_SIDEBAR_ORDERS,
@@ -553,4 +557,62 @@ test("the retired panel id is the one the ladder records", () => {
   // A typo here would leave Kilo's panel rendering next to ours forever, with
   // no error anywhere to explain the duplicate.
   assert.ok(KILO_USAGE_PANEL_PLUGIN_ID in KILO_SIDEBAR_ORDERS, "unknown kilo panel id");
+});
+
+test("the mock takes a ladder of plan percents, whole or not at all", () => {
+  // The display tests drive the meters over a ladder of readings. A ladder that
+  // only half-applied would render a block matching no rung the test asked for,
+  // so anything malformed falls back to the defaults entirely.
+  assert.equal(mockSnapshot().rolling.percent, MOCK_PERCENTS[0], "the default ladder is unchanged");
+  assert.deepEqual(
+    [mockSnapshot().rolling.percent, mockSnapshot().weekly.percent, mockSnapshot().monthly.percent],
+    [...MOCK_PERCENTS],
+  );
+
+  assert.deepEqual(parseMockPercents("0,50,90"), [0, 50, 90]);
+  assert.deepEqual(parseMockPercents(" 0 , 50 , 90 "), [0, 50, 90], "whitespace around a rung is fine");
+  assert.deepEqual(parseMockPercents("100,0,42.5"), [100, 0, 42.5], "a fractional rung parses");
+  assert.deepEqual(parseMockPercents("-5,0,100"), [-5, 0, 100], "out of range parses: the meter clamps");
+
+  for (const bad of [undefined, "", "  ", "50", "0,50", "0,50,90,100", "a,b,c", "0,50,NaN", "0,50,Infinity"]) {
+    assert.equal(parseMockPercents(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+
+  // Applied: the overrides reach the snapshot, and only the percents change --
+  // the reset countdown stays literal so the display tests' statusline suffix is
+  // deterministic whatever the ladder is.
+  const ladder = mockSnapshot({ percents: [0, 50, 90] });
+  assert.deepEqual([ladder.rolling.percent, ladder.weekly.percent, ladder.monthly.percent], [0, 50, 90]);
+  assert.equal(ladder.source, "mock");
+  assert.equal(ladder.rolling.resetInSec, 7543, "the 5h reset stays literal across the ladder");
+  assert.equal(ladder.weekly.resetInSec, null);
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    const expected = extractWindow({ percent: ladder[key].percent, status: "active" });
+    assert.equal(ladder[key].limited, expected?.limited, `${key}.limited still matches the parser`);
+  }
+});
+
+test("the mock Go share is gated on the mock flag, not on the override", () => {
+  // The override exists so a display test can put a share in the row without a
+  // provider call per rung. If it applied outside mock mode it would silently
+  // replace the real fold over the host's message store, so the gate is on the
+  // MOCK flag: an override alone changes nothing.
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK_SHARE: "100" }), null, "the override alone must not apply");
+  assert.equal(mockGoShare("opencode", { OPENCODE_OC_GO_MOCK_SHARE: "100" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "0", KILO_OC_GO_MOCK_SHARE: "100" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "100" }), 100);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "nonsense" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1" }), null, "no override means the real share");
+  // Each host reads only its own prefix.
+  assert.equal(mockGoShare("opencode", { OPENCODE_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "50" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", OPENCODE_OC_GO_MOCK_SHARE: "50" }), null);
+});
+
+test("the mock Go share parses one number, or nothing", () => {
+  assert.equal(parseMockShare("100"), 100);
+  assert.equal(parseMockShare(" 0 "), 0);
+  assert.equal(parseMockShare("42.5"), 42.5);
+  for (const bad of [undefined, "", "  ", "all", "NaN", "Infinity"]) {
+    assert.equal(parseMockShare(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
 });
