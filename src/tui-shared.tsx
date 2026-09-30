@@ -51,7 +51,8 @@ import type { JSX } from "@opentui/solid/jsx-runtime";
 import type { TuiTheme } from "@opencode-ai/plugin/tui";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import {
-  METER_LABEL_WIDTH,
+  GO_SHARE_LABEL_WIDTH,
+  PLAN_LABEL_WIDTH,
   buildPlanRows,
   formatPercentCell,
   formatStatusline,
@@ -523,43 +524,30 @@ export function MeterBar(props: { theme: TuiTheme; percent: number; severity: Us
 // against a 100% one (seen at 30d 100% next to 5h 0%). Fixed columns make the
 // meters stack whatever the font does, and the percentages right-align on one
 // edge.
-// A metered row: label cell, meter, percent cell. Every meter in the block is one
-// of these, so "full" is one length everywhere.
-//
-// The label sits in a fixed-width BOX, not a fixed-width text: opentui treats a
-// text node's `width` as a wrapping bound, so the box after it still starts
-// wherever the label ended -- "5h" and "30d" would then draw their meters a cell
-// apart. A box is a real layout box, which is why Kilo's Steps/Cost columns (boxes)
-// line up and these did not.
-//
-// The cell carries a one-cell margin so the longest label cannot butt straight
-// into its meter, and the separation is a layout fact rather than something the
-// label's own length may decide.
-export function MeterRow(props: { theme: TuiTheme; label: string; percent: number; severity: UsageMeterSeverity }) {
-  return (
-    <box flexDirection="row">
-      <box width={METER_LABEL_WIDTH} marginRight={1} flexShrink={0} flexDirection="row">
-        <text fg={props.theme.current.textMuted} wrapMode="none">
-          {props.label}
-        </text>
-      </box>
-      <MeterBar theme={props.theme} percent={props.percent} severity={props.severity} />
-      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
-        {formatPercentCell(props.percent)}
-      </text>
-    </box>
-  );
-}
-
 export function GoPlanRow(props: { theme: TuiTheme; row: PlanRow }) {
   return (
     <box flexDirection="column">
-      <MeterRow
-        theme={props.theme}
-        label={props.row.label}
-        percent={props.row.percent}
-        severity={props.row.severity}
-      />
+      <box flexDirection="row">
+        {/* The label sits in a fixed-width BOX, not a fixed-width text: opentui
+            treats a text node's `width` as a wrapping bound, so the box after it
+            still starts wherever the label ended -- "5h" and "30d" then draw
+            their meters a cell apart. A box is a real layout box, which is why
+            Kilo's Steps/Cost columns (boxes) line up and these did not. */}
+        {/* The label cell is exactly `30d` wide and carries a one-cell margin:
+            without it the longest label butts straight into the meter, while the
+            shorter `5h`/`7d` happen to leave one behind -- the meter has to start
+            the same column on every row, so the separation is a layout fact and
+            not something the label's own length may decide. */}
+        <box width={PLAN_LABEL_WIDTH} marginRight={1} flexShrink={0} flexDirection="row">
+          <text fg={props.theme.current.textMuted} wrapMode="none">
+            {props.row.label}
+          </text>
+        </box>
+        <MeterBar theme={props.theme} percent={props.row.percent} severity={props.row.severity} />
+        <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+          {formatPercentCell(props.row.percent)}
+        </text>
+      </box>
       <Show when={props.row.reset}>
         {(reset) => (
           <text fg={props.theme.current.textMuted} wrapMode="none">
@@ -577,10 +565,7 @@ export function GoPlanSection(props: { theme: TuiTheme; rows: PlanRow[] }) {
       <text fg={props.theme.current.text} wrapMode="none">
         <b>{GO_PLAN_HEADING}</b>
       </text>
-      {/* `paddingLeft: 2`, not 1: the share rows sit at 2 (they are nested under a
-          model in the table below), so at 1 the plan meters would begin a cell
-          before every other meter in the block. */}
-      <box flexDirection="column" paddingLeft={2}>
+      <box flexDirection="column" paddingLeft={1}>
         <For each={props.rows}>
           {(row) => <GoPlanRow theme={props.theme} row={row} />}
         </For>
@@ -640,15 +625,32 @@ export function CollapsibleSection(props: {
   );
 }
 
-// A model's Go share: one metered row, the same one the plan rows use.
+// A model's Go share: the bar and the percent pinned to the RIGHT edge of the row,
+// so they line up with the Steps/Cost columns of the table above instead of
+// trailing the label wherever it happens to end.
 //
-// Its number is a share of tokens, not of the plan, so its bar means something
-// different from the plan meters' -- but it must LOOK the same, or a 100% share
-// reads as less than a 100% plan. `MeterRow` is what guarantees that: identical
-// label cell, identical meter, identical percent cell, in both sections.
+// The label sits in a FIXED-width cell and only the meter grows -- the same shape
+// as `GoPlanRow`, and deliberately not a `flexGrow` label with a `gap`. Two
+// flexible children divide the slack between them, and the share meter was doing
+// exactly that: 18 cells wide at 50% and 20 at 100%, with its percent sliding a
+// column each time. This row's number is a share of tokens, not of the plan, so
+// its bar is not comparable with the plan meters' -- but its own geometry must
+// still not depend on its own value.
 export function GoShareRow(props: { theme: TuiTheme; percent: number }) {
   const rounded = Math.round(props.percent);
-  return <MeterRow theme={props.theme} label={INTEGRATED_GO_SHARE_LABEL} percent={rounded} severity={meterSeverityForPercent(rounded)} />;
+  return (
+    <box flexDirection="row">
+      <box width={GO_SHARE_LABEL_WIDTH} marginRight={1} flexShrink={0} flexDirection="row">
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {INTEGRATED_GO_SHARE_LABEL}
+        </text>
+      </box>
+      <MeterBar theme={props.theme} percent={rounded} severity={meterSeverityForPercent(rounded)} />
+      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+        {formatPercentCell(rounded)}
+      </text>
+    </box>
+  );
 }
 
 // ---------------------------------------------------------------------------
