@@ -33,6 +33,7 @@ import {
   totalGoTokens,
   truncateModelName,
   GO_SHARE_LABEL_WIDTH,
+  METER_LABEL_WIDTH,
   meterFillPercent,
   meterSeverityForPercent,
   usageMeterSeverity,
@@ -1149,6 +1150,29 @@ test("the ladder covers every rung the meters can be asked for", () => {
       );
     }
   }
+});
+
+test("every metered row shares one label cell, so full looks full everywhere", () => {
+  // A bar's fullness is read from where it STARTS. The plan rows labelled their
+  // meters from a 3-cell cell and the share row from an 8-cell one at a deeper
+  // indent, so the two kinds of meter began 6 cells apart and a 100% share bar
+  // was 21 cells where a 100% plan bar was 27.
+  assert.equal(METER_LABEL_WIDTH, 8, "the shared label cell must fit the longest label in the block");
+  assert.ok(
+    METER_LABEL_WIDTH >= PLAN_LABEL_WIDTH && METER_LABEL_WIDTH >= GO_SHARE_LABEL_WIDTH,
+    "the shared label cell must fit every label that uses it",
+  );
+  assert.equal(
+    METER_LABEL_WIDTH,
+    Math.max(PLAN_LABEL_WIDTH, GO_SHARE_LABEL_WIDTH),
+    "the shared label cell is defined by the longest label, so adding one cannot silently shrink the others",
+  );
+  // And it is wide enough that the label it holds cannot be truncated, which would
+  // push that row's meter a cell sideways.
+  assert.ok(
+    INTEGRATED_GO_SHARE_LABEL.length <= METER_LABEL_WIDTH,
+    "the longest label must fit the shared cell exactly",
+  );
 });
 
 test("the Go share label gets a fixed cell, so only its meter can grow", () => {

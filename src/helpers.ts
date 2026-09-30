@@ -573,6 +573,20 @@ export const PLAN_LABEL_WIDTH = 3;
 // its percent slid a column with it. Only the meter may grow.
 export const GO_SHARE_LABEL_WIDTH = INTEGRATED_GO_SHARE_LABEL.length;
 
+// The label cell EVERY metered row uses, sized to the longest label in the block.
+//
+// One column for all of them, because a bar's fullness is read from where it
+// STARTS. The plan rows labelled their meters from a 3-cell label cell and the
+// share row from an 8-cell one at a deeper indent, so the two kinds of meter began
+// 6 cells apart: a 100% share bar was 21 cells where a 100% plan bar was 27, and
+// "full" looked like two different things depending on which section it was in.
+//
+// A 27-cell meter and a "Go share" label cannot both fit a 39-cell sidebar -- the
+// label alone is 8 of the 7 cells available before a 27-cell meter -- so aligning
+// them means every meter in the block gives up the cells its own label did not
+// need. That is the trade: uniform and unambiguous, at 21 cells instead of 27.
+export const METER_LABEL_WIDTH = Math.max(PLAN_LABEL_WIDTH, GO_SHARE_LABEL_WIDTH);
+
 // A percent padded into a fixed-width cell, right-aligned by construction.
 //
 // The value is CLAMPED to the same 0-100 the meter draws, because the cell's whole

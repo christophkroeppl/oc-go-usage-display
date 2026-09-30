@@ -261,18 +261,30 @@ test(
       //    shorter -- but only because its label is longer. Its percent must still
       //    land on the same column, and its right edge must still be flush with the
       //    plan rows' meters above it.
+      // 3. The share row is the SAME metered row as the plan rows -- one label cell, one
+      //    meter, one percent cell -- in both sections. Its number means something
+      //    different (a share of tokens, not of the plan), but it must not LOOK
+      //    different: a 100% share bar that is shorter than a 100% plan bar reads as
+      //    less than full. So the share meter's columns equal the plan meter's, on
+      //    every rung.
       for (const { rung, plan, share } of readings) {
         assert.equal(
           share.percentEndCol,
           plan[0].percentEndCol,
           `rung ${rung.name}: the share percent must share the plan's right edge`,
         );
+        assert.equal(
+          `${share.startCol}..${share.endCol}`,
+          `${plan[0].startCol}..${plan[0].endCol}`,
+          `rung ${rung.name}: the share meter must occupy the same columns as the plan meters ` +
+            `(share ${share.startCol}..${share.endCol}, plan ${plan[0].startCol}..${plan[0].endCol})`,
+        );
       }
 
-      // 3b. The share meter's own columns, across the ladder. It is nested and
-      //     narrower than the plan meters, but it must not move: it used to, because
-      //     its label and its meter both claimed the slack, so the bar was two cells
-      //     wider at 100% than at 50% and its percent slid with it.
+      // 3b. The share meter's own columns, across the ladder. It must not move with the
+      //     reading either: it used to, because its label and its meter both claimed
+      //     the slack, so the bar was two cells wider at 100% than at 50% and its
+      //     percent slid with it.
       const shareEdges = new Map();
       for (const { rung, share } of readings) shareEdges.set(rung.name, `${share.startCol}..${share.endCol}`);
       const distinctShareEdges = [...new Set(shareEdges.values())];
