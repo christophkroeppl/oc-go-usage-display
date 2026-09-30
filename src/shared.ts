@@ -358,35 +358,53 @@ export const MODELS_EMPTY_LABEL = "No model usage yet";
 export const INTEGRATED_LOADING_LABEL = "Loading usage...";
 export const INTEGRATED_UNAVAILABLE_LABEL = "Usage unavailable";
 
-// Two most significant units, always: `4h57m` under an hour, `2d 6h` under a
-// week, `1w 1d` above it. A 30-day window resets ~720h out, and "resets in
-// 720h00m" is a number nobody can read at a glance -- the countdown exists to
-// say "you do not have to think about this yet", and a week count says that in
-// five characters. Below an hour the minutes (and then seconds) still matter, so
-// they are what is shown.
+// A countdown, as every surface renders it.
+//
+// Every unit down to the hour, and no unit that is zero. "1w 0d" says no more
+// than "1w" and reads as though a day were still to come, so a unit earns its
+// place by having something to say -- and dropping the empty one is also what lets
+// the countdown keep a fixed granularity without lying near a boundary: "1w" is
+// not a rounding error, it is what is actually left.
+//
+// Below a day the minutes and seconds are what matter, so they are what is shown,
+// and the hours and minutes run together because that is what has always fitted:
+// `2h5m`, `5m`, `45s`. A 30-day window resets ~720h out, and "720h00m" is a
+// number nobody can read at a glance, so past a day the units are weeks, days and
+// hours: `4w 2d`, `2d 6h`, `1w 1d 22h`.
+//
+// ONE formatter for the sidebar, the statusline and the server line. The sidebar
+// has a column to spend and the statusline does not, so they used to be worth
+// rendering differently -- but the statusline reads its countdown back out of
+// `buildPlanRows` precisely so it cannot drift from the sidebar, so a second
+// formatter would have bought a shorter footer by showing the same fact at two
+// different precisions in two places. The countdowns are short, and they are only
+// printed when a window is capped.
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_WEEK = 604800;
 
+// The non-zero week/day/hour units of a duration, coarsest first. Minutes are not
+// here: below a day the countdown keeps its own tighter rendering.
+function resetDayUnits(sec: number): string[] {
+  const units = [
+    { value: Math.floor(sec / SECONDS_PER_WEEK), suffix: "w" },
+    { value: Math.floor((sec % SECONDS_PER_WEEK) / SECONDS_PER_DAY), suffix: "d" },
+    { value: Math.floor((sec % SECONDS_PER_DAY) / SECONDS_PER_HOUR), suffix: "h" },
+  ];
+  return units.filter((unit) => unit.value > 0).map((unit) => `${unit.value}${unit.suffix}`);
+}
+
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);
-  if (sec >= SECONDS_PER_WEEK) {
-    const weeks = Math.floor(sec / SECONDS_PER_WEEK);
-    const days = Math.floor((sec % SECONDS_PER_WEEK) / SECONDS_PER_DAY);
-    return `${weeks}w ${days}d`;
+  if (sec < SECONDS_PER_DAY) {
+    const hours = Math.floor(sec / SECONDS_PER_HOUR);
+    const minutes = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+    if (hours === 0) return minutes > 0 ? `${minutes}m` : `${sec}s`;
+    return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
   }
-  if (sec >= SECONDS_PER_DAY) {
-    const days = Math.floor(sec / SECONDS_PER_DAY);
-    const hours = Math.floor((sec % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
-    return `${days}d ${hours}h`;
-  }
-  const hours = Math.floor(sec / SECONDS_PER_HOUR);
-  const minutes = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${sec}s`;
+  return resetDayUnits(sec).join(" ");
 }
 
 // ---------------------------------------------------------------------------

@@ -1173,3 +1173,52 @@ test("the Go share label gets a fixed cell, so only its meter can grow", () => {
     "the share label is longer than a plan label and needs its own cell",
   );
 });
+
+test("the sidebar and the statusline resolve a countdown identically", () => {
+  // 8d 22h 45m: "1w 1d" says a week, "1w 1d 22h" says a week and most of a day.
+  // The statusline reads its countdown back out of `buildPlanRows` precisely so it
+  // cannot drift from the sidebar, so both render the same text -- the alternative
+  // was the same fact at two different precisions in two places.
+  const soon = 8 * 86400 + 22 * 3600 + 45 * 60;
+  const snapshot = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: soon, resetText: null },
+    weekly: { percent: 40, status: "active", limited: false, resetInSec: soon, resetText: null },
+    monthly: { percent: 40, status: "active", limited: false, resetInSec: soon, resetText: null },
+  });
+  assert.equal(buildPlanRows(snapshot)[0].reset, "1w 1d 22h");
+  assert.ok(formatStatusline(snapshot).endsWith("· resets in 1w 1d 22h"));
+  // The uncapped path takes the other branch of `relevantReset` and must agree:
+  // an uncapped countdown is only printed by the statusline, never by the plan
+  // rows, so the two cannot be compared through `buildPlanRows` there.
+  const uncapped = tuiSnapshot({
+    rolling: { percent: 20, status: "active", limited: false, resetInSec: soon, resetText: null },
+    weekly: { percent: 20, status: "active", limited: false, resetInSec: soon * 2, resetText: null },
+    monthly: { percent: 20, status: "active", limited: false, resetInSec: soon * 3, resetText: null },
+  });
+  assert.ok(formatStatusline(uncapped).endsWith("· resets in 1w 1d 22h"), "the uncapped countdown resolves the same way");
+  // A capped 30-day window resets ~4w 2d with no hour to add, so the extra
+  // precision costs nothing there rather than inventing a unit.
+  const month = tuiSnapshot({
+    monthly: { percent: 99, status: "rate-limited", limited: true, resetInSec: 30 * 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(month)[2].reset, "4w 2d");
+  assert.ok(formatStatusline(month).endsWith("· resets in 4w 2d"));
+});
+
+test("neither surface prints a countdown unit that is zero", () => {
+  // "1w 0d" reads as though a day were still to come.
+  const week = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 7 * 86400, resetText: null },
+    weekly: { percent: 40, status: "active", limited: false, resetInSec: 7 * 86400, resetText: null },
+    monthly: { percent: 40, status: "active", limited: false, resetInSec: 7 * 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(week)[0].reset, "1w");
+  // Checked on the countdown itself rather than the whole line: the plan labels
+  // contain zeroes of their own ("30d"), which are not what this is about.
+  assert.equal(relevantReset(week).text, "1w");
+  const day = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(day)[0].reset, "1d");
+  assert.equal(buildPlanRows(tuiSnapshot({ rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 3600, resetText: null } }))[0].reset, "1h");
+});

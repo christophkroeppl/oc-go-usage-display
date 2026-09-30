@@ -141,28 +141,44 @@ test("errorMessage extracts a usable message from arbitrary thrown values", () =
 
 // --- formatResetDuration ---
 
-test("formatResetDuration formats hours/minutes/seconds", () => {
+// A 30-day window resets ~720h out. "resets in 720h00m" is unreadable at a
+// glance, and the countdown's whole job is to say how long you can ignore it --
+// so past a day the units are weeks, days and hours.
+test("formatResetDuration resolves every unit down to the hour, and only the ones with something to say", () => {
+  const day = 86400;
+  const hour = 3600;
+  // 214h45m is 8d 22h 45m. "1w 1d" says a week; "1w 1d 22h" says a week and most
+  // of a day, which is the difference the hour makes.
+  assert.equal(formatResetDuration(214 * hour + 45 * 60), "1w 1d 22h", "214h45m from a real sidebar");
+  assert.equal(formatResetDuration(6 * day + 22 * hour), "6d 22h", "just under a week stays in days");
+  assert.equal(formatResetDuration(2 * day + 6 * hour), "2d 6h");
+  // Past a week the hour is often zero -- a 30-day window resets ~4w 2d with no
+  // hour to add -- so the extra resolution buys something on the rolling window
+  // and between a day and a week, and costs nothing elsewhere.
+  assert.equal(formatResetDuration(30 * day), "4w 2d");
+  assert.equal(formatResetDuration(365 * day), "52w 1d");
+
+  // "1w 0d" says no more than "1w" and reads as though a day were still to come.
+  // A unit earns its place by having something to say, and dropping the empty one
+  // is also what lets the countdown keep a fixed granularity without lying near a
+  // boundary -- "1w" is not a rounding error, it is what is actually left.
+  assert.equal(formatResetDuration(7 * day), "1w", "1w 0d is 1w");
+  assert.equal(formatResetDuration(14 * day), "2w");
+  assert.equal(formatResetDuration(day), "1d", "1d 0h is 1d");
+  assert.equal(formatResetDuration(8 * day), "1w 1d");
+  assert.equal(formatResetDuration(7 * day + 3 * hour), "1w 3h", "1w 0d 3h drops the zero day");
+  // And not in the middle of a pair either, where it is even easier to misread as
+  // progress.
+  assert.equal(formatResetDuration(hour), "1h", "1h0m is 1h");
+
+  // Below a day the minutes and seconds are the finest useful precision, so they
+  // are what is shown -- and the 5h window still reads the way it always has.
+  assert.equal(formatResetDuration(86399), "23h59m");
   assert.equal(formatResetDuration(7543), "2h5m");
-  assert.equal(formatResetDuration(3600), "1h0m");
   assert.equal(formatResetDuration(300), "5m");
   assert.equal(formatResetDuration(45), "45s");
+  // Zero seconds is still the honest answer rather than nothing at all.
   assert.equal(formatResetDuration(0), "0s");
-});
-
-// A 30-day window resets ~720h out. "resets in 720h00m" is unreadable at a
-// glance, and the countdown's whole job is to say how long you can ignore it.
-test("formatResetDuration switches to days and weeks past a day", () => {
-  // 214h45m is 8.9 days, so it reads as weeks: past a week the day count alone
-  // is the wrong unit, not a longer spelling of the right one.
-  assert.equal(formatResetDuration(214 * 3600 + 45 * 60), "1w 1d", "214h45m from a real sidebar");
-  assert.equal(formatResetDuration(6 * 86400 + 22 * 3600), "6d 22h", "just under a week stays in days");
-  assert.equal(formatResetDuration(86400), "1d 0h");
-  assert.equal(formatResetDuration(2 * 86400 + 6 * 3600), "2d 6h");
-  assert.equal(formatResetDuration(7 * 86400), "1w 0d", "a week is the next unit up, not hours");
-  assert.equal(formatResetDuration(30 * 86400), "4w 2d");
-  // The hour/minute form is unchanged below a day, so the 5h window still reads
-  // the way it always has.
-  assert.equal(formatResetDuration(86399), "23h59m");
 });
 
 test("formatResetDuration returns null for null/negative/non-finite", () => {
