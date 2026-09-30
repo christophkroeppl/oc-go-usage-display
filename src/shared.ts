@@ -564,7 +564,16 @@ export function parseMockPercents(raw: string | undefined): [number, number, num
 
 export type MockSnapshotOverrides = {
   percents?: [number, number, number];
+  resets?: [number | null, number | null, number | null];
+  limited?: [boolean, boolean, boolean];
 };
+
+// The mock's default countdowns, in window order: the rolling window counts down
+// (which is what puts a `resets in` on screen at all under the mock), and the
+// longer windows do not. No window is capped, so the plan rows print no per-row
+// countdown and the header line is the only place one appears.
+const MOCK_RESETS: readonly [number | null, number | null, number | null] = [7543, null, null];
+const MOCK_LIMITED: readonly [boolean, boolean, boolean] = [false, false, false];
 
 // The Go share override, and the one seam that is NOT a plan number: the share is
 // a fold over the host's own message store, so a display test can only pin its
@@ -578,6 +587,51 @@ export function parseMockShare(raw: string | undefined): number | null {
   const value = Number(text.trim());
   return Number.isFinite(value) ? value : null;
 }
+
+// The mock's countdowns, in the same window order as `MOCK_PERCENTS`: one slot per
+// window, in seconds, with `-` or an empty slot for a window that has no countdown
+// at all. A countdown is what a window being capped looks like on the wire, so it
+// carries seconds rather than a formatted string: the formatter is the thing under
+// test, and handing it a pre-rendered value would test nothing.
+export function parseMockResets(raw: string | undefined): [number | null, number | null, number | null] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const parsed = parts.map((part) => {
+    const slot = part.trim();
+    if (slot === "" || slot === "-") return null;
+    const value = Number(slot);
+    // A negative countdown is what clock skew and a reset that fired mid-flight
+    // look like. The parser drops those, so the mock must not be able to
+    // manufacture one that the real payload could never carry.
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
+  });
+  const [rolling, weekly, monthly] = parsed;
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  return [rolling, weekly, monthly];
+}
+
+// Which windows the mock reports as capped, same window order. Separate from
+// `MOCK_RESETS` because the two are independent on the wire: `buildPlanRows` only
+// prints a window's countdown when that window is capped, so without this a ladder
+// could vary the seconds but never see a per-row countdown move.
+export function parseMockLimited(raw: string | undefined): [boolean, boolean, boolean] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const parsed = parts.map((part) => {
+    const slot = part.trim();
+    if (slot === "" || slot === "-") return false;
+    return MOCK_LIMITED_TRUE.has(slot.toLowerCase());
+  });
+  const [rolling, weekly, monthly] = parsed;
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  return [rolling, weekly, monthly];
+}
+
+const MOCK_LIMITED_TRUE = new Set(["1", "true", "yes", "on"]);
 
 // The Go share a display test asked for, or `null` for the real fold over the
 // host's message store. Gated on the mock FLAG rather than on the override being
@@ -595,17 +649,25 @@ export function mockGoShare(host: UsageHost, env: NodeJS.ProcessEnv = process.en
 // suffix is deterministic for the TUI display tests.
 export function mockSnapshot(overrides: MockSnapshotOverrides = {}): UsageSnapshot {
   const percents = overrides.percents ?? MOCK_PERCENTS;
-  const window = (percent: number, resetInSec: number | null): UsageWindow => ({
-    percent,
-    status: "active",
-    limited: false,
-    resetInSec,
-    resetText: null,
-  });
+  const resets = overrides.resets ?? MOCK_RESETS;
+  const limited = overrides.limited ?? MOCK_LIMITED;
+  const window = (index: number, percent: number): UsageWindow => {
+    const capped = limited[index] === true;
+    return {
+      percent,
+      // A capped window says so, because that is what the real payload says, and
+      // because `limited` is what gates the per-row countdown: a window with a
+      // countdown and no cap is a shape the API does not produce.
+      status: capped ? "rate-limited" : "active",
+      limited: capped,
+      resetInSec: resets[index] ?? null,
+      resetText: null,
+    };
+  };
   return {
-    rolling: window(percents[0], 7543),
-    weekly: window(percents[1], null),
-    monthly: window(percents[2], null),
+    rolling: window(0, percents[0]),
+    weekly: window(1, percents[1]),
+    monthly: window(2, percents[2]),
     source: "mock",
     fetchedAt: Date.now(),
   };

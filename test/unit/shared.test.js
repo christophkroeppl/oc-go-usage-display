@@ -15,7 +15,10 @@ import {
   formatResetDuration,
   mockSnapshot,
   MOCK_PERCENTS,
+  isLimitedStatus,
+  parseMockLimited,
   parseMockPercents,
+  parseMockResets,
   mockGoShare,
   parseMockShare,
   hostEnv,
@@ -630,5 +633,73 @@ test("the mock Go share parses one number, or nothing", () => {
   assert.equal(parseMockShare("42.5"), 42.5);
   for (const bad of [undefined, "", "  ", "all", "NaN", "Infinity"]) {
     assert.equal(parseMockShare(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+});
+
+test("the mock takes a countdown and a cap per window", () => {
+  // `MOCK_RESETS` is seconds, not a rendered string: the formatter is the thing
+  // under test, and handing it a pre-rendered value would test nothing.
+  assert.deepEqual(parseMockResets("45,300,7543"), [45, 300, 7543]);
+  assert.deepEqual(parseMockResets(" 45 , 300 , 7543 "), [45, 300, 7543], "whitespace around a slot is fine");
+  assert.deepEqual(parseMockResets("0,604800,2592000"), [0, 604800, 2592000], "an elapsed countdown is a valid value");
+  assert.deepEqual(parseMockResets("-,300,-"), [null, 300, null], "a window with no countdown at all");
+  assert.deepEqual(parseMockResets("45,,7543"), [45, null, 7543], "an empty slot is the same as a dash");
+  // A negative countdown is what clock skew and a reset that fired mid-flight
+  // look like, and the real parser drops those -- so the mock must not be able to
+  // manufacture one the wire could never carry.
+  assert.equal(parseMockResets("-1,300,7543"), null);
+  assert.equal(parseMockResets("45,NaN,7543"), null);
+  for (const bad of [undefined, "", "  ", "45", "45,300", "45,300,7543,1", "a,b,c"]) {
+    assert.equal(parseMockResets(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+
+  // The cap is independent of the countdown on the wire, and `buildPlanRows` only
+  // prints a window's countdown when that window is capped.
+  assert.deepEqual(parseMockLimited("1,0,1"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("true,no,on"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("0,0,0"), [false, false, false]);
+  assert.deepEqual(parseMockLimited("1,1,1"), [true, true, true]);
+  // Anything that is not recognisably true is false, so a typo caps nothing
+  // rather than capping everything.
+  assert.deepEqual(parseMockLimited("1,banana,yes"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("-,0,-"), [false, false, false]);
+  for (const bad of [undefined, "", "  ", "1,0", "1,0,1,1"]) {
+    assert.equal(parseMockLimited(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+});
+
+test("a capped mock window says so, and an uncapped one does not", () => {
+  // The status and the `limited` flag have to agree, because that is what the
+  // parser produces and what the unit tier pins elsewhere; and a capped window is
+  // the only one whose countdown reaches the plan rows.
+  const capped = mockSnapshot({
+    resets: parseMockResets("604800,86400,2592000"),
+    limited: parseMockLimited("1,1,1"),
+  });
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(capped[key].limited, true, `${key}.limited`);
+    assert.equal(capped[key].status, "rate-limited", `${key}.status`);
+    assert.equal(capped[key].limited, isLimitedStatus(capped[key].status), `${key} agrees with the parser`);
+  }
+  assert.deepEqual([capped.rolling.resetInSec, capped.weekly.resetInSec, capped.monthly.resetInSec], [
+    604800, 86400, 2592000,
+  ]);
+  const open = mockSnapshot({ resets: parseMockResets("45,-,-"), limited: parseMockLimited("0,0,0") });
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(open[key].limited, false, `${key}.limited`);
+    assert.equal(open[key].status, "active", `${key}.status`);
+    assert.equal(open[key].limited, isLimitedStatus(open[key].status), `${key} agrees with the parser`);
+  }
+  assert.deepEqual([open.rolling.resetInSec, open.weekly.resetInSec, open.monthly.resetInSec], [45, null, null]);
+
+  // The defaults are unchanged, so every existing display test still renders what
+  // it was written against: one countdown on the rolling window, nothing capped.
+  const plain = mockSnapshot();
+  assert.equal(plain.rolling.resetInSec, 7543);
+  assert.equal(plain.weekly.resetInSec, null);
+  assert.equal(plain.monthly.resetInSec, null);
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(plain[key].limited, false, `${key}.limited`);
+    assert.equal(plain[key].status, "active", `${key}.status`);
   }
 });

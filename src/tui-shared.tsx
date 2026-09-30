@@ -77,7 +77,9 @@ import {
   hostEnv,
   isRecord,
   mockSnapshot,
+  parseMockLimited,
   parseMockPercents,
+  parseMockResets,
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
@@ -87,7 +89,7 @@ import {
   SIDEBAR_COLLAPSED_GLYPH,
   SIDEBAR_EXPANDED_GLYPH,
 } from "./shared.js";
-import type { UsageHost, UsageSnapshot } from "./shared.js";
+import type { MockSnapshotOverrides, UsageHost, UsageSnapshot } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -181,8 +183,14 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
 
 async function loadUsageSnapshot(host: UsageHost): Promise<UsageSnapshot | null> {
   if (hostEnv(host, "MOCK") === "1") {
+    const overrides: MockSnapshotOverrides = {};
     const percents = parseMockPercents(hostEnv(host, "MOCK_PERCENTS"));
-    return mockSnapshot(percents === null ? undefined : { percents });
+    if (percents !== null) overrides.percents = percents;
+    const resets = parseMockResets(hostEnv(host, "MOCK_RESETS"));
+    if (resets !== null) overrides.resets = resets;
+    const limited = parseMockLimited(hostEnv(host, "MOCK_LIMITED"));
+    if (limited !== null) overrides.limited = limited;
+    return mockSnapshot(overrides);
   }
 
   const apiKey = toNonEmptyString(hostEnv(host, "API_KEY")) ?? readAuthJsonApiKey(host);
