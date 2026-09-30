@@ -10,13 +10,36 @@ import * as path from "node:path";
 
 const DEFAULT_PREFIX = "oc-go-usage-display-test-";
 
+// Remove a throwaway root, tolerating a child that is still shutting down.
+//
+// The TUI tests kill a real host and return immediately, and the host can still be
+// writing a cache under `$XDG_CACHE_HOME` (a compiled-module cache on some
+// installs) while the root is being removed. `fs.rmSync` reports ENOTEMPTY for
+// that, which fails the test for a reason that has nothing to do with what the
+// test asserted -- and the leftovers are in `os.tmpdir()` either way. So the
+// removal is retried briefly, and a still-failing root is left behind rather than
+// masking the test's real result.
+function removeTree(dir, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      return;
+    } catch (error) {
+      if (attempt >= attempts || error?.code !== "ENOTEMPTY") {
+        console.error(`[test] could not remove ${dir}: ${error?.message ?? error}`);
+        return;
+      }
+    }
+  }
+}
+
 // A generic throwaway directory.
 export function makeTempDir(prefix = DEFAULT_PREFIX) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   return {
     dir,
     cleanup() {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeTree(dir);
     },
   };
 }
@@ -35,7 +58,7 @@ export function makeConfigDir(prefix = DEFAULT_PREFIX) {
     home,
     configDir,
     cleanup() {
-      fs.rmSync(root, { recursive: true, force: true });
+      removeTree(root);
     },
   };
 }
