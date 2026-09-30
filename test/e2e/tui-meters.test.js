@@ -357,6 +357,17 @@ test(
           if (meter.percent === 100) {
             assert.equal(track, 0, `${where}: a full meter must leave no track cell beside it`);
             assert.equal(fill, meter.width, `${where}: a full meter must be all accent`);
+            // The tip of the bar, cell by cell. This is the "light grey cell at the
+            // end of it, it should've been red too" case: the track's basis would
+            // claim one cell past the fill, land on the percent's leading pad, and
+            // read as more empty bar touching the number. So the last cell of a full
+            // bar must be the bar's own colour -- asserted on the cell, not on the
+            // counts above, because a sliver is a positional defect.
+            assert.equal(
+              meter.row[meter.endCol - 1]?.bg,
+              accent,
+              `${where}: the last cell of a full bar must be the bar's own colour, not the track`,
+            );
           } else if (meter.percent === 0) {
             assert.equal(fill, 0, `${where}: an empty meter must leave no accent cell in it`);
           } else {
