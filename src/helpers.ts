@@ -27,6 +27,7 @@ import {
   GO_MODEL_MIX_NAME_MAX_CHARS,
   GO_MODEL_MIX_SEPARATOR,
   GO_PROVIDER_ID,
+  INTEGRATED_GO_SHARE_LABEL,
   PERCENT_CELL_WIDTH,
   KILO_MODEL_NAME_MAX_CHARS,
   KILO_TOKEN_USAGE_ROWS,
@@ -563,12 +564,27 @@ export function shortModelName(value: string, max: number = GO_MODEL_MIX_NAME_MA
 // to padding.
 export const PLAN_LABEL_WIDTH = 3;
 
-// A percent padded into a fixed-width cell, right-aligned by construction. A
-// non-finite percent renders as 0 rather than "NaN%", which would break the
-// column it sits in.
+// The Go share's label cell, the same idea for a longer label: exactly the label
+// itself, so the share meter starts on the same column on every render.
+//
+// This is what the share row used to get wrong. Its label was `flexGrow`, so the
+// label and the meter BOTH claimed the slack and the split between them moved
+// with the reading -- the share bar was 18 cells wide at 50% and 20 at 100%, and
+// its percent slid a column with it. Only the meter may grow.
+export const GO_SHARE_LABEL_WIDTH = INTEGRATED_GO_SHARE_LABEL.length;
+
+// A percent padded into a fixed-width cell, right-aligned by construction.
+//
+// The value is CLAMPED to the same 0-100 the meter draws, because the cell's whole
+// job is to hold one column: `padStart` never truncates, so a percent the API
+// reported as 1234 (or -1234) would print five digits plus a sign, push its own
+// row one cell wider than every other row and undo the alignment the cell exists
+// to provide. Clamping also keeps the number and the bar telling the same story --
+// a bar clamped to full beside a cell reading "1234%" would be a second, quieter
+// version of the same bug.
 export function formatPercentCell(percent: number, width: number = PERCENT_CELL_WIDTH): string {
   const cells = Math.max(Math.floor(width), 1);
-  const rounded = Number.isFinite(percent) ? Math.round(percent) : 0;
+  const rounded = Number.isFinite(percent) ? Math.round(meterFillPercent(percent)) : 0;
   return `${`${rounded}%`}`.padStart(cells, " ");
 }
 

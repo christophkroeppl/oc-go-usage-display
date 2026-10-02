@@ -14,6 +14,13 @@ import {
   extractWindow,
   formatResetDuration,
   mockSnapshot,
+  MOCK_PERCENTS,
+  isLimitedStatus,
+  parseMockLimited,
+  parseMockPercents,
+  parseMockResets,
+  mockGoShare,
+  parseMockShare,
   hostEnv,
   hostEnvName,
   KILO_SIDEBAR_ORDERS,
@@ -137,28 +144,44 @@ test("errorMessage extracts a usable message from arbitrary thrown values", () =
 
 // --- formatResetDuration ---
 
-test("formatResetDuration formats hours/minutes/seconds", () => {
+// A 30-day window resets ~720h out. "resets in 720h00m" is unreadable at a
+// glance, and the countdown's whole job is to say how long you can ignore it --
+// so past a day the units are weeks, days and hours.
+test("formatResetDuration resolves every unit down to the hour, and only the ones with something to say", () => {
+  const day = 86400;
+  const hour = 3600;
+  // 214h45m is 8d 22h 45m. "1w 1d" says a week; "1w 1d 22h" says a week and most
+  // of a day, which is the difference the hour makes.
+  assert.equal(formatResetDuration(214 * hour + 45 * 60), "1w 1d 22h", "214h45m from a real sidebar");
+  assert.equal(formatResetDuration(6 * day + 22 * hour), "6d 22h", "just under a week stays in days");
+  assert.equal(formatResetDuration(2 * day + 6 * hour), "2d 6h");
+  // Past a week the hour is often zero -- a 30-day window resets ~4w 2d with no
+  // hour to add -- so the extra resolution buys something on the rolling window
+  // and between a day and a week, and costs nothing elsewhere.
+  assert.equal(formatResetDuration(30 * day), "4w 2d");
+  assert.equal(formatResetDuration(365 * day), "52w 1d");
+
+  // "1w 0d" says no more than "1w" and reads as though a day were still to come.
+  // A unit earns its place by having something to say, and dropping the empty one
+  // is also what lets the countdown keep a fixed granularity without lying near a
+  // boundary -- "1w" is not a rounding error, it is what is actually left.
+  assert.equal(formatResetDuration(7 * day), "1w", "1w 0d is 1w");
+  assert.equal(formatResetDuration(14 * day), "2w");
+  assert.equal(formatResetDuration(day), "1d", "1d 0h is 1d");
+  assert.equal(formatResetDuration(8 * day), "1w 1d");
+  assert.equal(formatResetDuration(7 * day + 3 * hour), "1w 3h", "1w 0d 3h drops the zero day");
+  // And not in the middle of a pair either, where it is even easier to misread as
+  // progress.
+  assert.equal(formatResetDuration(hour), "1h", "1h0m is 1h");
+
+  // Below a day the minutes and seconds are the finest useful precision, so they
+  // are what is shown -- and the 5h window still reads the way it always has.
+  assert.equal(formatResetDuration(86399), "23h59m");
   assert.equal(formatResetDuration(7543), "2h5m");
-  assert.equal(formatResetDuration(3600), "1h0m");
   assert.equal(formatResetDuration(300), "5m");
   assert.equal(formatResetDuration(45), "45s");
+  // Zero seconds is still the honest answer rather than nothing at all.
   assert.equal(formatResetDuration(0), "0s");
-});
-
-// A 30-day window resets ~720h out. "resets in 720h00m" is unreadable at a
-// glance, and the countdown's whole job is to say how long you can ignore it.
-test("formatResetDuration switches to days and weeks past a day", () => {
-  // 214h45m is 8.9 days, so it reads as weeks: past a week the day count alone
-  // is the wrong unit, not a longer spelling of the right one.
-  assert.equal(formatResetDuration(214 * 3600 + 45 * 60), "1w 1d", "214h45m from a real sidebar");
-  assert.equal(formatResetDuration(6 * 86400 + 22 * 3600), "6d 22h", "just under a week stays in days");
-  assert.equal(formatResetDuration(86400), "1d 0h");
-  assert.equal(formatResetDuration(2 * 86400 + 6 * 3600), "2d 6h");
-  assert.equal(formatResetDuration(7 * 86400), "1w 0d", "a week is the next unit up, not hours");
-  assert.equal(formatResetDuration(30 * 86400), "4w 2d");
-  // The hour/minute form is unchanged below a day, so the 5h window still reads
-  // the way it always has.
-  assert.equal(formatResetDuration(86399), "23h59m");
 });
 
 test("formatResetDuration returns null for null/negative/non-finite", () => {
@@ -553,4 +576,130 @@ test("the retired panel id is the one the ladder records", () => {
   // A typo here would leave Kilo's panel rendering next to ours forever, with
   // no error anywhere to explain the duplicate.
   assert.ok(KILO_USAGE_PANEL_PLUGIN_ID in KILO_SIDEBAR_ORDERS, "unknown kilo panel id");
+});
+
+test("the mock takes a ladder of plan percents, whole or not at all", () => {
+  // The display tests drive the meters over a ladder of readings. A ladder that
+  // only half-applied would render a block matching no rung the test asked for,
+  // so anything malformed falls back to the defaults entirely.
+  assert.equal(mockSnapshot().rolling.percent, MOCK_PERCENTS[0], "the default ladder is unchanged");
+  assert.deepEqual(
+    [mockSnapshot().rolling.percent, mockSnapshot().weekly.percent, mockSnapshot().monthly.percent],
+    [...MOCK_PERCENTS],
+  );
+
+  assert.deepEqual(parseMockPercents("0,50,90"), [0, 50, 90]);
+  assert.deepEqual(parseMockPercents(" 0 , 50 , 90 "), [0, 50, 90], "whitespace around a rung is fine");
+  assert.deepEqual(parseMockPercents("100,0,42.5"), [100, 0, 42.5], "a fractional rung parses");
+  assert.deepEqual(parseMockPercents("-5,0,100"), [-5, 0, 100], "out of range parses: the meter clamps");
+
+  for (const bad of [undefined, "", "  ", "50", "0,50", "0,50,90,100", "a,b,c", "0,50,NaN", "0,50,Infinity"]) {
+    assert.equal(parseMockPercents(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+
+  // Applied: the overrides reach the snapshot, and only the percents change --
+  // the reset countdown stays literal so the display tests' statusline suffix is
+  // deterministic whatever the ladder is.
+  const ladder = mockSnapshot({ percents: [0, 50, 90] });
+  assert.deepEqual([ladder.rolling.percent, ladder.weekly.percent, ladder.monthly.percent], [0, 50, 90]);
+  assert.equal(ladder.source, "mock");
+  assert.equal(ladder.rolling.resetInSec, 7543, "the 5h reset stays literal across the ladder");
+  assert.equal(ladder.weekly.resetInSec, null);
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    const expected = extractWindow({ percent: ladder[key].percent, status: "active" });
+    assert.equal(ladder[key].limited, expected?.limited, `${key}.limited still matches the parser`);
+  }
+});
+
+test("the mock Go share is gated on the mock flag, not on the override", () => {
+  // The override exists so a display test can put a share in the row without a
+  // provider call per rung. If it applied outside mock mode it would silently
+  // replace the real fold over the host's message store, so the gate is on the
+  // MOCK flag: an override alone changes nothing.
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK_SHARE: "100" }), null, "the override alone must not apply");
+  assert.equal(mockGoShare("opencode", { OPENCODE_OC_GO_MOCK_SHARE: "100" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "0", KILO_OC_GO_MOCK_SHARE: "100" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "100" }), 100);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "nonsense" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1" }), null, "no override means the real share");
+  // Each host reads only its own prefix.
+  assert.equal(mockGoShare("opencode", { OPENCODE_OC_GO_MOCK: "1", KILO_OC_GO_MOCK_SHARE: "50" }), null);
+  assert.equal(mockGoShare("kilo", { KILO_OC_GO_MOCK: "1", OPENCODE_OC_GO_MOCK_SHARE: "50" }), null);
+});
+
+test("the mock Go share parses one number, or nothing", () => {
+  assert.equal(parseMockShare("100"), 100);
+  assert.equal(parseMockShare(" 0 "), 0);
+  assert.equal(parseMockShare("42.5"), 42.5);
+  for (const bad of [undefined, "", "  ", "all", "NaN", "Infinity"]) {
+    assert.equal(parseMockShare(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+});
+
+test("the mock takes a countdown and a cap per window", () => {
+  // `MOCK_RESETS` is seconds, not a rendered string: the formatter is the thing
+  // under test, and handing it a pre-rendered value would test nothing.
+  assert.deepEqual(parseMockResets("45,300,7543"), [45, 300, 7543]);
+  assert.deepEqual(parseMockResets(" 45 , 300 , 7543 "), [45, 300, 7543], "whitespace around a slot is fine");
+  assert.deepEqual(parseMockResets("0,604800,2592000"), [0, 604800, 2592000], "an elapsed countdown is a valid value");
+  assert.deepEqual(parseMockResets("-,300,-"), [null, 300, null], "a window with no countdown at all");
+  assert.deepEqual(parseMockResets("45,,7543"), [45, null, 7543], "an empty slot is the same as a dash");
+  // A negative countdown is what clock skew and a reset that fired mid-flight
+  // look like, and the real parser drops those -- so the mock must not be able to
+  // manufacture one the wire could never carry.
+  assert.equal(parseMockResets("-1,300,7543"), null);
+  assert.equal(parseMockResets("45,NaN,7543"), null);
+  for (const bad of [undefined, "", "  ", "45", "45,300", "45,300,7543,1", "a,b,c"]) {
+    assert.equal(parseMockResets(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+
+  // The cap is independent of the countdown on the wire, and `buildPlanRows` only
+  // prints a window's countdown when that window is capped.
+  assert.deepEqual(parseMockLimited("1,0,1"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("true,no,on"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("0,0,0"), [false, false, false]);
+  assert.deepEqual(parseMockLimited("1,1,1"), [true, true, true]);
+  // Anything that is not recognisably true is false, so a typo caps nothing
+  // rather than capping everything.
+  assert.deepEqual(parseMockLimited("1,banana,yes"), [true, false, true]);
+  assert.deepEqual(parseMockLimited("-,0,-"), [false, false, false]);
+  for (const bad of [undefined, "", "  ", "1,0", "1,0,1,1"]) {
+    assert.equal(parseMockLimited(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+});
+
+test("a capped mock window says so, and an uncapped one does not", () => {
+  // The status and the `limited` flag have to agree, because that is what the
+  // parser produces and what the unit tier pins elsewhere; and a capped window is
+  // the only one whose countdown reaches the plan rows.
+  const capped = mockSnapshot({
+    resets: parseMockResets("604800,86400,2592000"),
+    limited: parseMockLimited("1,1,1"),
+  });
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(capped[key].limited, true, `${key}.limited`);
+    assert.equal(capped[key].status, "rate-limited", `${key}.status`);
+    assert.equal(capped[key].limited, isLimitedStatus(capped[key].status), `${key} agrees with the parser`);
+  }
+  assert.deepEqual([capped.rolling.resetInSec, capped.weekly.resetInSec, capped.monthly.resetInSec], [
+    604800, 86400, 2592000,
+  ]);
+  const open = mockSnapshot({ resets: parseMockResets("45,-,-"), limited: parseMockLimited("0,0,0") });
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(open[key].limited, false, `${key}.limited`);
+    assert.equal(open[key].status, "active", `${key}.status`);
+    assert.equal(open[key].limited, isLimitedStatus(open[key].status), `${key} agrees with the parser`);
+  }
+  assert.deepEqual([open.rolling.resetInSec, open.weekly.resetInSec, open.monthly.resetInSec], [45, null, null]);
+
+  // The defaults are unchanged, so every existing display test still renders what
+  // it was written against: one countdown on the rolling window, nothing capped.
+  const plain = mockSnapshot();
+  assert.equal(plain.rolling.resetInSec, 7543);
+  assert.equal(plain.weekly.resetInSec, null);
+  assert.equal(plain.monthly.resetInSec, null);
+  for (const key of ["rolling", "weekly", "monthly"]) {
+    assert.equal(plain[key].limited, false, `${key}.limited`);
+    assert.equal(plain[key].status, "active", `${key}.status`);
+  }
 });

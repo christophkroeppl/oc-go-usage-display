@@ -27,6 +27,13 @@ const ALLOWED_IMPORTS = new Set([
   "../../dist/shared.js",
 ]);
 
+// Test helpers the unit tier may import, with the same guarantee the dist modules
+// get for free: the guard only scans a TEST file's own source, so allowing a
+// helper module would otherwise exempt everything that helper does. These are
+// therefore held to a stronger rule than the dist imports -- they must have no
+// imports at all, which leaves nothing for them to reach for.
+const PURE_HELPERS = new Set(["../helpers/ladder.js"]);
+
 const FORBIDDEN_PATTERNS = [
   [/\brequire\s*\(/, "CommonJS require"],
   [/\bmkdtemp(Sync)?\b/, "tmp directory creation"],
@@ -62,7 +69,7 @@ for (const name of files) {
   const file = path.join(UNIT_DIR, name);
   const source = fs.readFileSync(file, "utf8");
   for (const specifier of importsOf(source)) {
-    if (!ALLOWED_IMPORTS.has(specifier)) {
+    if (!ALLOWED_IMPORTS.has(specifier) && !PURE_HELPERS.has(specifier)) {
       violations.push(`${name}: import "${specifier}" is not allowed in the unit tier`);
     }
   }
@@ -70,6 +77,19 @@ for (const name of files) {
     const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
     for (const match of source.matchAll(global)) {
       violations.push(`${name}:${lineOf(source, match.index)} forbidden ${label}: ${match[0].trim()}`);
+    }
+  }
+  // An allowed helper is held to the rule above, by having nothing to reach for.
+  for (const specifier of importsOf(source)) {
+    if (!PURE_HELPERS.has(specifier)) continue;
+    const helper = path.resolve(path.dirname(file), specifier);
+    if (!fs.existsSync(helper)) {
+      violations.push(`${name}: allowed helper "${specifier}" does not exist`);
+      continue;
+    }
+    const helperImports = importsOf(fs.readFileSync(helper, "utf8"));
+    if (helperImports.length > 0) {
+      violations.push(`${name}: allowed helper "${specifier}" must import nothing (found ${helperImports.join(", ")})`);
     }
   }
 }

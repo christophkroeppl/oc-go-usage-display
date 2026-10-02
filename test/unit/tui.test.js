@@ -32,6 +32,7 @@ import {
   surfaceSelectionFromDisplayMode,
   totalGoTokens,
   truncateModelName,
+  GO_SHARE_LABEL_WIDTH,
   meterFillPercent,
   meterSeverityForPercent,
   usageMeterSeverity,
@@ -46,6 +47,7 @@ import {
   CACHE_RATE_EMPTY,
   GO_MODEL_MIX_BUDGET,
   GO_PROVIDER_ID,
+  INTEGRATED_GO_SHARE_LABEL,
   PERCENT_CELL_WIDTH,
   OPENCODE_MODEL_NAME_MAX_CHARS,
   KILO_COST_COLUMN_WIDTH,
@@ -55,6 +57,10 @@ import {
   parseSessionModelUsage,
   toUsageCount,
 } from "../../dist/shared.js";
+// The ladder is shared with the e2e tier so the two cannot disagree about which
+// readings are covered. Pure, so it does not disturb this tier's readonly
+// guarantee.
+import { usageLadders } from "../helpers/ladder.js";
 
 function tuiSnapshot(overrides = {}) {
   return {
@@ -1040,8 +1046,179 @@ test("formatPercentCell keeps a broken percent out of the column", () => {
   // NaN or Infinity would print "NaN%"/"∞%" and stretch the row it sits in.
   assert.equal(formatPercentCell(Number.NaN), "   0%");
   assert.equal(formatPercentCell(Number.POSITIVE_INFINITY), "   0%");
-  assert.equal(formatPercentCell(-7), "  -7%");
   assert.equal(formatPercentCell(42.6), "  43%", "the same rounding the bars use");
   assert.equal(formatPercentCell(42, 3), "42%", "an explicit width still pads");
+  // Out of range is CLAMPED, not printed: `padStart` never truncates, so five
+  // digits would push the row one cell wider than every other row and undo the
+  // alignment the cell exists for. Clamped to the same 0-100 the meter draws, so
+  // the number and the bar cannot disagree.
+  assert.equal(formatPercentCell(-7), "   0%", "a negative percent reads as empty, like the bar");
+  assert.equal(formatPercentCell(1234), " 100%", "an over-full percent reads as full, like the bar");
+  for (const broken of [-7, -1234, 1234, 1e9, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(
+      formatPercentCell(broken).length,
+      PERCENT_CELL_WIDTH,
+      `an out-of-range percent (${broken}) must not stretch its column`,
+    );
+  }
 });
 
+
+// ---------------------------------------------------------------------------
+// The usage ladder, arithmetically
+// ---------------------------------------------------------------------------
+//
+// The same rungs test/e2e/tui-meters.test.js drives through a real host, checked
+// here against the arithmetic instead of the pixels. This tier runs on every push
+// and PR in seconds, where the e2e tier needs a container and minutes; together
+// they mean a regression in how a meter is divided shows up immediately, and a
+// regression in how it is laid out shows up before anything ships.
+
+test("the meter and its percent cell tell the same story at every ladder rung", () => {
+  // A meter's two parts are percentages that sum to 100, so the split is a
+  // function of the reading alone. Anything that made the track a fixed size, or
+  // the fill a minimum, would show up here as a total other than 100.
+  for (const { name, plan } of usageLadders()) {
+    for (const percent of plan) {
+      const fill = meterFillPercent(percent);
+      const track = 100 - fill;
+      assert.equal(
+        fill + track,
+        100,
+        `${name}: the fill (${fill}%) and the track (${track}%) must partition the meter`,
+      );
+      assert.ok(fill >= 0 && fill <= 100, `${name}: the fill must stay inside the meter (${fill}%)`);
+      // And the cell must be exactly as wide at the ends of the range as in the
+      // middle, which is the column the whole block is built on.
+      assert.equal(
+        formatPercentCell(percent).length,
+        PERCENT_CELL_WIDTH,
+        `${name}: ${percent}% must not move its column`,
+      );
+    }
+  }
+});
+
+test("the meter has no track cell left beside a full bar, and none at the ends", () => {
+  // The defect the ladder was written for: with a flexible track the pair
+  // overflowed the meter at 100%, painting a cell of the wrong color into the
+  // padding beside the percent and making the meter a cell wider than at any
+  // other reading. A split by percentage cannot overflow, so these are the
+  // invariants that hold it in place.
+  assert.equal(meterFillPercent(100), 100, "a full meter is entirely fill");
+  assert.equal(100 - meterFillPercent(100), 0, "a full meter has no track left to draw");
+  assert.equal(meterFillPercent(0), 0, "an empty meter has no fill to draw");
+  assert.equal(100 - meterFillPercent(0), 100, "an empty meter is entirely track");
+  // Every rung in between is a strict split, and the extremes are the only ones
+  // where either part vanishes.
+  for (const percent of [1, 42, 50, 75, 80, 90, 95, 99]) {
+    assert.ok(meterFillPercent(percent) > 0, `${percent}% must draw a fill`);
+    assert.ok(100 - meterFillPercent(percent) > 0, `${percent}% must leave a track`);
+  }
+});
+
+test("the ladder covers every rung the meters can be asked for", () => {
+  // The e2e drives this list against a real host, so the list itself has to mean
+  // something: both extremes, the midpoint, one rung past each color threshold,
+  // and a mixed distribution rotated so every value lands in every column.
+  const ladders = usageLadders();
+  const names = ladders.map((rung) => rung.name);
+  for (const required of ["all-full", "all-empty", "all-half", "all-warning", "all-danger"]) {
+    assert.ok(names.includes(required), `the ladder must include ${required} (got ${names.join(", ")})`);
+  }
+  assert.equal(
+    ladders.filter((rung) => rung.name.startsWith("mixed-rotation-")).length,
+    4,
+    "the mixed distribution must be rotated four times",
+  );
+  // Each rotation is a different arrangement, so a layout bug that only shows up
+  // for one value in one column cannot hide behind a single mixed rung.
+  const arrangements = ladders
+    .filter((rung) => rung.name.startsWith("mixed-rotation-"))
+    .map((rung) => [...rung.plan, rung.share].join(","));
+  assert.equal(new Set(arrangements).size, 4, `the rotations must differ (got ${arrangements.join(" | ")})`);
+  // Every rung's declared severity must be the one the real ladder gives it, so a
+  // uniform rung cannot quietly stop testing the color it claims to test.
+  for (const { name, plan, share, severity } of ladders) {
+    if (severity === "mixed") continue;
+    for (const percent of [...plan, share]) {
+      assert.equal(
+        meterSeverityForPercent(percent),
+        severity,
+        `${name}: ${percent}% must color as ${severity}`,
+      );
+    }
+  }
+});
+
+test("the Go share label gets a fixed cell, so only its meter can grow", () => {
+  // The share row's label used to be `flexGrow`, so the label and the meter both
+  // claimed the slack and the split moved with the reading. The label cell is now
+  // exactly the label, which is what pins the meter's start column.
+  assert.equal(
+    GO_SHARE_LABEL_WIDTH,
+    INTEGRATED_GO_SHARE_LABEL.length,
+    "the share label cell must be exactly the label, or the meter moves when it is renamed",
+  );
+  // Long enough not to truncate the label it holds.
+  assert.ok(
+    GO_SHARE_LABEL_WIDTH >= INTEGRATED_GO_SHARE_LABEL.length,
+    "the share label cell must fit its own label",
+  );
+  // And it is its own column: the plan labels are three cells wide, and sharing
+  // that width with an eight-cell label would be what pushed the meter sideways.
+  assert.notEqual(
+    GO_SHARE_LABEL_WIDTH,
+    PLAN_LABEL_WIDTH,
+    "the share label is longer than a plan label and needs its own cell",
+  );
+});
+
+test("the sidebar and the statusline resolve a countdown identically", () => {
+  // 8d 22h 45m: "1w 1d" says a week, "1w 1d 22h" says a week and most of a day.
+  // The statusline reads its countdown back out of `buildPlanRows` precisely so it
+  // cannot drift from the sidebar, so both render the same text -- the alternative
+  // was the same fact at two different precisions in two places.
+  const soon = 8 * 86400 + 22 * 3600 + 45 * 60;
+  const snapshot = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: soon, resetText: null },
+    weekly: { percent: 40, status: "active", limited: false, resetInSec: soon, resetText: null },
+    monthly: { percent: 40, status: "active", limited: false, resetInSec: soon, resetText: null },
+  });
+  assert.equal(buildPlanRows(snapshot)[0].reset, "1w 1d 22h");
+  assert.ok(formatStatusline(snapshot).endsWith("· resets in 1w 1d 22h"));
+  // The uncapped path takes the other branch of `relevantReset` and must agree:
+  // an uncapped countdown is only printed by the statusline, never by the plan
+  // rows, so the two cannot be compared through `buildPlanRows` there.
+  const uncapped = tuiSnapshot({
+    rolling: { percent: 20, status: "active", limited: false, resetInSec: soon, resetText: null },
+    weekly: { percent: 20, status: "active", limited: false, resetInSec: soon * 2, resetText: null },
+    monthly: { percent: 20, status: "active", limited: false, resetInSec: soon * 3, resetText: null },
+  });
+  assert.ok(formatStatusline(uncapped).endsWith("· resets in 1w 1d 22h"), "the uncapped countdown resolves the same way");
+  // A capped 30-day window resets ~4w 2d with no hour to add, so the extra
+  // precision costs nothing there rather than inventing a unit.
+  const month = tuiSnapshot({
+    monthly: { percent: 99, status: "rate-limited", limited: true, resetInSec: 30 * 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(month)[2].reset, "4w 2d");
+  assert.ok(formatStatusline(month).endsWith("· resets in 4w 2d"));
+});
+
+test("neither surface prints a countdown unit that is zero", () => {
+  // "1w 0d" reads as though a day were still to come.
+  const week = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 7 * 86400, resetText: null },
+    weekly: { percent: 40, status: "active", limited: false, resetInSec: 7 * 86400, resetText: null },
+    monthly: { percent: 40, status: "active", limited: false, resetInSec: 7 * 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(week)[0].reset, "1w");
+  // Checked on the countdown itself rather than the whole line: the plan labels
+  // contain zeroes of their own ("30d"), which are not what this is about.
+  assert.equal(relevantReset(week).text, "1w");
+  const day = tuiSnapshot({
+    rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 86400, resetText: null },
+  });
+  assert.equal(buildPlanRows(day)[0].reset, "1d");
+  assert.equal(buildPlanRows(tuiSnapshot({ rolling: { percent: 96, status: "rate-limited", limited: true, resetInSec: 3600, resetText: null } }))[0].reset, "1h");
+});

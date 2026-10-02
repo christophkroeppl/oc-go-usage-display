@@ -358,35 +358,53 @@ export const MODELS_EMPTY_LABEL = "No model usage yet";
 export const INTEGRATED_LOADING_LABEL = "Loading usage...";
 export const INTEGRATED_UNAVAILABLE_LABEL = "Usage unavailable";
 
-// Two most significant units, always: `4h57m` under an hour, `2d 6h` under a
-// week, `1w 1d` above it. A 30-day window resets ~720h out, and "resets in
-// 720h00m" is a number nobody can read at a glance -- the countdown exists to
-// say "you do not have to think about this yet", and a week count says that in
-// five characters. Below an hour the minutes (and then seconds) still matter, so
-// they are what is shown.
+// A countdown, as every surface renders it.
+//
+// Every unit down to the hour, and no unit that is zero. "1w 0d" says no more
+// than "1w" and reads as though a day were still to come, so a unit earns its
+// place by having something to say -- and dropping the empty one is also what lets
+// the countdown keep a fixed granularity without lying near a boundary: "1w" is
+// not a rounding error, it is what is actually left.
+//
+// Below a day the minutes and seconds are what matter, so they are what is shown,
+// and the hours and minutes run together because that is what has always fitted:
+// `2h5m`, `5m`, `45s`. A 30-day window resets ~720h out, and "720h00m" is a
+// number nobody can read at a glance, so past a day the units are weeks, days and
+// hours: `4w 2d`, `2d 6h`, `1w 1d 22h`.
+//
+// ONE formatter for the sidebar, the statusline and the server line. The sidebar
+// has a column to spend and the statusline does not, so they used to be worth
+// rendering differently -- but the statusline reads its countdown back out of
+// `buildPlanRows` precisely so it cannot drift from the sidebar, so a second
+// formatter would have bought a shorter footer by showing the same fact at two
+// different precisions in two places. The countdowns are short, and they are only
+// printed when a window is capped.
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_WEEK = 604800;
 
+// The non-zero week/day/hour units of a duration, coarsest first. Minutes are not
+// here: below a day the countdown keeps its own tighter rendering.
+function resetDayUnits(sec: number): string[] {
+  const units = [
+    { value: Math.floor(sec / SECONDS_PER_WEEK), suffix: "w" },
+    { value: Math.floor((sec % SECONDS_PER_WEEK) / SECONDS_PER_DAY), suffix: "d" },
+    { value: Math.floor((sec % SECONDS_PER_DAY) / SECONDS_PER_HOUR), suffix: "h" },
+  ];
+  return units.filter((unit) => unit.value > 0).map((unit) => `${unit.value}${unit.suffix}`);
+}
+
 export function formatResetDuration(totalSec: number | null): string | null {
   if (totalSec === null || !Number.isFinite(totalSec) || totalSec < 0) return null;
   const sec = Math.floor(totalSec);
-  if (sec >= SECONDS_PER_WEEK) {
-    const weeks = Math.floor(sec / SECONDS_PER_WEEK);
-    const days = Math.floor((sec % SECONDS_PER_WEEK) / SECONDS_PER_DAY);
-    return `${weeks}w ${days}d`;
+  if (sec < SECONDS_PER_DAY) {
+    const hours = Math.floor(sec / SECONDS_PER_HOUR);
+    const minutes = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+    if (hours === 0) return minutes > 0 ? `${minutes}m` : `${sec}s`;
+    return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
   }
-  if (sec >= SECONDS_PER_DAY) {
-    const days = Math.floor(sec / SECONDS_PER_DAY);
-    const hours = Math.floor((sec % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
-    return `${days}d ${hours}h`;
-  }
-  const hours = Math.floor(sec / SECONDS_PER_HOUR);
-  const minutes = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${sec}s`;
+  return resetDayUnits(sec).join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -514,16 +532,142 @@ export function extractSnapshotFromApiPayload(
 // Snapshot builders
 // ---------------------------------------------------------------------------
 
+// The mock's plan percents, in the order the windows are read: rolling, weekly,
+// monthly. Lifted out as named values because the display tests drive a ladder
+// over them (`MOCK_PERCENTS`) and a literal in the middle of the snapshot
+// builder is the one number nobody can find when a meter assertion fails.
+export const MOCK_PERCENTS: readonly [number, number, number] = [42, 15, 61];
+
+// `MOCK_PERCENTS` override: `rolling,weekly,monthly`, one rung per window, e.g.
+// `"0,50,90"`. Parsed here rather than at the read sites so the shape is pinned
+// once -- a partially parsed ladder (a missing field, a non-numeric cell, `NaN`)
+// falls back to the defaults whole, because a half-applied ladder would render a
+// block whose numbers match no rung the test asked for, which is the worst
+// possible failure mode for a display assertion.
+//
+// Out-of-range values are NOT clamped here: the parser that stands in for the API
+// accepts whatever the wire says, and the meter/percent pair is responsible for
+// rendering a value outside 0-100 without breaking its column.
+export function parseMockPercents(raw: string | undefined): [number, number, number] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const values = parts.map((part) => Number(part.trim()));
+  const rolling = values[0];
+  const weekly = values[1];
+  const monthly = values[2];
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  if (!Number.isFinite(rolling) || !Number.isFinite(weekly) || !Number.isFinite(monthly)) return null;
+  return [rolling, weekly, monthly];
+}
+
+export type MockSnapshotOverrides = {
+  percents?: [number, number, number];
+  resets?: [number | null, number | null, number | null];
+  limited?: [boolean, boolean, boolean];
+};
+
+// The mock's default countdowns, in window order: the rolling window counts down
+// (which is what puts a `resets in` on screen at all under the mock), and the
+// longer windows do not. No window is capped, so the plan rows print no per-row
+// countdown and the header line is the only place one appears.
+const MOCK_RESETS: readonly [number | null, number | null, number | null] = [7543, null, null];
+const MOCK_LIMITED: readonly [boolean, boolean, boolean] = [false, false, false];
+
+// The Go share override, and the one seam that is NOT a plan number: the share is
+// a fold over the host's own message store, so a display test can only pin its
+// row's layout without a session that holds real assistant messages -- which
+// means a provider call per rung. Same mock-only rule as `MOCK_PERCENTS`, and the
+// real arithmetic stays covered where it belongs: `goSharePercent` in the unit
+// tier and the collapsed model-mix e2e against a local fake provider.
+export function parseMockShare(raw: string | undefined): number | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const value = Number(text.trim());
+  return Number.isFinite(value) ? value : null;
+}
+
+// The mock's countdowns, in the same window order as `MOCK_PERCENTS`: one slot per
+// window, in seconds, with `-` or an empty slot for a window that has no countdown
+// at all. A countdown is what a window being capped looks like on the wire, so it
+// carries seconds rather than a formatted string: the formatter is the thing under
+// test, and handing it a pre-rendered value would test nothing.
+export function parseMockResets(raw: string | undefined): [number | null, number | null, number | null] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const parsed = parts.map((part) => {
+    const slot = part.trim();
+    if (slot === "" || slot === "-") return null;
+    const value = Number(slot);
+    // A negative countdown is what clock skew and a reset that fired mid-flight
+    // look like. The parser drops those, so the mock must not be able to
+    // manufacture one that the real payload could never carry.
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
+  });
+  const [rolling, weekly, monthly] = parsed;
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  return [rolling, weekly, monthly];
+}
+
+// Which windows the mock reports as capped, same window order. Separate from
+// `MOCK_RESETS` because the two are independent on the wire: `buildPlanRows` only
+// prints a window's countdown when that window is capped, so without this a ladder
+// could vary the seconds but never see a per-row countdown move.
+export function parseMockLimited(raw: string | undefined): [boolean, boolean, boolean] | null {
+  const text = toNonEmptyString(raw);
+  if (text === null) return null;
+  const parts = text.split(",");
+  if (parts.length !== MOCK_PERCENTS.length) return null;
+  const parsed = parts.map((part) => {
+    const slot = part.trim();
+    if (slot === "" || slot === "-") return false;
+    return MOCK_LIMITED_TRUE.has(slot.toLowerCase());
+  });
+  const [rolling, weekly, monthly] = parsed;
+  if (rolling === undefined || weekly === undefined || monthly === undefined) return null;
+  return [rolling, weekly, monthly];
+}
+
+const MOCK_LIMITED_TRUE = new Set(["1", "true", "yes", "on"]);
+
+// The Go share a display test asked for, or `null` for the real fold over the
+// host's message store. Gated on the mock FLAG rather than on the override being
+// set, so a stray `*_OC_GO_MOCK_SHARE` in a developer's shell cannot change what a
+// real session renders.
+export function mockGoShare(host: UsageHost, env: NodeJS.ProcessEnv = process.env): number | null {
+  if (hostEnv(host, "MOCK", env) !== "1") return null;
+  return parseMockShare(hostEnv(host, "MOCK_SHARE", env));
+}
+
 // `"active"` is the status this mock (and the cookie scrape) has always
 // reported, and it must map to `limited: false` exactly like the parser does —
 // the unit tier pins that agreement so the mock cannot drift from live shape.
 // `resetInSec` stays a literal (not derived from `resetsAt`) so the mock reset
 // suffix is deterministic for the TUI display tests.
-export function mockSnapshot(): UsageSnapshot {
+export function mockSnapshot(overrides: MockSnapshotOverrides = {}): UsageSnapshot {
+  const percents = overrides.percents ?? MOCK_PERCENTS;
+  const resets = overrides.resets ?? MOCK_RESETS;
+  const limited = overrides.limited ?? MOCK_LIMITED;
+  const window = (index: number, percent: number): UsageWindow => {
+    const capped = limited[index] === true;
+    return {
+      percent,
+      // A capped window says so, because that is what the real payload says, and
+      // because `limited` is what gates the per-row countdown: a window with a
+      // countdown and no cap is a shape the API does not produce.
+      status: capped ? "rate-limited" : "active",
+      limited: capped,
+      resetInSec: resets[index] ?? null,
+      resetText: null,
+    };
+  };
   return {
-    rolling: { percent: 42, status: "active", limited: false, resetInSec: 7543, resetText: null },
-    weekly: { percent: 15, status: "active", limited: false, resetInSec: null, resetText: null },
-    monthly: { percent: 61, status: "active", limited: false, resetInSec: null, resetText: null },
+    rolling: window(0, percents[0]),
+    weekly: window(1, percents[1]),
+    monthly: window(2, percents[2]),
     source: "mock",
     fetchedAt: Date.now(),
   };
