@@ -91,7 +91,7 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.33",
-    "@kilocode/plugin": "^7.8.1",
+    "@kilocode/plugin": "^7.8.3",
     "@opentui/solid": "0.5.11",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.2",
