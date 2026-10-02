@@ -59,9 +59,11 @@
     "opencode": "^1.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && bun run build:plugins && bun run verify:bundles",
+    "build": "tsc -p tsconfig.json && bun run build:plugins && bun run verify:bundles && bun run verify:peers && bun run verify:tarball-install",
     "build:plugins": "bun run scripts/build-plugins.mjs",
     "verify:bundles": "node scripts/verify-bundles.mjs",
+    "verify:peers": "node scripts/check-peer-ranges.mjs",
+    "verify:tarball-install": "node scripts/verify-tarball-install.mjs",
     "verify:tarball": "node scripts/verify-tarball.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "bun run build",
@@ -75,8 +77,8 @@
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.18.0",
     "@kilocode/plugin": "^7.8.0",
-    "@opentui/solid": "0.5.11",
-    "solid-js": "1.9.12"
+    "@opentui/solid": "^0.5.11",
+    "solid-js": "^1.9.12"
   },
   "peerDependenciesMeta": {
     "@kilocode/plugin": {
