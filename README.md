@@ -26,8 +26,9 @@ either host's bundle is missing.
 | Project scope | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
-restart). Restart opencode afterwards. Pin the version (`@latest`, not
-`@latest`) so installs stay reproducible; copy-first requires >= latest.
+restart). Restart opencode afterwards. `@latest` tracks the newest release; for
+reproducible installs pin an exact version such as
+`oc-go-usage-display@2.0.1`.
 
 Alternative — no files copied: declare the versioned package and let opencode
 resolve it at startup:
