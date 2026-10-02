@@ -1,6 +1,6 @@
 {
   "name": "oc-go-usage-display",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "OpenCode Go subscription usage opencode-plugin: go_usage tool (server) and Go Usage sidebar panel + session_prompt_right statusline (TUI).",
   "type": "module",
   "main": "./dist/index.js",
