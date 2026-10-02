@@ -96,6 +96,10 @@ only when the `tui.json` toggles are absent. Restart the host after changing
 static config. Kilo's `tui.json` rejects the `sidebar`/`statusline` options, so
 on that host the palette and the env vars are the way to set them.
 
+Which sessions the block answers for is also the same in both modes: a session on
+an `opencode-go` model. What differs is *who else* is on screen — see
+[integrated mode](#kilo-sidebar-mode) below.
+
 ## What the sidebar shows
 
 One shared implementation renders the block on both hosts; only the sidebar's
@@ -154,6 +158,34 @@ edge.
   `Go Usage` block saying the same three numbers again.
 - **standalone**: our block in a free band above the host's panel, and the host
   panel stays.
+
+### Kilo sidebar mode
+
+One rule, and every state follows from it: **we are the only usage block in that
+band exactly while we are drawing in it.**
+
+Integrated mode registers in Kilo's own token-usage band and switches its panel
+off, so the two are a pair — and the panel comes straight back whenever we stop
+filling the space:
+
+| session model | integrated | standalone |
+| ------------- | ---------- | ---------- |
+| `opencode-go/…` | our panel (`Session Tokens` + `Models`), Kilo's retired | our `Go Usage` block *and* Kilo's panel |
+| anything else | **Kilo's own `Token Usage` panel** | Kilo's own `Token Usage` panel |
+| hidden sidebar, or block folded away | Kilo's own `Token Usage` panel | Kilo's own `Token Usage` panel |
+
+So a session on another provider never loses its token readout, and folding the
+block away hands the band over rather than leaving a hole. It follows the model
+live: pick a different provider and the sidebar follows, with no restart.
+
+Why a non-Go session defers rather than being replaced: the integrated panel is a
+**fork** of Kilo's, not an extension of it — Kilo's panel cannot be extended from
+a plugin (its band has no sub-slots, and the slot registry is not reachable), so
+we redraw it, and our copy has no `Terminal Bench 2.0` section and no
+`Generation speed` row. Replacing a panel we cannot fully reproduce would quietly
+drop whatever a newer Kilo adds. Deferring means every section a future Kilo
+version introduces is on screen whenever we are not adding anything of our own.
+`standalone` is always available as the way to show both.
 
 ## Auth and config
 
@@ -233,14 +265,23 @@ docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/
 | Test command | Tier |
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
-| `bun run test:unit` | helper tests + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
-| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks and the per-model mix rendered against a local fake provider |
+| `bun run test:unit` | helper tests + the sidebar band matrix + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
+| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks, the per-model mix rendered against a local fake provider, and the Kilo sidebar band across Go and non-Go sessions |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
 Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects
 fs writes, tmp usage, child processes and sockets). Integration and e2e run only
 inside the container image; host-runnable tests redirect HOME/XDG and force
 `OPENCODE_OC_GO_MOCK=1`, so they never touch the real `~/.config/opencode`.
+
+**The Kilo sidebar has one decision table**, shared by three tiers so they cannot
+disagree: `test/helpers/sidebar-matrix.js` lists all 24 states (sidebar on/off ×
+folded × mode × the session's provider) and what the sidebar owes the host in
+each. The unit tier pins the table (`test/unit/sidebar-band.test.js`), the
+integration tier drives the host-panel switch for every rung against a stub, and
+the e2e boots the real TUI on the two rungs where only the rendered result counts
+(`test/e2e/tui-band-kilo.test.js`): a non-Go session must show Kilo's own panel,
+and a mixed-provider session must show ours.
 
 **The API key buys one thing:** a shape check that the live usage payload is
 still what we parse. Every TUI display test runs on the mock instead, because it

@@ -43,6 +43,15 @@
 // accessor. Wrapping a region that happens to be static costs nothing and
 // removes the question.
 //
+// THE SLOT BODY IS NOT ONE OF THOSE REGIONS. `@opentui/solid` invokes
+// `entry.renderer(ctx, props)` exactly once per mount, inside `AppendEntry`'s
+// one-shot body (`renderEntry` in @opentui/solid@0.5.11). A condition read
+// there -- a provider gate, a collapse flag, a mode -- is therefore evaluated
+// once and latched for the life of the band. Anything that has to react belongs
+// in a memo or a `<Show>` inside the returned tree, never in the slot function
+// body. `KiloSidebarBand` in `tui.kilo.tsx` is the worked example: it exists
+// only to move four conditions out of the body and behind memos.
+//
 // This was verified against the real host in both directions rather than
 // assumed: the collapse toggle and an async snapshot arriving after mount both
 // re-render correctly, which is the property this pattern exists to guarantee.
@@ -389,6 +398,71 @@ export function createCollapseState(api: UsagePanelApi): CollapseState {
 
 export function isGoUsageProvider(providerId: string | undefined): boolean {
   return providerId === GO_PROVIDER_ID;
+}
+
+// ---------------------------------------------------------------------------
+// Retiring a host panel we take a band from
+// ---------------------------------------------------------------------------
+
+// The smallest `api.plugins` a panel switch touches. Structural, like the rest of
+// this layer: a host whose status entries narrow `active`/`enabled` still fits.
+export type HostPanelSwitchApi = UsagePanelApi & {
+  plugins: {
+    list: () => ReadonlyArray<{ id?: unknown; active?: unknown; enabled?: unknown }>;
+    activate: (id: string) => Promise<unknown>;
+    deactivate: (id: string) => Promise<unknown>;
+  };
+};
+
+// Whether a host panel is currently switched on, or null when the host does not
+// report it. Reading the state first keeps every launch from writing an unchanged
+// enable/disable entry.
+export function currentHostPanelEnabled(api: HostPanelSwitchApi, pluginId: string): boolean | null {
+  try {
+    const entry = api.plugins.list().find((status) => status.id === pluginId);
+    if (entry === undefined) return null;
+    return entry.active === true || entry.enabled === true;
+  } catch {
+    return null;
+  }
+}
+
+// Put a host panel into `wantEnabled`, which is the runtime form of the
+// `plugin_enabled` map in a `tui.json` and is what makes the switch survive a
+// restart. Returns whether the panel is now in the requested state.
+//
+// This exists only because a slot renderer runs once per mount, so the decision
+// has to be re-applied from a reactive region rather than once at load. It is here,
+// and not in the Kilo entry, for one reason: the band that owns it cannot be
+// mounted without a renderer, so a test could otherwise only reach this code by
+// booting the host. Exported, the whole ownership matrix is drivable against a stub.
+//
+// Every step is best-effort. A failure leaves both panels on screen and is logged
+// through the host, never thrown: a sidebar is not worth destabilising a session.
+export async function applyHostPanelEnabled(
+  api: HostPanelSwitchApi,
+  pluginId: string,
+  wantEnabled: boolean,
+): Promise<boolean> {
+  try {
+    const current = currentHostPanelEnabled(api, pluginId);
+    if (current === wantEnabled) return true;
+    const applied = await (wantEnabled
+      ? api.plugins.activate(pluginId)
+      : api.plugins.deactivate(pluginId));
+    if (applied === true) return true;
+    await logUsageError(
+      api,
+      `Could not ${wantEnabled ? "enable" : "disable"} the host's ${pluginId} panel`,
+    );
+    return false;
+  } catch (error) {
+    await logUsageError(
+      api,
+      `Host ${pluginId} panel switch failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
 }
 
 // Which provider is in use, read live on every render rather than latched at
