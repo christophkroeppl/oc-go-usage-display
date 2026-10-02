@@ -254,12 +254,28 @@ export type ProviderBearingMessage = {
 };
 
 // The provider a session is really running, taken from the NEWEST message that
-// carries one. The message store is the only reactive answer either host gives
-// us: on Kilo 7.8.1 `Session` has no `model` field at all, so reading the
-// session object can never report a model switch, while the store is a live
-// Solid store that re-reads. Walking backwards also means a trailing message
-// on the newly picked provider wins over older ones, which is the whole point —
-// the band has to follow the model the user just switched to.
+// carries one.
+//
+// The message store is the PRIMARY source on every Kilo version we support, and
+// the reason is what the band needs rather than what the host happens to expose:
+// the models table is a fold over what ran in this session, so a provider that
+// appears in the store has rows to weight and a `Go share` to hang off, while a
+// provider only named by `Session.model` has neither. It is also the source that
+// re-reads -- it is a live Solid store, and unlike `Session.model` it reflects
+// the model a step actually ran under, including a `kilo-auto/…` model that the
+// host routed to a different provider.
+//
+// Version history, because the choice looks arbitrary otherwise:
+//   Kilo <= 7.8.1  `Session` had no `model` field and the SDK had no model-switch
+//                  event, so the store was the only reactive answer available.
+//   Kilo 7.8.3     `Session.model` and a `session.next.model.switched` event
+//                  appeared. Both are kept as fallbacks (see `resolveProviderId`),
+//                  but neither outranks the store: a model picked but not yet run
+//                  would claim the band for a table with no rows in it.
+//
+// Walking backwards means a trailing message on the newly picked provider wins
+// over older ones, which is what makes a model switch follow through once the
+// user has actually used it.
 //
 // A store that throws or returns a non-array is not a reason to hide anything:
 // the caller falls through to the configured model.

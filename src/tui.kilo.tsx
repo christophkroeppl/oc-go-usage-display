@@ -291,11 +291,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   const resolveActiveProviderId = makeProviderResolver(api.state, activeProviderId);
 
   // Which provider the session being rendered is really on. The host's own
-  // message store answers first, because it is the only reactive source: it is a
-  // live Solid store that re-reads, and on Kilo 7.8.1 `Session` carries no
-  // `model` field at all, so reading the session object can never report a model
-  // switch. The configured model and the `session.updated` signal are fallbacks
-  // for a session with no messages yet.
+  // message store answers first -- it is the source that re-reads, and the one
+  // that knows which provider actually ran (see `providerIdFromMessages` for why
+  // it outranks `Session.model`, which only exists from Kilo 7.8.3). The session
+  // object and the configured model are fallbacks for a session with no messages
+  // yet; `message.updated` keeps the last of those current.
   function resolveRenderedProviderId(sessionId: string): string | undefined {
     if (sessionId.length === 0) return undefined;
     try {
@@ -812,10 +812,12 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   let unsubscribeMessage: () => void = () => {};
   try {
     const unsubscribe = api.event.on("session.updated", (event) => {
-      // Kilo 7.8.1's `Session` carries no `model` field, so this read usually
-      // finds nothing; it is kept because a host that does carry one answers the
-      // same question without touching the store, and the message-store read in
-      // `resolveRenderedProviderId` remains the primary source.
+      // Kilo 7.8.1's `Session` carried no `model` field, so on that host this read
+      // found nothing and the configured model was the only source. From 7.8.3 it
+      // is real data, and worth keeping: it answers "which model is this session
+      // set to" for a session too new to have any messages, which is exactly the
+      // case the store cannot cover. It stays a fallback -- see
+      // `resolveRenderedProviderId`.
       const providerId = event?.properties?.info?.model?.providerID;
       if (providerId !== undefined) setActiveProviderId(providerId);
       usageStore.refreshSafely(0);
