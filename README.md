@@ -21,23 +21,23 @@ either host's bundle is missing.
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display@latest && npx oc-go-usage-display-init --copy` |
-| One-shot (npx) | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy` |
-| Project scope | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir .opencode` |
+| Persistent (recommended) | `npm install oc-go-usage-display && npx oc-go-usage-display-init --copy` |
+| One-shot (npx) | `npx -p oc-go-usage-display oc-go-usage-display-init --copy` |
+| Project scope | `npx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
-restart). Restart opencode afterwards. `@latest` tracks the newest release; for
-reproducible installs pin an exact version such as
-`oc-go-usage-display@2.1.0`.
+restart). Restart opencode afterwards. Every command here is unversioned on
+purpose, so none of them goes stale; append `@<version>` (e.g.
+`oc-go-usage-display@1.4.3`) when you need a reproducible install.
 
-Alternative — no files copied: declare the versioned package and let opencode
-resolve it at startup:
+Alternative — no files copied: declare the package and let opencode resolve it
+at startup (add `@<version>` to pin it):
 
 ```jsonc
 // opencode.jsonc — server target (go_usage tool)
-{ "plugin": ["oc-go-usage-display@latest"] }
+{ "plugin": ["oc-go-usage-display"] }
 // tui.json — TUI target (sidebar + statusline)
-{ "plugin": [["oc-go-usage-display@latest", { "sidebar": true, "statusline": true }]] }
+{ "plugin": [["oc-go-usage-display", { "sidebar": true, "statusline": true }]] }
 ```
 
 From a checkout: `./install.sh` (copy install; add `--target kilo` for Kilo),
