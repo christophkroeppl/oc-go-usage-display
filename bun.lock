@@ -5,7 +5,7 @@
     "": {
       "name": "oc-go-usage-display",
       "devDependencies": {
-        "@kilocode/plugin": "^7.8.1",
+        "@kilocode/plugin": "^7.8.3",
         "@opencode-ai/plugin": "^1.18.33",
         "@opentui/solid": "0.5.11",
         "@types/node": "^22.0.0",
@@ -147,9 +147,9 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@kilocode/plugin": ["@kilocode/plugin@7.8.1", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@kilocode/sdk": "7.8.1", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.5", "@opentui/keymap": ">=0.4.5", "@opentui/solid": ">=0.4.5" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-c3AROVrc5+GyhpcdAZPqD8VXkWrRMVpADEN9Y/5XtTbBEYbIwPAXQ1SlhcQNSw4eqxkxZQCcj4wi8js554Jv3g=="],
+    "@kilocode/plugin": ["@kilocode/plugin@7.8.3", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@kilocode/sdk": "7.8.3", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.5", "@opentui/keymap": ">=0.4.5", "@opentui/solid": ">=0.4.5" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-R6SZ0BD2g9Ey+CAn8FBkWRL8dZe38Ji04duEVeGx+srciW6vkSWI64m6qg3nxmRTSUX9xslOU9mMRZU1ih4X9Q=="],
 
-    "@kilocode/sdk": ["@kilocode/sdk@7.8.1", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-+Ee1ATCWVpRauaW+6jJGNCWtDCCHvDd319g9XZ27Ml31HMQV4dp9C1f88Jh+WDUaMEsSpAaRybCXN46/XAsR9w=="],
+    "@kilocode/sdk": ["@kilocode/sdk@7.8.3", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-Wk0XaXX+NNezo03k5FEXeWaBF+wE1wtzIFfztkvkXlJ0Grfo8VRQE2MrM7WX1wuLlrAacGrFIFLISYRIpqOmpQ=="],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 
