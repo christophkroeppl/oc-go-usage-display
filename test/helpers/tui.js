@@ -450,3 +450,45 @@ export async function runTuiDisplay({
     session.stop();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Reading a plan row out of a captured pane
+// ---------------------------------------------------------------------------
+
+// Every line in a host's sidebar ends with the host's own edge glyph -- a right
+// border, a scrollbar thumb -- and it is NOT part of our content. It is also not
+// there on every host, or in every panel state, or at every width: opencode draws
+// one inside the container and not on some hosts, which is why an assertion
+// written against the raw line can pass in one place and fail in another with the
+// pane showing exactly what was asked for.
+//
+// So: strip the trailing edge run and the trailing whitespace before matching.
+// Anything anchored to `$` has to go through this, or it is asserting on the
+// host's chrome.
+export function stripSidebarEdge(line) {
+  return line.replace(/[\u2500-\u259f\u25a0-\u25ff]+\s*$/, "").replace(/\s+$/, "");
+}
+
+// One plan window's row: label, then a percent. The meter between them is drawn
+// as boxes, which plain text cannot see, so the grid around them is all there is
+// to assert -- see the meters suite for the geometry that does need colors.
+const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
+
+// The plan rows on screen, edge-stripped.
+export function sidebarPlanRows(screen) {
+  return screen.split("\n").map(stripSidebarEdge).filter((line) => PLAN_ROW.test(line));
+}
+
+// Assert one plan row per window with the expected percent, matched on the
+// stripped lines. Takes `[["5h", "42%"], ...]` so a failure names the window
+// rather than reporting three identical regex misses.
+export function assertPlanRows(screen, expected) {
+  const rows = sidebarPlanRows(screen);
+  for (const [label, percent] of expected) {
+    assert.ok(
+      rows.some((line) => new RegExp(`^\\s*${label}\\s+${percent}\\s*$`).test(line)),
+      `the plan must render ${label} at ${percent}%\n` +
+        `--- sidebar plan rows ---\n${rows.join("\n")}\n--- pane ---\n${screen}`,
+    );
+  }
+}
