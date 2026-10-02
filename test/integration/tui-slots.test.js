@@ -18,6 +18,15 @@
 // mock regression cannot reach the developer's real `~/.local/share/{opencode,
 // kilo}/auth.json` now that both host entries are loaded here.
 //
+// A LIMIT worth stating up front: the stub has no renderer, so the JSX factory
+// throws and the sidebar slot can only ever return null here. Anything decided
+// INSIDE a rendered component -- the mode, the collapse state, and the Go gate --
+// is therefore invisible to this tier, which is exactly why those live in memos
+// and pure predicates (test/unit/sidebar-band.test.js) instead of being read in
+// the slot body. What this tier CAN observe is everything around them: which band
+// was registered, in what order, and -- through the exported `applyHostPanelEnabled`
+// -- what the host-panel switch does for each ownership state.
+//
 // Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
 import { test } from "node:test";
@@ -50,6 +59,11 @@ const tuiModule = await import("../../dist/tui.js");
 const tui = tuiModule.default.tui;
 const kiloTuiModule = await import("../../dist/tui.kilo.js");
 const kiloTui = kiloTuiModule.default.tui;
+const { applyHostPanelEnabled, currentHostPanelEnabled } = await import("../../dist/tui-shared.js");
+const { hostUsagePanelEnabled, ownsIntegratedBand, sidebarBandRenders } = await import(
+  "../../dist/helpers.js"
+);
+const { bandMatrix, GO_PROVIDER, OTHER_PROVIDER } = await import("../helpers/sidebar-matrix.js");
 
 // A stub host that records registrations and disposes like the real one, but
 // depends on nothing. Only the surface the plugin actually uses is provided.
@@ -359,7 +373,7 @@ test("kilo tui factory registers only sidebar_content when statusline is off", a
 // --- sidebar_mode ---
 
 test("kilo tui factory defaults to the integrated band at order 150", async () => {
-  const { api, slotRegistrations, disposers, pluginStates } = makeStubApi();
+  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
 
   try {
     // No option, no env, no kv: the default must be the integrated band.
@@ -369,15 +383,17 @@ test("kilo tui factory defaults to the integrated band at order 150", async () =
       registeredSlotNames(registration).includes("sidebar_content"),
     );
     assert.equal(sidebar?.order, 150);
-    // Integrated mode takes over the host's band, so its panel has to go.
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], false);
+    // Load-time the host panel is left alone. Ownership cannot be judged at load --
+    // there is no session yet -- and switching early painted the host's panel for a
+    // frame before we took the band. The band decides it, the moment it mounts.
+    assert.deepStrictEqual(pluginTransitions, [], "the plugin must not retire a host panel before it can fill it");
   } finally {
     for (const dispose of disposers) dispose();
   }
 });
 
 test("kilo tui factory registers the sidebar at 150 in integrated mode", async () => {
-  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
+  const { api, slotRegistrations, disposers } = makeStubApi();
 
   try {
     await kiloTui(api, { sidebar: true, statusline: true, sidebar_mode: "integrated" });
@@ -391,7 +407,6 @@ test("kilo tui factory registers the sidebar at 150 in integrated mode", async (
       registeredSlotNames(registration).includes("session_prompt_right"),
     );
     assert.equal(statusline?.order, 125);
-    assert.deepStrictEqual(pluginTransitions, [{ id: "internal:kilo-sidebar-usage", enabled: false }]);
   } finally {
     for (const dispose of disposers) dispose();
   }
@@ -410,16 +425,19 @@ test("kilo tui factory leaves the host panel alone in standalone mode", async ()
   }
 });
 
-test("kilo tui factory re-enables a host panel that a previous run disabled", async () => {
-  const { api, disposers, pluginTransitions, pluginStates } = makeStubApi({
-    pluginStates: { "internal:kilo-sidebar-usage": false },
-  });
+test("kilo registers no sidebar band at all when the sidebar toggle is off", async () => {
+  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
 
   try {
-    await kiloTui(api, STANDALONE);
+    await kiloTui(api, { sidebar: false, statusline: true, sidebar_mode: "integrated" });
 
-    assert.deepStrictEqual(pluginTransitions, [{ id: "internal:kilo-sidebar-usage", enabled: true }]);
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true);
+    const names = slotRegistrations.flatMap(registeredSlotNames).sort();
+    assert.deepStrictEqual(names, ["session_prompt_right"], "an unregistered band cannot own anything");
+    assert.deepStrictEqual(
+      pluginTransitions,
+      [],
+      "no band of ours means Kilo's own panel must stay: this was the second empty band",
+    );
   } finally {
     for (const dispose of disposers) dispose();
   }
@@ -500,6 +518,10 @@ test("kilo sidebar_mode option beats env and kv", async () => {
 });
 
 test("the sidebar-mode command flips the persisted value in both directions", async () => {
+  // The persisted value is the contract here; the host-panel switch that follows it
+  // is driven by the band and is covered by the ownership matrix below. This command
+  // writes the KV key and nothing else, so a screen that changes with it is the
+  // band's reactivity, not the command's.
   const { api, kv, commandRegistrations, disposers, pluginStates, pluginTransitions } = makeStubApi();
 
   try {
@@ -513,50 +535,182 @@ test("the sidebar-mode command flips the persisted value in both directions", as
 
     toggle.onSelect();
     assert.equal(kv.get("sidebar_mode"), "standalone");
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true, "switching back re-enables the host panel");
 
     toggle.onSelect();
     assert.equal(kv.get("sidebar_mode"), "integrated");
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], false);
 
-    assert.deepStrictEqual(pluginTransitions, [
-      { id: "internal:kilo-sidebar-usage", enabled: false },
-      { id: "internal:kilo-sidebar-usage", enabled: true },
-      { id: "internal:kilo-sidebar-usage", enabled: false },
-    ]);
+    assert.deepStrictEqual(
+      pluginTransitions,
+      [],
+      "the command persists a mode; it must not switch a host panel on its own",
+    );
+    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true, "and it must not retire one either");
   } finally {
     for (const dispose of disposers) dispose();
   }
 });
 
-test("a host that cannot switch its own panel still initializes", async () => {
-  // Best-effort by contract: the plugin must never reject because Kilo refused
-  // the panel switch, and it must not retry on a state it cannot read.
-  const { api, slotRegistrations, disposers, logs } = makeStubApi();
-  api.plugins.list = () => {
-    throw new Error("no plugin registry");
-  };
-  api.plugins.deactivate = async () => {
-    throw new Error("deactivate refused");
-  };
-  api.client.app.log = async (entry) => {
-    logs.push(entry);
+test("the mode command still returns when the KV store refuses the write", async () => {
+  // Persistence is best-effort: the display followed the signal before the write
+  // was attempted, so a refused write must not turn a palette command into a crash.
+  const { api, commandRegistrations, disposers, logs } = makeStubApi();
+  const kvSet = api.kv.set;
+  api.kv.set = (key, value) => {
+    if (key === "sidebar_mode") throw new Error("kv refused");
+    kvSet(key, value);
   };
 
   try {
     await kiloTui(api, { sidebar_mode: "integrated" });
-
-    const sidebar = slotRegistrations.find((registration) =>
-      registeredSlotNames(registration).includes("sidebar_content"),
-    );
-    assert.equal(sidebar?.order, 150, "the plugin still registers its block");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(
-      logs.some((entry) => /deactivate refused/.test(entry.message)),
-      "a failed panel switch must be reported through the host log, not thrown",
-    );
+    const commands = commandRegistrations.flatMap((register) => register());
+    const toggle = commands.find((command) => command.value === "oc-go-usage-display.toggle-sidebar-mode");
+    assert.ok(toggle);
+    assert.doesNotThrow(() => toggle.onSelect());
   } finally {
     for (const dispose of disposers) dispose();
+  }
+});
+
+// --- the ownership matrix, against a stub host ---
+//
+// The band itself cannot be mounted without a renderer, so what the band does with
+// its decision is the e2e's job. What is provable here is the other half: that
+// every rung of the shared matrix drives the host's panel switch to exactly the
+// state the sidebar owes it, and that a host which refuses the switch degrades to
+// both panels being visible rather than to a throw.
+//
+// `KILO_USAGE_PANEL_PLUGIN_ID` is imported from the built bundle rather than
+// restated, so "the panel we retire" cannot drift from the panel the plugin retires.
+const { KILO_USAGE_PANEL_PLUGIN_ID } = await import("../../dist/shared.js");
+
+const stateOfScenario = (scenario) => ({
+  sidebarEnabled: scenario.sidebar,
+  collapsed: scenario.collapsed,
+  mode: scenario.mode,
+  providerId: scenario.provider,
+});
+
+for (const scenario of bandMatrix()) {
+  test(`band ${scenario.id}: host panel ends up ${scenario.hostPanel ? "on" : "off"}`, async () => {
+    const stub = makeStubApi();
+    try {
+      const applied = await applyHostPanelEnabled(
+        stub.api,
+        KILO_USAGE_PANEL_PLUGIN_ID,
+        hostUsagePanelEnabled(stateOfScenario(scenario)),
+      );
+
+      assert.equal(applied, true, `${scenario.given}: the switch must be applied, not refused`);
+      assert.equal(
+        stub.pluginStates[KILO_USAGE_PANEL_PLUGIN_ID],
+        scenario.hostPanel,
+        `${scenario.given}: ${scenario.why}`,
+      );
+      // And the sidebar side of the same rung, so the two halves are checked in the
+      // same place: the host panel is on exactly when our band is not the only
+      // usage block in it.
+      assert.equal(
+        ownsIntegratedBand(stateOfScenario(scenario)),
+        !scenario.hostPanel,
+        `${scenario.id}: ownership must match what the host panel was told`,
+      );
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}
+
+test("the host panel is switched once, and only when it disagrees", async () => {
+  // Every launch, and every settled state, calls this. A version that wrote the
+  // enable/disable map unconditionally would churn the host's KV store on every
+  // message event.
+  const stub = makeStubApi();
+  try {
+    for (const _ of [1, 2, 3]) {
+      await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, true);
+    }
+    assert.deepStrictEqual(stub.pluginTransitions, [], "already on: nothing to write");
+
+    await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    assert.deepStrictEqual(stub.pluginTransitions, [
+      { id: KILO_USAGE_PANEL_PLUGIN_ID, enabled: false },
+    ]);
+    for (const _ of [1, 2, 3]) {
+      await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    }
+    assert.equal(stub.pluginTransitions.length, 1, "already off: nothing more to write");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("a host that refuses the panel switch leaves both panels up, and says so", async () => {
+  // The failure boundary, both ways: a registry that cannot be read and a switch
+  // that is rejected. Neither may throw, and neither may leave the plugin believing
+  // it owns the band -- which is why the result is returned rather than implied.
+  const refused = makeStubApi();
+  refused.api.plugins.deactivate = async () => {
+    throw new Error("deactivate refused");
+  };
+  refused.api.plugins.list = () => {
+    throw new Error("no plugin registry");
+  };
+
+  try {
+    const applied = await applyHostPanelEnabled(refused.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    assert.equal(applied, false, "a refused switch must report failure");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      refused.logs.some((entry) => /deactivate refused/.test(entry.message)),
+      "the failure must reach the host log, never console",
+    );
+    assert.ok(
+      refused.logs.every((entry) => entry.service === "oc-go-usage-display" && entry.level === "error"),
+      "every log line is the plugin's own error channel",
+    );
+  } finally {
+    for (const dispose of refused.disposers) dispose();
+  }
+
+  const rejected = makeStubApi();
+  rejected.api.plugins.deactivate = async () => false;
+  try {
+    assert.equal(
+      await applyHostPanelEnabled(rejected.api, KILO_USAGE_PANEL_PLUGIN_ID, false),
+      false,
+      "a host that answers false is a failure, not a success",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      rejected.logs.some((entry) => /Could not disable/.test(entry.message)),
+      "and it must be reported",
+    );
+  } finally {
+    for (const dispose of rejected.disposers) dispose();
+  }
+});
+
+test("an unknown plugin id is not something we can switch", async () => {
+  // A host without Kilo's token-usage panel (a future rename, or the panel absent
+  // from this build) must leave the band alone rather than guess: there is nothing
+  // to retire, and claiming otherwise is how a sidebar ends up fighting a panel
+  // that was never there.
+  const stub = makeStubApi({ pluginStates: {} });
+  try {
+    assert.equal(
+      currentHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID),
+      null,
+      "a host that does not report the panel must read as 'unknown', not as 'off'",
+    );
+    assert.equal(await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false), false);
+    assert.deepStrictEqual(stub.pluginTransitions, [], "and nothing may be switched");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      stub.logs.some((entry) => /Could not disable/.test(entry.message)),
+      "the band could not be taken, so the user has to be able to find out why",
+    );
+  } finally {
+    for (const dispose of stub.disposers) dispose();
   }
 });
 

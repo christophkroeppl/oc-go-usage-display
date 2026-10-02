@@ -32,7 +32,7 @@ const ALLOWED_IMPORTS = new Set([
 // helper module would otherwise exempt everything that helper does. These are
 // therefore held to a stronger rule than the dist imports -- they must have no
 // imports at all, which leaves nothing for them to reach for.
-const PURE_HELPERS = new Set(["../helpers/ladder.js"]);
+const PURE_HELPERS = new Set(["../helpers/ladder.js", "../helpers/sidebar-matrix.js"]);
 
 const FORBIDDEN_PATTERNS = [
   [/\brequire\s*\(/, "CommonJS require"],
