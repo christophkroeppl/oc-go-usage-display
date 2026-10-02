@@ -27,8 +27,9 @@ either host's bundle is missing.
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
 restart). Restart opencode afterwards. Every command here is unversioned on
-purpose, so none of them goes stale; append `@<version>` (e.g.
-`oc-go-usage-display@1.4.3`) when you need a reproducible install.
+purpose, so none of them goes stale. If you need a reproducible install, keep
+the resolved version in your own `package-lock.json` instead of pinning one
+here.
 
 Alternative — no files copied: declare the package and let opencode resolve it
 at startup (add `@<version>` to pin it):
