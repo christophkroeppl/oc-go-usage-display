@@ -143,7 +143,10 @@ import {
   readModelDisplayName,
   readProviderDisplayNames,
   reactiveChild,
+  registerSurfaceToggleCommands,
   resolveSurfaceSelection,
+  TOGGLE_COMMAND_CATEGORY,
+  TOGGLE_COMMAND_PREFIX,
   EVENT_TTL_MS,
   POLL_INTERVAL_MS,
 } from "./tui-shared.js";
@@ -718,15 +721,18 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   // The statusline: the plan on one line, next to the host's own context readout.
   // Go-only in both modes (see `statuslineRenders`), and reactive for the same
   // reason as the band -- a gate read in the slot body would never re-arm.
+  //
+  // The gate is returned as a FUNCTION CHILD, not as `<Show when={...}>`: this
+  // bundle is compiled by esbuild's automatic JSX rather than Solid's compiler, so
+  // `when={visible()}` is an ordinary value evaluated once, and folding the
+  // statusline would persist the flag and keep the line on screen -- which is
+  // exactly the regression. A function child is the one form the renderer
+  // re-evaluates (`insertExpression`), so the fold takes effect immediately.
   function KiloStatuslineSlot(props: { sessionId: string }) {
     const visible = createMemo(
       () => statuslineRenders(bandState(props.sessionId, collapse.isStatuslineCollapsed())),
     );
-    return (
-      <Show when={visible()} fallback={null}>
-        <GoStatusline snapshot={usageStore.snapshot} />
-      </Show>
-    );
+    return reactiveChild(() => (visible() ? <GoStatusline snapshot={usageStore.snapshot} /> : null));
   }
 
   if (surfaces.sidebar) {
@@ -781,29 +787,21 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 
   // `api.command` is a deprecated legacy shim that hosts may omit; guard so
   // the plugin still initializes and disposes safely without it.
+  //
+  // The two surface entries are built by the shared layer so both hosts label them
+  // identically, and each label names the effect it will have. The sidebar mode
+  // entry is Kilo's alone and stays an action: it swaps one drawing for another
+  // rather than showing or hiding anything.
   let unregisterToggleCommand: () => void = () => {};
   try {
-    const unregister = api.command?.register(() => [
-      {
-        title: "Go usage: toggle sidebar",
-        value: "oc-go-usage-display.toggle-sidebar",
-        category: "Go",
-        onSelect: () => collapse.toggleSidebar(),
-      },
-      {
-        title: "Go usage: toggle statusline",
-        value: "oc-go-usage-display.toggle-statusline",
-        category: "Go",
-        onSelect: () => collapse.toggleStatusline(),
-      },
+    unregisterToggleCommand = registerSurfaceToggleCommands(api, collapse, () => [
       {
         title: "Go usage: toggle sidebar mode",
-        value: "oc-go-usage-display.toggle-sidebar-mode",
-        category: "Go",
+        value: `${TOGGLE_COMMAND_PREFIX}sidebar-mode`,
+        category: TOGGLE_COMMAND_CATEGORY,
         onSelect: () => toggleSidebarMode(),
       },
     ]);
-    if (typeof unregister === "function") unregisterToggleCommand = unregister;
   } catch {
     // Legacy command registration is optional; ignore failures.
   }

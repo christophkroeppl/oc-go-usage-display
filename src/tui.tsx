@@ -69,6 +69,7 @@ import {
   meterSeverityForPercent,
   modelDisplayName,
   shortModelName,
+  statuslineRenders,
   weightGoModels,
 } from "./helpers.js";
 import type { GoModelWeight } from "./helpers.js";
@@ -92,6 +93,7 @@ import {
   makeProviderResolver,
   readModelDisplayName,
   reactiveChild,
+  registerSurfaceToggleCommands,
   resolveSurfaceSelection,
 } from "./tui-shared.js";
 import { EVENT_TTL_MS, POLL_INTERVAL_MS } from "./tui-shared.js";
@@ -273,6 +275,22 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
+  // The statusline band. Reactive for the same reason as Kilo's: a slot renderer
+  // is called once per mount, and this bundle is compiled by esbuild's automatic
+  // JSX rather than Solid's compiler, so both conditions live in a memo AND the
+  // region is returned as a function child (`reactiveChild`) -- a plain
+  // `when={visible()}` would be evaluated once and the fold would persist the flag
+  // without taking the line off screen.
+  function OpencodeStatuslineSlot(props: { sessionId: string }) {
+    const visible = createMemo(() =>
+      statuslineRenders({
+        collapsed: collapse.isStatuslineCollapsed(),
+        providerId: resolveActiveProviderId(props.sessionId),
+      }),
+    );
+    return reactiveChild(() => (visible() ? <GoStatusline snapshot={usageStore.snapshot} /> : null));
+  }
+
   if (surfaces.sidebar) {
     // Host-owned slot: `register` returns an id but the SDK exposes no
     // unregister API, so there is nothing to dispose here (the slot dies
@@ -312,9 +330,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (collapse.isStatuslineCollapsed()) return null;
-              return <GoStatusline snapshot={usageStore.snapshot} />;
+              // The fold and the provider gate are read INSIDE the band, not here:
+              // the host calls a slot renderer once per mount, so a condition read
+              // in this body is latched for the life of the band and the toggle
+              // would only take effect on the next mount.
+              return <OpencodeStatuslineSlot sessionId={props.session_id} />;
             } catch {
               return null;
             }
@@ -327,24 +347,14 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   }
 
   // `api.command` is a deprecated legacy shim that hosts may omit; guard so
-  // the plugin still initializes and disposes safely without it.
+  // the plugin still initializes and disposes safely without it. The entries come
+  // from the shared layer so both hosts label them identically, and each label
+  // names the effect it will have; the shared registrar also hands them back after
+  // every fold, because a host that copies `title` on registration would otherwise
+  // keep advertising the old one.
   let unregisterToggleCommand: () => void = () => {};
   try {
-    const unregister = api.command?.register(() => [
-      {
-        title: "Go usage: toggle sidebar",
-        value: "oc-go-usage-display.toggle-sidebar",
-        category: "Go",
-        onSelect: () => collapse.toggleSidebar(),
-      },
-      {
-        title: "Go usage: toggle statusline",
-        value: "oc-go-usage-display.toggle-statusline",
-        category: "Go",
-        onSelect: () => collapse.toggleStatusline(),
-      },
-    ]);
-    if (typeof unregister === "function") unregisterToggleCommand = unregister;
+    unregisterToggleCommand = registerSurfaceToggleCommands(api, collapse);
   } catch {
     // Legacy command registration is optional; ignore failures.
   }

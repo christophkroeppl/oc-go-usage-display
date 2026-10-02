@@ -80,12 +80,16 @@ or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
 ## Display toggles
 
 Three axes, all defaulting to on/integrated. Each is a command in the palette,
-persisted per surface, and it applies to whichever sidebar mode is active:
+persisted per surface, and it applies to whichever sidebar mode is active.
+
+The two on/off axes label themselves with the effect they will have, so the entry
+always says which way it goes: `Go usage: hide statusline` becomes
+`Go usage: show statusline` once the statusline is folded.
 
 | Axis | Command | Also settable as |
 | ---- | ------- | ---------------- |
-| sidebar on/off | `Go usage: toggle sidebar` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
-| statusline on/off | `Go usage: toggle statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
+| sidebar on/off | `Go usage: hide sidebar` / `Go usage: show sidebar` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
+| statusline on/off | `Go usage: hide statusline` / `Go usage: show statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
 | display mode (Kilo) | `Go usage: toggle sidebar mode` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
 
 ```json
