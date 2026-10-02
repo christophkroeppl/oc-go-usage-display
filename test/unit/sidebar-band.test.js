@@ -231,8 +231,10 @@ test("the provider read skips over messages that name nobody", () => {
 
 test("the provider read wins over the configured model", () => {
   // The store beats the config default because the config default is static: it
-  // cannot report a model switch, and on Kilo 7.8.1 `Session` has no `model`
-  // field, so the message store is the only reactive answer either host gives.
+  // cannot report a model switch. It also beats `Session.model` (Kilo 7.8.3+),
+  // because the band exists to show what ran -- a model picked but not yet used
+  // has no rows in the models table to weight and would claim the band for
+  // nothing.
   const messages = [
     { role: "user", model: { providerID: GO_PROVIDER, modelID: "mimo" } },
     { role: "assistant", providerID: GO_PROVIDER, modelID: "mimo" },
@@ -242,4 +244,12 @@ test("the provider read wins over the configured model", () => {
   // The fallback this outranks is the config-level default, and it is what the
   // same session would have reported before any message existed.
   assert.notEqual(resolved, OTHER_PROVIDER);
+});
+
+test("a message store that is empty falls through rather than claiming Go", () => {
+  // The gap the store cannot cover: a session too new to have any messages. The
+  // caller falls back to `Session.model` (Kilo 7.8.3+) and then to the configured
+  // model, so "no messages" must read as "nobody" and not as a default.
+  assert.equal(providerIdFromMessages([]), undefined);
+  assert.equal(providerIdFromMessages(undefined), undefined);
 });
