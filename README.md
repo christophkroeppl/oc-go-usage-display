@@ -28,7 +28,7 @@ either host's bundle is missing.
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
 restart). Restart opencode afterwards. `@latest` tracks the newest release; for
 reproducible installs pin an exact version such as
-`oc-go-usage-display@2.0.1`.
+`oc-go-usage-display@2.1.0`.
 
 Alternative — no files copied: declare the versioned package and let opencode
 resolve it at startup:
