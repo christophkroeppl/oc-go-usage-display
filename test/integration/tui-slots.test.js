@@ -127,6 +127,7 @@ function makeStubApi({
   const kv = new Map();
   const slotRegistrations = [];
   const commandRegistrations = [];
+  const commandDisposals = [];
   const eventRegistrations = [];
   const disposers = [];
   const pluginTransitions = [];
@@ -162,7 +163,13 @@ function makeStubApi({
     command: {
       register(callback) {
         commandRegistrations.push(callback);
-        return () => {};
+        // The plugin hands its entries back after every fold (a host that copies
+        // `title` on registration would otherwise keep advertising the old
+        // label), so a registration is disposable and its disposal has to be
+        // observable -- otherwise duplicated entries would be invisible here.
+        return () => {
+          commandDisposals.push(callback);
+        };
       },
     },
     event: {
@@ -224,7 +231,7 @@ function makeStubApi({
     },
   };
 
-  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls, messageReads };
+  return { api, kv, logs, slotRegistrations, commandRegistrations, commandDisposals, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls, messageReads };
 }
 
 // Slot names captured by one `slots.register` call.
@@ -788,3 +795,239 @@ test("the sidebar render function never throws into the host", async () => {
     }
   }
 });
+
+// --- the settings-menu entries -------------------------------------------------
+//
+// The two foldable surfaces are reached through the command palette, so this tier
+// owns everything about those entries except the drawing itself (which needs a
+// renderer, and lives in the e2e tier): that they exist on BOTH hosts, that their
+// labels state the effect they will have, that the label tracks the state, and
+// that selecting one folds only the surface it names.
+//
+// The label is a getter, so the interesting assertion is that the host may hold
+// the array it was given for the whole session: these tests build the entries
+// ONCE and re-read the same objects after a toggle, which is the only arrangement
+// under which a stale label would actually reach a user.
+
+const SURFACE_ENTRIES = ["oc-go-usage-display.toggle-sidebar", "oc-go-usage-display.toggle-statusline"];
+const ENTRY_SURFACE = new Map([
+  ["oc-go-usage-display.toggle-sidebar", "sidebar"],
+  ["oc-go-usage-display.toggle-statusline", "statusline"],
+]);
+
+function registeredCommands(stub) {
+  // The CURRENT registration, which is the last one: the plugin hands its entries
+  // back after every fold so a host that copied `title` on registration still
+  // sees the new label.
+  assert.ok(stub.commandRegistrations.length >= 1, "the menu must be registered");
+  return stub.commandRegistrations[stub.commandRegistrations.length - 1]();
+}
+
+function entryFor(commands, value) {
+  const found = commands.find((command) => command.value === value);
+  assert.ok(found, `the menu must offer ${value}`);
+  return found;
+}
+
+for (const host of ["opencode", "kilo"]) {
+  const start = host === "opencode" ? tui : kiloTui;
+  const options = host === "opencode" ? { sidebar: true, statusline: true } : STANDALONE;
+
+  test(`${host}: the menu entries name the effect they will have`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+
+      for (const value of SURFACE_ENTRIES) {
+        const surface = ENTRY_SURFACE.get(value);
+        assert.equal(entryFor(commands, value).title, `Go usage: hide ${surface}`, value);
+        assert.equal(entryFor(commands, value).category, "Go");
+      }
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: the labels follow the state, on entries built once`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+      const sidebar = entryFor(commands, SURFACE_ENTRIES[0]);
+      const statusline = entryFor(commands, SURFACE_ENTRIES[1]);
+
+      sidebar.onSelect();
+      assert.equal(sidebar.title, "Go usage: show sidebar", "its own entry renames");
+      assert.equal(statusline.title, "Go usage: hide statusline", "the other one does not");
+
+      statusline.onSelect();
+      assert.equal(statusline.title, "Go usage: show statusline");
+
+      sidebar.onSelect();
+      assert.equal(sidebar.title, "Go usage: hide sidebar");
+      assert.equal(statusline.title, "Go usage: show statusline", "unfolding one must not touch the other");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: folding the statusline persists under its own key only`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const statusline = entryFor(registeredCommands(stub), SURFACE_ENTRIES[1]);
+
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), false);
+      statusline.onSelect();
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), true, "the statusline fold is persisted");
+      assert.equal(
+        stub.api.kv.get("collapsed_sidebar", false),
+        false,
+        "and the sidebar's key is untouched: two axes, two keys",
+      );
+
+      statusline.onSelect();
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), false, "and it comes back off");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: a persisted fold is what the menu offers to undo`, async () => {
+    const stub = makeStubApi();
+    stub.kv.set("collapsed_statusline", true);
+    stub.kv.set("collapsed_sidebar", true);
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+      assert.equal(entryFor(commands, SURFACE_ENTRIES[0]).title, "Go usage: show sidebar");
+      assert.equal(entryFor(commands, SURFACE_ENTRIES[1]).title, "Go usage: show statusline");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: the entry ids stay stable across folds`, async () => {
+    // A label may move; an id may not. The id is what a host binds a key to and
+    // dispatches on, so a label that leaked into it would break every binding.
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const before = registeredCommands(stub).map((command) => `${command.value}::${command.title}`);
+      entryFor(registeredCommands(stub), SURFACE_ENTRIES[1]).onSelect();
+      const after = registeredCommands(stub).map((command) => `${command.value}::${command.title}`);
+
+      assert.deepStrictEqual(
+        after.map((entry) => entry.split("::")[0]),
+        before.map((entry) => entry.split("::")[0]),
+      );
+      assert.notDeepStrictEqual(after, before, "while the labels did move");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}
+
+test("both hosts offer the same two entries, with the same labels", async () => {
+  const stub = makeStubApi();
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const opencodeEntries = registeredCommands(stub).map((command) => `${command.value}::${command.category}`);
+    for (const dispose of stub.disposers) dispose();
+
+    const kiloStub = makeStubApi();
+    await kiloTui(kiloStub.api, STANDALONE);
+    const kiloEntries = registeredCommands(kiloStub)
+      .filter((command) => SURFACE_ENTRIES.includes(command.value))
+      .map((command) => `${command.value}::${command.category}`);
+
+    // A shared implementation is only a shared implementation if it produces the
+    // same menu on both hosts; Kilo's own mode entry is the one allowed extra.
+    assert.deepStrictEqual(kiloEntries, opencodeEntries);
+
+    for (const dispose of kiloStub.disposers) dispose();
+  } catch (error) {
+    for (const dispose of stub.disposers) dispose();
+    throw error;
+  }
+});
+
+test("kilo keeps its own mode entry, and it is not one of the surface pair", async () => {
+  const stub = makeStubApi();
+  try {
+    await kiloTui(stub.api, STANDALONE);
+    const commands = registeredCommands(stub);
+    const mode = entryFor(commands, "oc-go-usage-display.toggle-sidebar-mode");
+
+    // The mode entry swaps one drawing for another rather than showing or hiding
+    // anything, so it stays an action and does not join the Show/Hide pair.
+    assert.equal(mode.title, "Go usage: toggle sidebar mode");
+    assert.equal(SURFACE_ENTRIES.includes(mode.value), false);
+    assert.equal(commands.length, 3, "two surfaces plus the mode");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("opencode registers no mode entry, because it has no sidebar_mode", async () => {
+  const stub = makeStubApi();
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const commands = registeredCommands(stub);
+    assert.deepStrictEqual(
+      commands.map((command) => command.value),
+      SURFACE_ENTRIES,
+    );
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+for (const host of ["opencode", "kilo"]) {
+  const start = host === "opencode" ? tui : kiloTui;
+  const options = host === "opencode" ? { sidebar: true, statusline: true } : STANDALONE;
+
+  test(`${host}: a fold hands the menu back, and retires the old entries`, async () => {
+    // A host that copies `title` when it registers an entry would keep
+    // advertising "hide statusline" forever otherwise -- which is exactly what
+    // Kilo's palette does, and is why the label has to be re-registered and not
+    // merely recomputed.
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      assert.equal(stub.commandRegistrations.length, 1, "one registration to begin with");
+
+      entryFor(registeredCommands(stub), "oc-go-usage-display.toggle-statusline").onSelect();
+
+      assert.equal(stub.commandRegistrations.length, 2, "a fold re-registers the entries");
+      assert.deepStrictEqual(
+        stub.commandDisposals,
+        [stub.commandRegistrations[0]],
+        "and disposes the previous ones, so the menu cannot show a command twice",
+      );
+      const after = entryFor(registeredCommands(stub), "oc-go-usage-display.toggle-statusline");
+      assert.equal(after.title, "Go usage: show statusline", "and the label followed the fold");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: disposal tears down the current registration only`, async () => {
+    const stub = makeStubApi();
+    try {
+      const before = stub.disposers.length;
+      await start(stub.api, options);
+      const last = stub.commandRegistrations[stub.commandRegistrations.length - 1];
+      for (const dispose of stub.disposers.slice(before)) dispose();
+
+      assert.deepStrictEqual(
+        stub.commandDisposals,
+        [last],
+        "onDispose must retire the entries the host still holds",
+      );
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}

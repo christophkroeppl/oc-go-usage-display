@@ -393,6 +393,117 @@ export function createCollapseState(api: UsagePanelApi): CollapseState {
 }
 
 // ---------------------------------------------------------------------------
+// Settings-menu entries
+// ---------------------------------------------------------------------------
+
+// The two surfaces a user folds independently, named the way the menu names them.
+export type ToggleSurface = "sidebar" | "statusline";
+
+// The label an entry carries RIGHT NOW. An entry that always reads "toggle
+// statusline" makes the user remember what state they are in; naming the effect
+// ("Go usage: hide statusline" / "Go usage: show statusline") states what pressing
+// it will do, so the menu is readable without remembering anything. Pure and
+// exported so the exact strings are pinned rather than only visible in a
+// screenshot.
+export function toggleCommandTitle(surface: ToggleSurface, collapsed: boolean): string {
+  return `Go usage: ${collapsed ? "show" : "hide"} ${surface}`;
+}
+
+export const TOGGLE_COMMAND_PREFIX = "oc-go-usage-display.toggle-";
+
+export function toggleCommandValue(surface: ToggleSurface): string {
+  return `${TOGGLE_COMMAND_PREFIX}${surface}`;
+}
+
+export const TOGGLE_COMMAND_CATEGORY = "Go";
+
+// The structural shape of a host command entry, so this layer does not have to
+// import either host's SDK to describe one. A getter satisfies a plain `string`
+// property, which is why this stays assignable to both `TuiCommand` shapes.
+export type SurfaceToggleCommand = {
+  readonly title: string;
+  readonly value: string;
+  readonly category: string;
+  onSelect: () => void;
+};
+
+// One entry per foldable surface, labelled with what selecting it will do.
+//
+// `title` is a getter, so the label is computed when the host reads it rather than
+// when the factory ran. That is necessary but NOT sufficient on its own: Kilo's
+// palette takes a copy of each entry's title as it registers it, so a folded
+// surface kept advertising "hide". `registerSurfaceToggleCommands` therefore hands
+// the entries back after every fold, which is what makes the label follow the
+// state on a host that snapshots.
+export function surfaceToggleCommands(
+  collapse: CollapseState,
+  afterToggle?: () => void,
+): SurfaceToggleCommand[] {
+  return (["sidebar", "statusline"] as const).map((surface) => {
+    const toggle = surface === "sidebar" ? collapse.toggleSidebar : collapse.toggleStatusline;
+    return {
+      get title(): string {
+        return toggleCommandTitle(
+          surface,
+          surface === "sidebar" ? collapse.isSidebarCollapsed() : collapse.isStatuslineCollapsed(),
+        );
+      },
+      value: toggleCommandValue(surface),
+      category: TOGGLE_COMMAND_CATEGORY,
+      onSelect: () => {
+        toggle();
+        afterToggle?.();
+      },
+    };
+  });
+}
+
+// The smallest `api.command` this needs. Optional on the host too: it is a
+// deprecated shim and a host may omit it entirely, in which case there is no menu
+// to keep honest and every step here degrades to a no-op.
+export type ToggleCommandHost = {
+  command?: {
+    register: (callback: () => SurfaceToggleCommand[]) => () => void;
+  };
+};
+
+// Register the menu entries, and keep their labels true.
+//
+// Two mechanisms, because a host may do either: `title` is a getter (cheap, and
+// correct if the host reads the property when it draws) and the entries are
+// re-registered after every fold (correct if the host copied the title when it
+// took the entry, which is what Kilo's palette does). Re-registering is the belt to
+// the getter's braces, and it costs one call per user-initiated fold.
+//
+// Returns the disposer for the CURRENT registration, which is what the host's
+// `onDispose` should call.
+export function registerSurfaceToggleCommands(
+  host: ToggleCommandHost,
+  collapse: CollapseState,
+  extra?: () => SurfaceToggleCommand[],
+): () => void {
+  let disposeCurrent: () => void = () => {};
+
+  const register = (): void => {
+    // Drop the previous entries first: the host accumulates registrations, and
+    // leaving them behind would show the same command twice.
+    disposeCurrent();
+    try {
+      const unregister = host.command?.register(() => [
+        ...surfaceToggleCommands(collapse, register),
+        ...(extra?.() ?? []),
+      ]);
+      disposeCurrent = typeof unregister === "function" ? unregister : () => {};
+    } catch {
+      // Legacy command registration is optional; ignore failures.
+    }
+  };
+
+  register();
+  return () => disposeCurrent();
+}
+
+// ---------------------------------------------------------------------------
 // Provider gate
 // ---------------------------------------------------------------------------
 

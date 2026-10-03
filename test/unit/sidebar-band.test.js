@@ -171,14 +171,45 @@ test("the statusline is Go-only in both modes, because it replaces nothing", () 
   for (const scenario of MATRIX) {
     const state = stateOf(scenario);
     assert.equal(
-      statuslineRenders(state),
+      statuslineRenders({ ...state, collapsed: false }),
       scenario.provider === GO_PROVIDER,
       `${scenario.id}: the statusline is the plan on one line, so it stays Go-only`,
     );
     // The sidebar toggle does not steer the statusline, and vice versa: they are
-    // separate axes with separate persisted keys.
-    assert.equal(statuslineRenders({ ...state, sidebarEnabled: false }), statuslineRenders(state));
+    // separate axes with separate persisted keys. That independence is a property
+    // of WHICH flag the caller hands in -- each surface passes its own -- so it is
+    // asserted here by handing in an expanded statusline and seeing the sidebar's
+    // fold make no difference.
+    assert.equal(statuslineRenders({ ...state, sidebarEnabled: false, collapsed: false }), statuslineRenders({ ...state, collapsed: false }));
   }
+});
+
+test("folding the statusline hides it, which is what its own toggle does", () => {
+  // The regression: `statuslineRenders` dropped the `collapsed` field it was
+  // given, so `collapsed_statusline` was persisted and governed nothing and the
+  // statusline could not be turned off. The flag it reads is the STATUSLINE's own
+  // -- callers pass `isStatuslineCollapsed()` -- which is why this can be pinned
+  // without the sidebar's axis appearing anywhere.
+  for (const scenario of MATRIX) {
+    const state = { ...stateOf(scenario), collapsed: false };
+    assert.equal(
+      statuslineRenders({ ...state, collapsed: true }),
+      false,
+      `${scenario.id}: a folded statusline draws nothing, Go session or not`,
+    );
+    assert.equal(
+      statuslineRenders({ ...state, collapsed: false }),
+      scenario.provider === GO_PROVIDER,
+      `${scenario.id}: and unfolding brings back exactly the Go-only answer`,
+    );
+  }
+
+  // The axis is genuinely separate: a folded statusline and an unfolded sidebar
+  // are a real, reachable combination, and neither one implies the other.
+  const goSession = { sidebarEnabled: true, collapsed: false, mode: "integrated", providerId: GO_PROVIDER };
+  assert.equal(statuslineRenders({ ...goSession, collapsed: false }), true);
+  assert.equal(statuslineRenders({ ...goSession, collapsed: true }), false);
+  assert.equal(sidebarBandRenders(goSession), true, "the sidebar is untouched by the statusline's fold");
 });
 
 // --- which provider a session is really on ------------------------------------

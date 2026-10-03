@@ -399,8 +399,19 @@ export function sidebarBandRenders(state: SidebarBandState): boolean {
 // The statusline is the plan on one line, so it stays Go-only in both modes --
 // unlike the sidebar, it replaces nothing and hands nothing back. It is here so
 // the two surfaces cannot disagree about which sessions are Go.
-export function statuslineRenders(state: SidebarBandState): boolean {
-  return state.providerId === GO_PROVIDER_ID;
+//
+// `collapsed` is the fold flag OF THE STATUSLINE, and that is the whole reason the
+// two surfaces stay independent: each caller hands this function its OWN surface's
+// flag, so folding the sidebar cannot hide the statusline and folding the
+// statusline cannot unmake the sidebar. Two persisted keys, two axes.
+//
+// It used to be dropped here, which is why the statusline could not be turned off:
+// the Kilo entry passed `isStatuslineCollapsed()` in and this ignored it, so the
+// flag was persisted (`collapsed_statusline`) and had no effect on anything. The
+// sidebar toggle is still not allowed to steer the statusline -- that independence
+// lives in WHICH flag the caller passes, not in ignoring the one it was given.
+export function statuslineRenders(state: Pick<SidebarBandState, "collapsed" | "providerId">): boolean {
+  return !state.collapsed && state.providerId === GO_PROVIDER_ID;
 }
 
 export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
