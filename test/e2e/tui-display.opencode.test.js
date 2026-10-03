@@ -34,11 +34,14 @@ import { findOpencodeBinary } from "../helpers/opencode.js";
 import * as fakeProvider from "../helpers/fake-provider.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
+  assertPlanRows,
   assertSidebarOrder,
   hasTmux,
   hostVersionSkipReason,
   makeTuiEnv,
   runTuiDisplay,
+  sidebarPlanRows,
+  stripSidebarEdge,
   writeTuiHostConfig,
 } from "../helpers/tui.js";
 
@@ -69,9 +72,8 @@ const MOCK_SIDEBAR_SETTLED = /Go Usage[\s\S]*Top Go models[\s\S]*\b5h\b[\s\S]*\d
 // trailing glyph removed, or a grid assertion silently finds nothing on a screen
 // that is showing exactly what it asked for (it did: three plan rows, zero
 // matches).
-const stripEdge = (line) => line.replace(/[\u2500-\u259f\u25a0-\u25ff]+\s*$/, "").replace(/\s+$/, "");
-const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
-const planRows = (screen) => screen.split("\n").map(stripEdge).filter((line) => PLAN_ROW.test(line));
+const stripEdge = stripSidebarEdge;
+const planRows = sidebarPlanRows;
 
 function assertPlanGrid(screen) {
   const rows = planRows(screen);
@@ -114,9 +116,14 @@ test(
       // the soonest reset is its own line under the header.
       assert.match(screen, /5h resets in 2h5m/, "sidebar must render the next reset");
       assertPlanGrid(screen);
-      assert.match(screen, /^\s*5h\s+42%\s*$/m, "sidebar must render the rolling row");
-      assert.match(screen, /^\s*7d\s+15%\s*$/m, "sidebar must render the weekly row");
-      assert.match(screen, /^\s*30d\s+61%\s*$/m, "sidebar must render the monthly row");
+      // On the edge-stripped rows, not the raw pane: opencode draws a right-border
+      // glyph at the sidebar's edge, and an assertion anchored to `$` against the
+      // raw line fails on a pane showing all three rows correctly.
+      assertPlanRows(screen, [
+        ["5h", "42%"],
+        ["7d", "15%"],
+        ["30d", "61%"],
+      ]);
       // No assistant messages means no weights, and the section says so
       // instead of printing an empty ranking or a zero.
       assert.match(screen, /Top Go models/, "the model section must render");

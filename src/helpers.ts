@@ -243,6 +243,58 @@ export type ProviderSource = {
   session?: { get?: ((sessionID: string) => { model?: { providerID?: unknown } | undefined } | undefined) | undefined } | undefined;
 };
 
+// One host message, reduced to the field that says which provider it ran on.
+// Structural on purpose: the two hosts disagree about the field name —
+// Kilo's `AssistantMessage` flattens `providerID` while its `UserMessage` nests
+// it under `model.providerID` — and this layer must not depend on either SDK's
+// types to read both.
+export type ProviderBearingMessage = {
+  providerID?: unknown;
+  model?: { providerID?: unknown } | undefined;
+};
+
+// The provider a session is really running, taken from the NEWEST message that
+// carries one.
+//
+// The message store is the PRIMARY source on every Kilo version we support, and
+// the reason is what the band needs rather than what the host happens to expose:
+// the models table is a fold over what ran in this session, so a provider that
+// appears in the store has rows to weight and a `Go share` to hang off, while a
+// provider only named by `Session.model` has neither. It is also the source that
+// re-reads -- it is a live Solid store, and unlike `Session.model` it reflects
+// the model a step actually ran under, including a `kilo-auto/…` model that the
+// host routed to a different provider.
+//
+// Version history, because the choice looks arbitrary otherwise:
+//   Kilo <= 7.8.1  `Session` had no `model` field and the SDK had no model-switch
+//                  event, so the store was the only reactive answer available.
+//   Kilo 7.8.3     `Session.model` and a `session.next.model.switched` event
+//                  appeared. Both are kept as fallbacks (see `resolveProviderId`),
+//                  but neither outranks the store: a model picked but not yet run
+//                  would claim the band for a table with no rows in it.
+//
+// Walking backwards means a trailing message on the newly picked provider wins
+// over older ones, which is what makes a model switch follow through once the
+// user has actually used it.
+//
+// A store that throws or returns a non-array is not a reason to hide anything:
+// the caller falls through to the configured model.
+export function providerIdFromMessages(
+  messages: readonly ProviderBearingMessage[] | undefined,
+): string | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message: unknown = messages[index];
+    if (message === null || typeof message !== "object") continue;
+    const row = message as ProviderBearingMessage;
+    const flat = toNonEmptyString(row.providerID);
+    if (flat !== null) return flat;
+    const nested = toNonEmptyString(row.model?.providerID);
+    if (nested !== null) return nested;
+  }
+  return undefined;
+}
+
 export function providerIdFromModel(model: unknown): string | undefined {
   if (typeof model !== "string" || model.length === 0) return undefined;
   const provider = model.split("/")[0];
@@ -268,6 +320,98 @@ export function resolveProviderId(
     // Fall through to the event-signal fallback.
   }
   return fallback;
+}
+
+// ---------------------------------------------------------------------------
+// Which band our sidebar owns
+// ---------------------------------------------------------------------------
+//
+// One decision, split in two, because Kilo's sidebar has a band we may take
+// over: integrated mode registers in the host's own token-usage band (order
+// 150) and switches that panel off, so "do we draw?" and "must the host panel
+// be on?" are different questions with different answers.
+//
+// The two answers come from one rule: we are the only usage block in the band
+// exactly while we are drawing in it. So the host panel goes away only when
+// `ownsIntegratedBand`, and every way of not drawing -- no sidebar, collapsed,
+// standalone mode, or a session on a non-Go model -- leaves Kilo's own widget on
+// screen. Collapsing is in that list because a collapsed band still occupies the
+// space it registered for; it is also the one case that would otherwise have been
+// an empty band before this rule existed.
+//
+// The mode decides WHAT the band draws and WHOSE panel is retired, never WHETHER
+// we draw: `sidebarBandRenders` does not read it. That is the README's promise
+// ("the mode decides what it draws, not whether it is there") as an invariant, and
+// it is why the two modes cannot drift apart in which sessions they answer to.
+//
+//   integrated + Go provider     -> our panel draws, Kilo's does not.
+//   integrated + any other model -> Kilo's panel draws. Ours is not a lossless
+//                                   fork of it (it has no `Terminal Bench 2.0`
+//                                   section and no `Generation speed` row), so
+//                                   the honest thing when we have no Go model to
+//                                   meter is to hand the band back rather than
+//                                   replace a panel we cannot fully reproduce.
+//   standalone + Go provider     -> our own band above Kilo's panel, both on screen.
+//   standalone + any other model -> Kilo's panel alone; the standalone block IS
+//                                   the Go plan, so a non-Go session has no use
+//                                   for it.
+//
+// `sidebarEnabled` is the `sidebar` surface toggle: are we registered in a band
+// at all? `collapsed` is the user's fold toggle.
+//
+// Pure and exhaustive, so the whole matrix is testable without a host. The TUI
+// entry reads these inside memos, never once at slot-mount: the host invokes a
+// slot renderer exactly once per mount, so a condition read in the slot body is
+// latched for the life of the band.
+export type SidebarBandState = {
+  sidebarEnabled: boolean;
+  collapsed: boolean;
+  mode: SidebarMode;
+  providerId: string | undefined;
+};
+
+export function ownsIntegratedBand(state: SidebarBandState): boolean {
+  return (
+    state.sidebarEnabled &&
+    !state.collapsed &&
+    state.mode === "integrated" &&
+    state.providerId === GO_PROVIDER_ID
+  );
+}
+
+// The host's panel is on unless we are filling the space it would have used.
+// This is the single writer of that switch, which is what keeps the empty band
+// from coming back: no sidebar, standalone mode, a collapsed band or a non-Go
+// session all mean Kilo's own widget is on screen.
+export function hostUsagePanelEnabled(state: SidebarBandState): boolean {
+  return !ownsIntegratedBand(state);
+}
+
+// The band draws for a Go session and not otherwise, in either mode. Note what is
+// NOT here: `mode`. The standalone block is the Go plan, and the integrated panel
+// stands in for Kilo's own token usage, but both are only about Go usage -- so
+// they answer the same question about which sessions they serve, and a session
+// that gets neither is one where Kilo's own widget is on screen instead.
+export function sidebarBandRenders(state: SidebarBandState): boolean {
+  return state.sidebarEnabled && !state.collapsed && state.providerId === GO_PROVIDER_ID;
+}
+
+// The statusline is the plan on one line, so it stays Go-only in both modes --
+// unlike the sidebar, it replaces nothing and hands nothing back. It is here so
+// the two surfaces cannot disagree about which sessions are Go.
+//
+// `collapsed` is the fold flag OF THE STATUSLINE, and that is the whole reason the
+// two surfaces stay independent: each caller hands this function its OWN surface's
+// flag, so folding the sidebar cannot hide the statusline and folding the
+// statusline cannot unmake the sidebar. Two persisted keys, two axes.
+//
+// It used to be dropped here, which is why the statusline could not be turned off:
+// the Kilo entry passed `isStatuslineCollapsed()` in and this ignored it, so the
+// flag was persisted (`collapsed_statusline`) and had no effect on anything. The
+// sidebar toggle is still not allowed to steer the statusline -- that independence
+// lives in WHICH flag the caller passes, not in ignoring the one it was given.
+export function statuslineRenders(state: Pick<SidebarBandState, "collapsed" | "providerId">): boolean {
+  return !state.collapsed && state.providerId === GO_PROVIDER_ID;
 }
 
 export function surfaceSelectionFromDisplayMode(mode: DisplayMode): SurfaceSelection {
