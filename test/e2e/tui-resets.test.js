@@ -59,6 +59,29 @@ const statuslineCountdown = (screen) => {
   return new RegExp(String.raw`·\s*resets in\s+(${COUNTDOWN})`).exec(line)?.[1] ?? null;
 };
 
+// The sidebar paints in passes, so settling on a HEADER lets the capture land
+// before the rows this file exists to read -- which is exactly how the
+// `reset-exact-boundaries` rung came to see one row countdown out of three and
+// call it a failure. Each rung therefore declares the ordered run of row
+// countdowns it expects, and the pane is only settled once all of them are up.
+//
+// Anchored per line (`^[ \t]*resets in X[ \t]*$`) for two reasons: it is what
+// distinguishes a plan row's countdown from the statusline's, which carries a
+// `·` and a working directory on the same line; and joining them in order keeps
+// the statusline's own text from standing in for a row that has not painted.
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function sidebarExpectation(rung) {
+  const rows = PLAN_LABELS.map((label) => rung.rows[label]).filter((text) => text !== null);
+  // The uncapped rung expects NO row countdown, so there is nothing to wait for
+  // beyond the block being there.
+  if (rows.length === 0) return /Go Plan|Go Usage/;
+  const run = rows
+    .map((text) => String.raw`[\s\S]*^[ \t]*resets in ${escapeRegExp(text)}[ \t]*$`)
+    .join("");
+  return new RegExp(String.raw`(?:Go Plan|Go Usage)${run}`, "m");
+}
+
 test(
   "kilo renders every shape of the resets-in countdown",
   { skip: SKIP_NO_HOST, timeout: 3600000 },
@@ -75,7 +98,7 @@ test(
           binary: BINARY,
           repoDir: REPO_DIR,
           env,
-          expect: { statusline: /Go 5h \d+%/, sidebar: /Go Plan|Go Usage/ },
+          expect: { statusline: /Go 5h \d+%/, sidebar: sidebarExpectation(rung) },
         });
 
         // The per-row countdowns, in plan order. A window with nothing capped

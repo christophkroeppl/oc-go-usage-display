@@ -62,8 +62,8 @@ const SIDEBAR_INTEGRATED = /Session Tokens/;
 
 const SHOW_STATUSLINE = "Go usage: show statusline";
 const HIDE_STATUSLINE = "Go usage: hide statusline";
-const SHOW_SIDEBAR = "Go usage: show sidebar";
-const HIDE_SIDEBAR = "Go usage: hide sidebar";
+const SHOW_SIDEBAR = "Go usage: show sidebar panel";
+const HIDE_SIDEBAR = "Go usage: hide sidebar panel";
 
 // The menu labels are held as plain text, because that is what they are and what
 // a failure message should quote, and escaped only where a pattern is needed.

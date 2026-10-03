@@ -2,24 +2,29 @@
 //
 // The bug this pins: integrated mode retires Kilo's own `Token Usage` panel at
 // load, and its replacement panel declined to draw whenever the session was not
-// on an `opencode-go` model. Band 150 -- the host's own token-usage band, which
-// our slot is registered in -- rendered nothing at all. There is no screenshot of
-// that state in the README, because there was nothing to screenshot: the user got
-// a hole where their token readout used to be.
+// on an `opencode-go` model. The usage region of the sidebar -- the host's own
+// token-usage band, which our slot sits in -- rendered nothing at all. There is no
+// screenshot of that state in the README, because there was nothing to
+// screenshot: the user got a hole where their token readout used to be.
 //
-// Only the real host can settle this, so both rungs boot the actual Kilo TUI in
-// integrated mode and look at the rendered pane:
+// Only the real host can settle this, so every rung boots or drives the actual
+// Kilo TUI in integrated mode and looks at the rendered pane:
 //
 //   1. a session that only ever ran a NON-Go model -> Kilo's own `Token Usage`
 //      panel is on screen. Ours is a fork of that panel, not an extension of it
 //      (no `Terminal Bench 2.0` section, no `Generation speed` row), so with no
 //      Go model to meter the honest result is to hand the band back, not to
 //      replace a panel we cannot fully reproduce;
-//   2. one session holding models from BOTH providers -> OUR panel is on screen,
+//   2. a session whose ONLY model is a Go model -> OUR panel is on screen. This
+//      is the shape most sessions have, and the one where there is nothing to
+//      defer to;
+//   3. one session holding models from BOTH providers -> OUR panel is on screen,
 //      Kilo's is not, and both provider groups render with the `Go Plan` meters
 //      inside the `OpenCode Go` one. This is the case the whole design exists
 //      for, and it is the one that would regress silently if the gate were simply
-//      deleted.
+//      deleted;
+//   4. both handovers, live, on ONE running session with no restart -- the
+//      direction that used to empty the band (docs/integrated-band-live-handover.md).
 //
 // The provider is a local fake (test/helpers/fake-provider.js) registered under a
 // real provider id, so the host writes real assistant messages with real token
@@ -33,7 +38,15 @@ import { fileURLToPath } from "node:url";
 import * as fakeProvider from "../helpers/fake-provider.js";
 import { findKiloBinary } from "../helpers/kilo.js";
 import { makeConfigDir } from "../helpers/tmp.js";
-import { TuiSession, hasTmux, hostVersionSkipReason, makeTuiEnv, writeTuiHostConfig } from "../helpers/tui.js";
+import {
+  TuiSession,
+  hasTmux,
+  hostVersionSkipReason,
+  makeTuiEnv,
+  pickModel,
+  sendTurn,
+  writeTuiHostConfig,
+} from "../helpers/tui.js";
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BINARY = findKiloBinary();
@@ -279,6 +292,54 @@ test(
   },
 );
 
+test(
+  "integrated mode draws our panel for a session whose only model is a Go model",
+  { skip: SKIP_NO_HOST, timeout: 900000 },
+  async () => {
+    // The rung between the two above: no non-Go model to defer to, and no second
+    // provider to group alongside the Go one. It is the shape most sessions
+    // actually have -- someone who only ever runs one Go model -- so it belongs
+    // here rather than being inferred from the mixed case.
+    const tmp = makeConfigDir();
+    const fake = await fakeProvider.startFakeChatProvider({
+      usageByModel: {
+        "go-probe": { prompt_tokens: 1_200_000, completion_tokens: 30_000, total_tokens: 1_230_000 },
+      },
+    });
+    try {
+      const base = makeTuiEnv({ root: tmp.root, live: false, host: "kilo" });
+      base.KILO_OC_GO_SIDEBAR_MODE = "integrated";
+      writeTuiHostConfig({
+        host: "kilo",
+        repoDir: REPO_DIR,
+        env: base,
+        model: GO_MODEL,
+        provider: fake.configFor(GO_PROVIDER),
+      });
+
+      const sessionId = await runTurns({ base, fake, models: [GO_MODEL] });
+      await sleep(750);
+
+      const screen = await bootOrRetry({
+        env: base,
+        sessionId,
+        settled: /Session Tokens[\s\S]*\bModels \(\d+\)[\s\S]*\bGo Plan\b/,
+        label: "go-model-only",
+      });
+
+      assert.match(screen, /\bSession Tokens\b/, "a Go-only session is ours to draw, with nothing to defer to");
+      assert.match(screen, /\bGo Plan\b/, "with the plan inside the Models table");
+      assert.match(screen, /\bModels \(1\)/, "and the one model it ran");
+      assert.match(screen, /Go share/, "carrying its Go share");
+      assert.doesNotMatch(screen, /\bToken Usage\b/, "we own this band, so Kilo's own panel must be retired");
+      console.log(`[e2e] integrated mode drew our panel for a Go-only session (session ${sessionId})`);
+    } finally {
+      await fake.stop();
+      tmp.cleanup();
+    }
+  },
+);
+
 // The README promises the sidebar "follows the model live: pick a different
 // provider and the sidebar follows, with no restart". That promise is only
 // falsifiable on a running TUI, so this rung boots ONE session and then changes
@@ -295,23 +356,34 @@ test(
 //
 // The assertion that matters is the direction of each handover. Deferring is the
 // fix; taking the band BACK is what stops a session from being stuck showing
-// Kilo's panel after a Go model has run in it.
-// DISABLED pending a fix -- see docs/integrated-band-live-handover.md. The
-// handover TO Kilo's panel works (the rung above proves it); the handover BACK to
-// ours empties band 150, because `deactivate` removes the host's entry from the
-// same slot list we contribute to and the slot is not re-keyed afterwards. The
-// test is kept, and kept honest: it is the spec for the fix, and it fails loudly
-// rather than passing vacuously if someone re-lands the boot-time rungs alone.
+// Kilo's panel after a Go model has run in it. Both directions mutate the host's
+// `sidebar_content` entry list, and both used to cost us our own subtree: the
+// band now registers in a free order, so neither can re-key it.
+//
+// The switch is driven FROM INSIDE the TUI, through the host's own model picker.
+// That is not a convenience. Measured on Kilo 7.8.3: when a SEPARATE process
+// writes a turn into the session a running TUI is showing, the plugin observes
+// nothing at all -- no `message.updated` fires, and `api.state.session.messages`
+// keeps returning the pre-existing messages. A plugin has no channel to a foreign
+// process's turn, so a test that drives one is testing host behaviour that does
+// not exist, and any "fix" aimed at it would be fixing the test. A user switching
+// model in the picker is in-process, which is both the real workflow and the only
+// one the band can honestly be held to.
 test(
   "integrated mode hands the band over and takes it back as the session's models change, live",
-  { skip: "known defect: the handover back to our panel empties band 150 (docs/integrated-band-live-handover.md)", timeout: 1200000 },
+  { skip: SKIP_NO_HOST, timeout: 1500000 },
   async () => {
     const tmp = makeConfigDir();
+    // TWO fakes, one model each. `configFor` registers every model it knows under
+    // whichever provider id you ask for, so one fake serving both models would also
+    // list `other-probe` under `opencode-go` -- and a picker filter matching that
+    // name would select the GO model, quietly turning this into "the band never
+    // moved" while every assertion still passed.
     const fake = await fakeProvider.startFakeChatProvider({
-      usageByModel: {
-        "go-probe": { prompt_tokens: 1_200_000, completion_tokens: 30_000, total_tokens: 1_230_000 },
-        "other-probe": { prompt_tokens: 400_000, completion_tokens: 9_000, total_tokens: 409_000 },
-      },
+      usageByModel: { "go-probe": { prompt_tokens: 1_200_000, completion_tokens: 30_000, total_tokens: 1_230_000 } },
+    });
+    const fakeOther = await fakeProvider.startFakeChatProvider({
+      usageByModel: { "other-probe": { prompt_tokens: 400_000, completion_tokens: 9_000, total_tokens: 409_000 } },
     });
     try {
       const base = makeTuiEnv({ root: tmp.root, live: false, host: "kilo" });
@@ -320,16 +392,29 @@ test(
         host: "kilo",
         repoDir: REPO_DIR,
         env: base,
-        model: OTHER_MODEL,
-        provider: { ...fake.configFor(GO_PROVIDER), ...fake.configFor(OTHER_PROVIDER) },
+        model: GO_MODEL,
+        provider: { ...fake.configFor(GO_PROVIDER), ...fakeOther.configFor(OTHER_PROVIDER) },
       });
 
-      const sessionId = await runTurns({ base, fake, models: [OTHER_MODEL] });
+      // The session is pre-created with a Go turn so the TUI boots already holding
+      // the band; typing a first prompt into the HOME screen is swallowed often
+      // enough to be useless as a test step. What must happen IN-PROCESS is the
+      // model switch, which is what the picker does.
+      const promptEnv = { ...base };
+      delete promptEnv.OPENCODE_DISABLE_DEFAULT_PLUGINS;
+      delete promptEnv.OPENCODE_DISABLE_MODELS_FETCH;
+      const first = await fakeProvider.runHeadlessPrompt({
+        binary: BINARY,
+        env: promptEnv,
+        cwd: REPO_DIR,
+        message: "usage probe",
+        model: GO_MODEL,
+      });
       await sleep(750);
 
       const tui = new TuiSession({
         binary: BINARY,
-        args: ["--session", sessionId],
+        args: ["--session", first.sessionId],
         env: base,
         cwd: REPO_DIR,
         label: `band-live-${process.pid}-${Math.random().toString(36).slice(2, 10)}`,
@@ -340,19 +425,14 @@ test(
         const KILO_PANEL = /Token Usage[\s\S]*\bInput\b[\s\S]*\d/;
         const OUR_PANEL = /Session Tokens[\s\S]*\bModels \(\d+\)[\s\S]*\bGo Plan\b/;
 
-        // 1. Nothing Go has run, so there is nothing for us to add: Kilo's panel.
-        const deferred = await waitForPane(tui, KILO_PANEL, "live/other-model-only");
-        assert.doesNotMatch(deferred, /\bSession Tokens\b/, "we must start out deferring");
+        // 1. The session has run a Go model, so the band is ours from boot.
+        const taken = await waitForPane(tui, OUR_PANEL, "live/boot-on-go");
+        assert.doesNotMatch(taken, /\bToken Usage\b/, "while we hold the band the host panel must be gone");
 
-        // 2. A Go model runs in this session. The band is ours now, without a
-        //    restart: the models table gains Go rows to weight, so we take it.
-        await runTurns({ base, fake, models: [GO_MODEL], sessionId });
-        const taken = await waitForPane(tui, OUR_PANEL, "live/after-go-turn");
-        assert.match(taken, /\bToken Usage\b/, "while we hold the band the host panel must be gone");
-
-        // 3. And a non-Go model runs again, so the newest message is not a Go one:
-        //    the handover has to work in both directions or the band gets stuck.
-        await runTurns({ base, fake, models: [OTHER_MODEL], sessionId });
+        // 2. Switch to a non-Go model IN THE TUI and run a turn. The newest message
+        //    is then not a Go one, so the band has to go back to Kilo.
+        await pickModel(tui, OTHER_MODEL, { provider: OTHER_PROVIDER });
+        await sendTurn(tui, "usage probe");
         const handedBack = await waitForPane(tui, KILO_PANEL, "live/after-other-turn");
         assert.doesNotMatch(
           handedBack,
@@ -360,12 +440,20 @@ test(
           "the band must be handed back, not left holding a session we no longer serve",
         );
 
-        console.log(`[e2e] the band changed hands twice in one session, with no restart (session ${sessionId})`);
+        // 3. And back to Go again, still without a restart: the direction that used
+        //    to empty the band is the one that has to keep working.
+        await pickModel(tui, GO_MODEL, { provider: GO_PROVIDER });
+        await sendTurn(tui, "usage probe");
+        const retaken = await waitForPane(tui, OUR_PANEL, "live/after-second-go-turn");
+        assert.doesNotMatch(retaken, /\bToken Usage\b/, "and we must be able to take it back");
+
+        console.log("[e2e] the band changed hands twice in one session, with no restart");
       } finally {
         tui.stop();
       }
     } finally {
       await fake.stop();
+      await fakeOther.stop();
       tmp.cleanup();
     }
   },

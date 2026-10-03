@@ -261,22 +261,31 @@ export const KILO_SIDEBAR_ORDERS: Readonly<Record<string, number>> = {
   "internal:kilo-sidebar-memory": 1000,
 };
 
-// Free band between the context panel and the token-usage panel, so the Go block
-// renders directly between them and never ties with a host panel.
+// The one band we ever register in: free, between the context panel (100) and the
+// token-usage panel (150), so the Go block renders directly below Kilo's `Context`
+// panel and above its `Token Usage` block.
+//
+// BOTH modes register here. Integrated mode used to register at 150 as well, tying
+// with `internal:kilo-sidebar-usage` on purpose, which made the two entries share
+// an index in the host's `sidebar_content` list. Switching that panel off then
+// removed an entry from the list our own band lives in, and because `@opentui/solid`
+// reconciles that list by index, our render subtree was disposed with it and never
+// came back — the band went empty and no toggle could recover it (see
+// docs/integrated-band-live-handover.md). Sitting in a free band instead means the
+// host entry can come and go at 150 without our index ever shifting, so the
+// handover is safe in both directions.
+//
+// The cost is one row of vertical position: our panel now sits directly above
+// Kilo's `Token Usage` block rather than exactly on it. Integrated mode still
+// retires that panel, so there is only ever one usage block in the sidebar.
 export const KILO_SLOT_ORDER = 125;
 
-// Integrated mode takes over the token-usage panel's own band, so the Go block
-// lands where Kilo already draws usage. It ties with
-// `internal:kilo-sidebar-usage` by construction — which is why that panel is
-// retired rather than extended (see KILO_USAGE_PANEL_PLUGIN_ID): a Kilo
-// release that moves it off 150 leaves us in a free band again, harmlessly.
-export const KILO_INTEGRATED_SLOT_ORDER = 150;
-
 // The host panel integrated mode replaces. `api.slots` is a per-plugin facade
-// that exposes only `register`, so this panel cannot be extended or
-// monkey-patched: the only supported way to take its band is to switch it off
-// through the plugin lifecycle (`plugin_enabled` in tui.json at config time,
-// `api.plugins.deactivate` at runtime).
+// that exposes only `register`, and `api.plugins` only `activate`/`deactivate`,
+// so this panel cannot be extended, hidden-in-place, or monkey-patched: the only
+// supported way to take its band is to switch it off through the plugin lifecycle
+// (`plugin_enabled` in tui.json at config time, `api.plugins.deactivate` at
+// runtime). That is safe from KILO_SLOT_ORDER, which never ties with it.
 export const KILO_USAGE_PANEL_PLUGIN_ID = "internal:kilo-sidebar-usage";
 
 // Rows the integrated mode mirrors from Kilo's own `Token Usage` panel, in the

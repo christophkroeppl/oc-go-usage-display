@@ -323,6 +323,112 @@ export function resolveSurfaceSelection(
 }
 
 // ---------------------------------------------------------------------------
+// Commands (host keymap, palette-namespace)
+// ---------------------------------------------------------------------------
+//
+// Commands are registered on BOTH host surfaces, because they are two different
+// surfaces and neither substitutes for the other:
+//
+//   - `api.command.register`  -> the ctrl+P palette. Verified on Kilo 7.8.3 and
+//     opencode 1.18.33: this is what puts a command in the palette.
+//   - `api.keymap.registerLayer` + `slashName` -> the prompt's `/` autocomplete.
+//
+// Registering only the keymap leaves the palette empty, and registering only the
+// legacy shim leaves no slash command. Both are best-effort: either may be absent,
+// and a host that offers neither still gets a working plugin.
+export type DisplayCommand = {
+  name: string;
+  title: string;
+  desc?: string;
+  category?: string;
+  slashName?: string;
+  run: () => void;
+};
+
+export type CommandLayerApi = {
+  keymap?: {
+    registerLayer?: (layer: {
+      commands: ReadonlyArray<DisplayCommand>;
+      bindings?: ReadonlyArray<unknown>;
+      priority?: number;
+    }) => (() => void) | void;
+  };
+  // Kept for hosts that predate the keymap surface; the shim forwards to it.
+  command?: {
+    register?: (build: () => LegacyDisplayCommand[]) => (() => void) | void;
+  };
+};
+
+// The legacy shape, declared exactly as we emit it so a host's own
+// `api.command` type stays assignable to `CommandLayerApi`.
+type LegacyDisplayCommand = {
+  title: string;
+  value: string;
+  description?: string;
+  category?: string;
+  slash?: { name: string; aliases?: string[] };
+  onSelect: () => void;
+};
+
+// `PALETTE_NAMESPACE` is what puts a command in the command palette at all: a
+// command without it is bound but unlisted. Both hosts' own plugins set it.
+const PALETTE_NAMESPACE = "palette";
+
+// `build` is called on every read rather than snapshotted, so a title always
+// describes the state as it is NOW. Two different hosts read it differently: the
+// palette copies labels when it lists them, and the slash list when it builds, so
+// one of the two would otherwise show a label the other has already moved past.
+export function registerDisplayCommands(
+  api: CommandLayerApi,
+  build: () => ReadonlyArray<DisplayCommand>,
+): () => void {
+  const disposers: Array<() => void> = [];
+
+  try {
+    if (typeof api.keymap?.registerLayer === "function") {
+      const dispose = api.keymap.registerLayer({
+        commands: build().map((command) => ({ namespace: PALETTE_NAMESPACE, ...command })),
+      });
+      if (typeof dispose === "function") disposers.push(dispose);
+    }
+  } catch {
+    // The slash list is a bonus surface; losing it must not cost us the palette.
+  }
+
+  try {
+    if (typeof api.command?.register === "function") {
+      const dispose = api.command.register(() =>
+        build().map((command) => {
+          const find = (): DisplayCommand =>
+            build().find((candidate) => candidate.name === command.name) ?? command;
+          // `exactOptionalPropertyTypes`: an absent `desc` must stay absent, not
+          // become an explicit `undefined` the host's schema rejects.
+          const legacy = {
+            get title(): string {
+              return find().title;
+            },
+            value: command.name,
+            onSelect: command.run,
+          } as LegacyDisplayCommand;
+          const current = find();
+          if (current.desc !== undefined) legacy.description = current.desc;
+          if (current.category !== undefined) legacy.category = current.category;
+          if (current.slashName !== undefined) legacy.slash = { name: current.slashName };
+          return legacy;
+        }),
+      );
+      if (typeof dispose === "function") disposers.push(dispose);
+    }
+  } catch {
+    // A host with neither surface gets no commands; never throw over it.
+  }
+
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Collapse (independent per surface, persisted in `api.kv`)
 // ---------------------------------------------------------------------------
 
