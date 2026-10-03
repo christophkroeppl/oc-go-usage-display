@@ -502,7 +502,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 
     const modelCount = createMemo(() => props.usage()?.models.length ?? 0);
 
-    const body = createMemo(() => {
+    const body = () => {
       const usage = props.usage();
       const models = usage?.models ?? [];
       const providerNames = readProviderDisplayNames(api);
@@ -543,7 +543,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           </For>
         </box>
       );
-    });
+    };
 
     return (
       <CollapsibleSection
@@ -633,7 +633,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       });
     });
 
-    const tokenBody = createMemo(() => {
+    const tokenBody = () => {
       const data = usage();
       if (data === null) {
         return (
@@ -649,7 +649,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           </For>
         </box>
       );
-    });
+    };
 
     return (
       // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside the

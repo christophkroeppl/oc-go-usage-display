@@ -908,6 +908,7 @@ export function CollapsibleSection(props: {
   onToggle: () => void;
   body: () => JSX.Element;
 }) {
+  const content = createMemo(() => (props.expanded() ? props.body() : null));
   return (
     <box flexDirection="column">
       <SectionHeader
@@ -918,7 +919,7 @@ export function CollapsibleSection(props: {
         onToggle={props.onToggle}
       />
       <box flexDirection="column" gap={1}>
-        {reactiveChild(() => (props.expanded() ? props.body() : null))}
+        {reactiveChild(content)}
       </box>
     </box>
   );
