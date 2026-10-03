@@ -126,13 +126,15 @@ const MODES = [
   },
   {
     mode: "integrated",
-    // Same reasoning: the block only reads as settled once it sits in the host
-    // panel's old band, i.e. above the panels that follow it. `Session Tokens`
+    // Same reasoning: the block only reads as settled once it sits in the usage
+    // region of the sidebar, i.e. above the panels that follow it. `Session Tokens`
     // is the first thing integrated mode renders -- there is no `Go Usage`
     // heading above it any more.
     settled: /Session Tokens[\s\S]*\bLSP\b/,
-    // KILO_INTEGRATED_SLOT_ORDER 150: the host panel's own band, so our block
-    // is below `Context` and there is no `Token Usage` header to anchor below.
+    // KILO_SLOT_ORDER 125 in BOTH modes: below `Context` (100) and above the host
+    // panel's own band (150). Integrated mode retires that panel, so there is no
+    // `Token Usage` header to anchor below -- and because the band never moves,
+    // there is nothing to re-key when the host entry comes and goes.
     // Integrated mode opens with `Session Tokens` -- there is no `Go Usage`
     // heading, because the plan is drawn once inside the Models table.
     order: { after: [/\bContext\b/], anchor: /Session Tokens/ },

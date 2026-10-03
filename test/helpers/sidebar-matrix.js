@@ -15,8 +15,9 @@
 //   sidebar    the `sidebar` surface toggle -- are we registered in a band at all?
 //   collapsed  the fold toggle -- our band still occupies the space it registered
 //              for, it is just drawing nothing
-//   mode       `sidebar_mode`: `integrated` (Kilo's token-usage band, which we
-//              take over) or `standalone` (a free band of our own)
+//   mode       `sidebar_mode`: `integrated` (Kilo's token-usage panel is retired
+//              and we draw a fork of it) or `standalone` (host panel untouched).
+//              Both register in the same free band, so this never moves the band.
 //   provider   which provider the session is really running, read from the host's
 //              own message store. `undefined` is the "we cannot tell yet" case and
 //              is not a synonym for Go: a plugin that cannot name a provider must
@@ -27,8 +28,8 @@
 // `renders` is whether our band draws anything. `hostPanel` is whether Kilo's own
 // `Token Usage` panel must be on screen. They are different questions, and the
 // difference is the bug this matrix exists to pin: integrated mode had switched
-// Kilo's panel off unconditionally and then declined to draw, which left band 150
-// empty on every non-Go session.
+// Kilo's panel off unconditionally and then declined to draw, which left the usage
+// region of the sidebar empty on every non-Go session.
 //
 // One rule generates the whole table: we are the only usage block in the band
 // exactly while we are drawing in it. So the host panel goes away only when we

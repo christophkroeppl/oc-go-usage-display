@@ -218,10 +218,13 @@ export function isDisplayMode(value: unknown): value is DisplayMode {
   return value === "sidebar" || value === "statusline" || value === "both";
 }
 
-// Where the Go block sits in Kilo's sidebar ladder:
-//   - `integrated`  — takes over the host's own token-usage band and retires
-//     its panel, so both usage readouts are one block instead of two.
-//   - `standalone` — a free band of our own, host panel untouched.
+// What the Go block shows while it is showing:
+//   - `integrated`  — retires the host's own token-usage panel and draws a fork
+//     of it, so both usage readouts are one block instead of two.
+//   - `standalone` — our own block, host panel untouched.
+// Both register in the same free band (KILO_SLOT_ORDER), so the mode is a
+// rendering decision rather than a position: switching it live cannot disturb
+// the host's slot entry.
 export type SidebarMode = "integrated" | "standalone";
 
 export const DEFAULT_SIDEBAR_MODE: SidebarMode = "integrated";
@@ -323,16 +326,16 @@ export function resolveProviderId(
 }
 
 // ---------------------------------------------------------------------------
-// Which band our sidebar owns
+// Which block our sidebar shows
 // ---------------------------------------------------------------------------
 //
-// One decision, split in two, because Kilo's sidebar has a band we may take
-// over: integrated mode registers in the host's own token-usage band (order
-// 150) and switches that panel off, so "do we draw?" and "must the host panel
-// be on?" are different questions with different answers.
+// One decision, split in two, because Kilo's sidebar has a panel we may retire:
+// integrated mode switches the host's token-usage panel off and draws a fork of
+// it instead, so "do we draw?" and "must the host panel be on?" are different
+// questions with different answers.
 //
-// The two answers come from one rule: we are the only usage block in the band
-// exactly while we are drawing in it. So the host panel goes away only when
+// The two answers come from one rule: we are the only usage block in the sidebar
+// exactly while we are drawing. So the host panel goes away only when
 // `ownsIntegratedBand`, and every way of not drawing -- no sidebar, collapsed,
 // standalone mode, or a session on a non-Go model -- leaves Kilo's own widget on
 // screen. Collapsing is in that list because a collapsed band still occupies the
@@ -396,6 +399,10 @@ export function sidebarBandRenders(state: SidebarBandState): boolean {
   return state.sidebarEnabled && !state.collapsed && state.providerId === GO_PROVIDER_ID;
 }
 
+// The statusline is the plan on one line, so it stays Go-only in both modes --
+// unlike the sidebar, it replaces nothing and hands nothing back. It is here so
+// the two surfaces cannot disagree about which sessions are Go.
+//
 // The statusline is the plan on one line, so it stays Go-only in both modes --
 // unlike the sidebar, it replaces nothing and hands nothing back. It is here so
 // the two surfaces cannot disagree about which sessions are Go.
@@ -575,8 +582,8 @@ export function buildPlanRows(snapshot: UsageSnapshot): PlanRow[] {
 }
 
 // ---------------------------------------------------------------------------
-// TUI: session model usage (the integrated panel's replacement for Kilo's own
-// token-usage band)
+// TUI: session model usage (what the integrated panel draws instead of Kilo's
+// own token-usage panel)
 // ---------------------------------------------------------------------------
 //
 // The host hands over raw counts and a USD cost with no display metadata, so

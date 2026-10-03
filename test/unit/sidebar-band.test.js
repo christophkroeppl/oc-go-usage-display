@@ -85,7 +85,7 @@ test("no state may leave the host's band empty", () => {
   for (const scenario of MATRIX) {
     assert.ok(
       scenario.renders || scenario.hostPanel,
-      `${scenario.id}: band 150 renders nothing and Kilo's panel is off, so the band is empty`,
+      `${scenario.id}: nothing renders and Kilo's panel is off, so the sidebar has a hole`,
     );
   }
 });
@@ -124,8 +124,8 @@ test("the mode decides what the band draws, never whether it draws", () => {
 });
 
 test("a collapsed band gives its space back to Kilo's panel", () => {
-  // The second empty band this rule closes. Our slot is still registered at 150
-  // while collapsed, so folding it and leaving the host panel retired left a hole;
+  // The second empty band this rule closes. Our slot is still registered while
+  // collapsed, so folding it and leaving the host panel retired left a hole;
   // now folding it hands the band over instead.
   const collapsedGo = { sidebarEnabled: true, collapsed: true, mode: "integrated", providerId: GO_PROVIDER };
   const expandedGo = { ...collapsedGo, collapsed: false };

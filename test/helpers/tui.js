@@ -359,6 +359,151 @@ export async function waitForUsageSurfaces(
 // First rendered line index (0-based) matching `pattern`, or -1. The e2e
 // sessions use a fixed title, so the host sidebar headers are unique in the
 // captured pane and their line order is the order the host actually rendered.
+// ---------------------------------------------------------------------------
+// Driving a LIVE TUI (dynamic tier)
+// ---------------------------------------------------------------------------
+//
+// Everything above asserts how a pane looks after boot. These drive the pane
+// while it runs -- invoke a command, fold a surface, switch a mode -- because a
+// control can persist its new state and still repaint nothing, and only a real
+// renderer can tell those two apart. The e2e display tier cannot: it reads a
+// frame the host produced on its own.
+//
+// Commands are invoked as SLASH COMMANDS rather than through the command palette,
+// because on the pinned hosts the palette never lists a plugin command (measured:
+// `api.command.register` and `api.keymap.registerLayer` are both accepted and
+// neither throws, and neither entry appears in ctrl+P; the same command with a
+// `slashName` appears in the prompt's `/` list).
+
+// A predicate or a RegExp, and `stable` consecutive agreeing frames before we
+// believe it. Both hosts repaint in passes, so one matching frame is often one
+// about to be replaced -- and a surface that has just been folded needs to be
+// ABSENT, which only a predicate can say.
+export async function settleScreen(session, match, { timeoutMs = 60000, stable = 2, intervalMs = 500 } = {}) {
+  const hit =
+    typeof match === "function"
+      ? (screen) => match(screen) === true
+      : typeof match === "string"
+        ? (screen) => screen.includes(match)
+        : (screen) => match.test(screen);
+  const deadline = Date.now() + timeoutMs;
+  let agreeing = 0;
+  let screen = "";
+  while (Date.now() < deadline) {
+    screen = session.capture();
+    if (hit(screen)) {
+      agreeing += 1;
+      if (agreeing >= stable) return screen;
+    } else {
+      agreeing = 0;
+    }
+    await sleep(intervalMs);
+  }
+  // Accept a correct FINAL frame: a pane that settled late is not a failure, and
+  // requiring N consecutive hits turns a slow repaint into a false red.
+  return hit(screen) ? screen : null;
+}
+
+// Kilo swallows ctrl+P (and the prompt) while a turn is running, so every
+// interaction waits for idle. Kilo shows "esc interrupt" while working; a host
+// that shows nothing here passes on the first clean frame.
+export async function waitForIdle(session, { timeoutMs = 90000, stable = 3, intervalMs = 500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let agreeing = 0;
+  while (Date.now() < deadline) {
+    agreeing = /esc interrupt/i.test(session.capture()) ? 0 : agreeing + 1;
+    if (agreeing >= stable) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+// Type `/<name>` and read the autocomplete, then clear the line. Answers "is this
+// command offered, and what does it say it will do" without running anything.
+export async function readSlashCommand(session, name, { timeoutMs = 20000 } = {}) {
+  await waitForIdle(session);
+  session.sendKeys(`/${name}`);
+  const screen = await settleScreen(session, `/${name}`, { timeoutMs, stable: 1 });
+  session.sendKeys("C-u");
+  session.sendKeys("Escape");
+  await sleep(800);
+  return screen ?? session.capture();
+}
+
+// Type `/<name>` and press Enter, then settle on whatever the caller expects.
+// `expect` is what makes this a behavioural assertion rather than a keystroke:
+// the caller says what the pane should look like AFTER the command ran.
+export async function runSlashCommand(session, name, expect, { timeoutMs = 60000 } = {}) {
+  const offered = await readSlashCommand(session, name, { timeoutMs: 20000 });
+  if (!offered.includes(`/${name}`)) {
+    throw new Error(`/${name} was never offered by the host\n--- pane ---\n${offered}`);
+  }
+  await waitForIdle(session);
+  session.sendKeys(`/${name}`);
+  await settleScreen(session, `/${name}`, { timeoutMs: 20000, stable: 1 });
+  session.sendKeys("Enter");
+  await sleep(1200);
+  return settleScreen(session, expect, { timeoutMs });
+}
+
+// Type a prompt into the TUI and submit it, then wait for idle. This is the
+// IN-PROCESS path: the turn is created by the same host the TUI is running, which
+// is the only way a running TUI can observe a model change (see the live band
+// rung). Typing needs the prompt to have focus, so we wait for the home screen or
+// a settled pane first rather than firing keystrokes at a booting TUI.
+export async function sendTurn(session, message, { timeoutMs = 120000 } = {}) {
+  await waitForIdle(session);
+  // Keystrokes sent while the TUI is still booting are swallowed, which looks
+  // exactly like "the model was never asked anything". The typed text appears in
+  // the prompt box, so waiting for IT to appear is what proves the prompt had
+  // focus -- sending it and hoping is how this test silently stops testing.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    session.sendKeys(message);
+    if (await settleScreen(session, message, { timeoutMs: 10000, stable: 1 })) break;
+    await waitForIdle(session);
+    await sleep(1000);
+    if (attempt === 2) {
+      throw new Error(`the prompt never received "${message}"\n--- pane ---\n${session.capture()}`);
+    }
+  }
+  session.sendKeys("Enter");
+  await sleep(1500);
+  await waitForIdle(session, { timeoutMs });
+  return session.capture();
+}
+
+// Switch model through the host's OWN picker (ctrl+x m), which is how a user does
+// it. The list is filtered by typing, so we type the model id and press Enter.
+// Returns the pane after selection so the caller can assert which model is live --
+// picking the wrong row silently would make every later assertion meaningless.
+export async function pickModel(session, modelId, { provider, timeoutMs = 60000 } = {}) {
+  // Filter by the bare MODEL NAME: the picker rejects a provider-qualified filter
+  // ("/" finds nothing). Uniqueness is the caller's job -- give each provider its
+  // own single-model catalog -- and `provider` is asserted afterwards so a filter
+  // that quietly matched the wrong row cannot pass.
+  const modelName = modelId.split("/").pop();
+  const providerName = provider ?? modelId.split("/")[0];
+  await waitForIdle(session);
+  session.sendKeys("C-x", "m");
+  const picker = await settleScreen(session, /model/i, { timeoutMs, stable: 1 });
+  if (picker === null) throw new Error(`the model picker never opened\n--- pane ---\n${session.capture()}`);
+  session.sendKeys(modelName);
+  await settleScreen(session, new RegExp(modelName), { timeoutMs: 20000, stable: 1 });
+  session.sendKeys("Enter");
+  await sleep(1500);
+  await waitForIdle(session);
+  const after = session.capture();
+  if (!after.includes(modelName)) {
+    throw new Error(`picked "${modelId}" but the pane does not name it\n--- pane ---\n${after}`);
+  }
+  if (!after.includes(providerName)) {
+    throw new Error(
+      `picked "${modelName}" but the pane reports provider "${providerName === provider ? providerName : providerName}" as absent\n--- pane ---\n${after}`,
+    );
+  }
+  return after;
+}
+
 export function renderedLine(screen, pattern) {
   const lines = screen.split("\n");
   for (let i = 0; i < lines.length; i += 1) {

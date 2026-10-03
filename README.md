@@ -88,9 +88,13 @@ always says which way it goes: `Go usage: hide statusline` becomes
 
 | Axis | Command | Also settable as |
 | ---- | ------- | ---------------- |
-| sidebar on/off | `Go usage: hide sidebar` / `Go usage: show sidebar` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
-| statusline on/off | `Go usage: hide statusline` / `Go usage: show statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
-| display mode (Kilo) | `Go usage: toggle sidebar mode` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
+| sidebar on/off | `Go usage: show sidebar panel` / `... hide sidebar panel` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
+| statusline on/off | `Go usage: toggle statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
+| display mode (Kilo) | `Go usage: use integrated panel` / `... use standalone panel` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
+
+The palette titles name the state the command moves you to, the way Kilo's own do
+(`Show sidebar` / `Hide sidebar`), so you can read the current state off the menu
+instead of having to know it.
 
 ```json
 { "plugin": ["./plugins/oc-go-usage-display.tsx", { "sidebar": true, "statusline": true }] }
@@ -157,22 +161,24 @@ edge.
 
 **Kilo** — `sidebar_mode` picks what the block is:
 
-- **integrated** (default): the block takes over the host's own `Token Usage`
-  band, retires that panel, and renders `Session Tokens` / `Models`. The plan is
+- **integrated** (default): the host's own `Token Usage` panel is retired and
+  the block renders `Session Tokens` / `Models` in its place. The plan is
   drawn **once**, as the `Go Plan` meters inside the `OpenCode Go` group, and
   every Go model row carries its `Go share`. There is deliberately no separate
   `Go Usage` block saying the same three numbers again.
-- **standalone**: our block in a free band above the host's panel, and the host
-  panel stays.
+- **standalone**: our `Go Usage` block, and the host panel stays.
+
+Both modes sit in the same free band of Kilo's sidebar — directly below its
+`Context` panel — so switching between them applies immediately, with no
+restart.
 
 ### Kilo sidebar mode
 
-One rule, and every state follows from it: **we are the only usage block in that
-band exactly while we are drawing in it.**
+One rule, and every state follows from it: **we are the only usage block in the
+sidebar exactly while we are drawing in it.**
 
-Integrated mode registers in Kilo's own token-usage band and switches its panel
-off, so the two are a pair — and the panel comes straight back whenever we stop
-filling the space:
+Integrated mode retires Kilo's token-usage panel, so the two are a pair — and
+that panel comes straight back whenever we stop filling the space:
 
 | session model | integrated | standalone |
 | ------------- | ---------- | ---------- |
