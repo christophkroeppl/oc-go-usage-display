@@ -26,6 +26,7 @@ import { findKiloBinary } from "../helpers/kilo.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
   TuiSession,
+  clickPaneText,
   hasTmux,
   hostVersionSkipReason,
   makeTuiEnv,
@@ -49,6 +50,11 @@ const OUR_INTEGRATED = /Session Tokens[\s\S]*Models \(\d+\)[\s\S]*Go Plan/;
 const OUR_STANDALONE_BLOCK = /Go Usage[\s\S]*\b5h\b[\s\S]*\d+%/;
 const KILO_PANEL = /Token Usage[\s\S]*\bInput\b[\s\S]*\d/;
 const STATUSLINE = /Go 5h/;
+
+const MODELS_HEADER = /Models \(\d+\)/;
+const MODELS_BODY = /Model[\s\S]*Steps[\s\S]*Cost/;
+const TOKENS_HEADER = /Session Tokens/;
+const TOKENS_BODY = /\bInput\b[\s\S]*\bOutput\b/;
 
 // One session, booted once, driven through every toggle and back again. Splitting
 // these into separate tests would boot a TUI per assertion, which is minutes each
@@ -150,6 +156,57 @@ test(
 
       const statuslineBack = await runSlashCommand(tui, "go-usage-statusline", STATUSLINE);
       assert.ok(statuslineBack, `and come back live\n--- pane ---\n${tui.capture()}`);
+
+      await waitForIdle(tui);
+
+      const modelsUp = await settleScreen(tui, MODELS_BODY, { timeoutMs: 30000 });
+      assert.ok(modelsUp, `the Models body must render before it is folded\n--- pane ---\n${tui.capture()}`);
+
+      assert.notEqual(
+        clickPaneText(tui, modelsUp, MODELS_HEADER),
+        -1,
+        "the Models header must be rendered",
+      );
+      assert.ok(
+        await settleScreen(tui, (screen) => !MODELS_BODY.test(screen), { timeoutMs: 30000, intervalMs: 100 }),
+        `clicking the header must fold the Models body\n--- pane ---\n${tui.capture()}`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+
+      assert.notEqual(
+        clickPaneText(tui, tui.capture(), MODELS_HEADER),
+        -1,
+        "the Models header must still be rendered",
+      );
+      const reopened = await settleScreen(tui, MODELS_BODY, { timeoutMs: 1000, intervalMs: 50 });
+      assert.ok(
+        reopened,
+        `the Models body must come back on its own, with no host event to trigger it\n` +
+          `--- pane ---\n${tui.capture()}`,
+      );
+
+      assert.notEqual(
+        clickPaneText(tui, reopened, TOKENS_HEADER),
+        -1,
+        "the Session Tokens header must be rendered",
+      );
+      assert.ok(
+        await settleScreen(tui, (screen) => !TOKENS_BODY.test(screen), { timeoutMs: 30000, intervalMs: 100 }),
+        `clicking the header must fold the Session Tokens body\n--- pane ---\n${tui.capture()}`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+
+      assert.notEqual(
+        clickPaneText(tui, tui.capture(), TOKENS_HEADER),
+        -1,
+        "the Session Tokens header must still be rendered",
+      );
+      assert.ok(
+        await settleScreen(tui, TOKENS_BODY, { timeoutMs: 1000, intervalMs: 50 }),
+        `the Session Tokens body must come back on its own\n--- pane ---\n${tui.capture()}`,
+      );
 
       await waitForIdle(tui);
       console.log("[e2e] every Kilo toggle followed along on one running TUI");

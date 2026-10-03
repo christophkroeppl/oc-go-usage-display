@@ -192,7 +192,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       ),
     );
 
-    const body = createMemo(() => (
+    const body = () => (
       <box flexDirection="column" gap={1} paddingTop={1} paddingLeft={2}>
         <For each={rows()}>{(model) => <WeightedModelRow theme={props.theme} model={model} />}</For>
         <For each={buildGoModelFooters(weights())}>
@@ -203,7 +203,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           )}
         </For>
       </box>
-    ));
+    );
 
     // The whole section is one function child, because two rules apply here and
     // both are about the same thing: the host reuses the element it was handed,

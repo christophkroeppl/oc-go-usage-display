@@ -512,6 +512,29 @@ export function renderedLine(screen, pattern) {
   return -1;
 }
 
+// Click the text `pattern` matches. SGR mouse report: press
+// `ESC [ < 0 ; col ; row M`, release `…m`. Both coordinates are 1-based.
+// `send-keys -l -H` reads one hex byte per argv entry, so the bytes are passed
+// as separate arguments -- joined into a single string they arrive as the
+// literal text of that string instead. Returns the matched line, or -1.
+export function clickPaneText(session, screen, pattern) {
+  const line = renderedLine(screen, pattern);
+  if (line < 0) return -1;
+  const row = line + 1;
+  const col = screen.split("\n")[line].search(pattern) + 1;
+  for (const final of ["M", "m"]) {
+    session.tmux(
+      "send-keys",
+      "-t",
+      session.name,
+      "-l",
+      "-H",
+      ...[...`\x1b[<0;${col};${row}${final}`].map((char) => char.charCodeAt(0).toString(16)),
+    );
+  }
+  return line;
+}
+
 // Pin the *rendered* position of the `Go Usage` block in the host sidebar
 // ladder. `SLOT_ORDER` only means something through where the host ends up
 // drawing it, so this is what actually guards the constant: the contract tests
