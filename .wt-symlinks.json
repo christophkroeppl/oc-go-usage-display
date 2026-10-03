@@ -1,0 +1,18 @@
+{
+  "$schema": "./.wt-symlinks.schema.json",
+  "links": [
+    {
+      "from": "AGENTS.md"
+    },
+    {
+      "from": "opencode.jsonc"
+    },
+    {
+      "from": ".agents"
+    },
+    {
+      "from": "AGENTS.md",
+      "to": "CLAUDE.md"
+    }
+  ]
+}
