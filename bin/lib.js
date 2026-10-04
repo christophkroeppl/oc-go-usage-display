@@ -83,7 +83,7 @@ export function cliErrorMessage(error) {
 
 // Top-level error boundary shared by every bin: one clean line on stderr (no
 // stack trace, no rethrow) and exit 1. The synchronous fd write keeps the
-// message from being truncated by `process.exit` when stderr is a pipe (npx).
+// message from being truncated by `process.exit` when stderr is a pipe (bunx).
 export function exitWithError(error) {
   try {
     fs.writeSync(process.stderr.fd, `${cliErrorMessage(error)}\n`);

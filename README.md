@@ -21,9 +21,9 @@ either host's bundle is missing.
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display && npx oc-go-usage-display-init --copy` |
-| One-shot (npx) | `npx -p oc-go-usage-display oc-go-usage-display-init --copy` |
-| Project scope | `npx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
+| Persistent (recommended) | `npm install oc-go-usage-display && bunx oc-go-usage-display-init --copy` |
+| One-shot (bunx) | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy` |
+| Project scope | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
 restart). Restart opencode afterwards. Every command here is unversioned on
@@ -48,7 +48,7 @@ command).
 
 ### Kilo
 
-Kilo is a separate target: `npx oc-go-usage-display-init --target kilo` copies
+Kilo is a separate target: `bunx oc-go-usage-display-init --target kilo` copies
 `oc-go-usage-display.kilo.{ts,tsx}` into `$KILO_CONFIG_DIR` /
 `$XDG_CONFIG_HOME/kilo` / `~/.config/kilo` and registers `kilo.json` +
 `tui.json`. Kilo's `tui.json` rejects `sidebar`/`statusline`, so its entry is a
@@ -319,7 +319,7 @@ footer to a commit merged to `main`.
 
 ## Troubleshooting
 
-- **Plugin didn't load**: check `npx oc-go-usage-display-show` / `status`, then
+- **Plugin didn't load**: check `bunx oc-go-usage-display-show` / `status`, then
   restart the host (`opencode debug config` shows the resolved plugin list;
   `opencode --pure` skips plugins, so it is not a valid check).
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
@@ -328,16 +328,16 @@ footer to a commit merged to `main`.
   `opencode-go` provider in the host you are running, or configure workspace +
   cookie. Each host reads only its own `auth.json`, so a Kilo login does not
   feed the opencode plugin and vice versa.
-- **Kilo only**: `npx oc-go-usage-display-init --target kilo`; Kilo ignores
+- **Kilo only**: `bunx oc-go-usage-display-init --target kilo`; Kilo ignores
   `sidebar`/`statusline` options, so toggle surfaces with the command palette
   instead.
 - **Stale copy install**: copy installs never auto-update; re-run
-  `npx oc-go-usage-display-init --copy` and restart.
+  `bunx oc-go-usage-display-init --copy` and restart.
 
 ## Uninstall
 
 ```sh
-npx oc-go-usage-display-remove
+bunx oc-go-usage-display-remove
 npm uninstall oc-go-usage-display
 ```
 

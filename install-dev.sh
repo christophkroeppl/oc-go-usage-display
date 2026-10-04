@@ -242,7 +242,7 @@ echo "config snapshot: $SNAPSHOT_DIR"
 
 print_reminder() {
   local restore_cmd="scripts/dev-config-snapshot.sh restore --backup-dir $SNAPSHOT_DIR"
-  local fallback_cmd="npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
+  local fallback_cmd="bunx -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
   if [[ -n "$CONFIG_DIR_ARG" ]]; then
     restore_cmd+=" --config-dir $CONFIG_DIR_ARG"
     fallback_cmd+=" --config-dir $CONFIG_DIR_ARG"
@@ -264,7 +264,7 @@ install_dev() {
     # (1.9.12) while this repo's devDependency resolves to a newer 1.9.x.
     npm install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
 
-    # Invoke the installed CLI by path. `npx --no-install <name>` resolves THIS
+    # Invoke the installed CLI by path. `bunx --no-install <name>` resolves THIS
     # repo's bin of the same name (the root package.json declares it), so it
     # would install the local dist/ and silently ignore the downloaded artifact
     # -- exactly what a dev install must not do. Called by path, the CLI
