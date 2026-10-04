@@ -112,7 +112,7 @@ paths are refused. Backups default to
 `${TMPDIR:-/tmp}/oc-go-usage-display-backup/<timestamp>-<pid>`
 (`--backup-dir` overrides; `--snapshot` aliases it). Fall back to the published
 package with
-`npx -y -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir <path>`
+`bunx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir <path>`
 
 Flags: `--dry-run` (download + sanity check only), `--branch` (default
 `develop`), `--workflow` (default `dev-build.yml`), `--run-id`, `--dir`,
