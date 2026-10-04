@@ -12,7 +12,7 @@
 // detection never fails the install.
 //
 // Supported flows:
-//   npm install oc-go-usage-display@latest && bunx oc-go-usage-display-init --copy
+//   bun add oc-go-usage-display@latest && bunx oc-go-usage-display-init --copy
 //   (or declare "plugin": ["oc-go-usage-display@latest"] in config instead).
 //   bunx -p oc-go-usage-display@latest oc-go-usage-display-init --copy  (one-shot from the package cache)
 // Copy-first needs the published latest+: 1.1.0 symlinks and ignores --copy.

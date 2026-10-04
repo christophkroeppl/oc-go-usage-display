@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install oc-go-usage-display from the latest successful develop dev-build.
 # Downloads the stable `dev-tgz` artifact, sanity-checks the tarball, snapshots
-# the 6 OpenCode config files, installs it via npm, and registers the plugin
+# the 6 OpenCode config files, installs it via bun, and registers the plugin
 # (existing toggles are preserved).
 #
 # There is no auto-restore: the snapshot path and the restore command are
@@ -97,7 +97,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for cmd in gh node npm; do
+for cmd in gh bun; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "error: $cmd is required" >&2; exit 1; }
 done
 gh auth status >/dev/null 2>&1 || {
@@ -259,17 +259,19 @@ install_dev() {
   (
     cd "$SCRIPT_DIR" || exit 1
     # Peer resolution is irrelevant here: `bin/*` imports only node builtins and
-    # this install exists solely to put the CLI on PATH. Plain `npm install`
-    # aborts with ERESOLVE because the package pins the `solid-js` peer exactly
-    # (1.9.12) while this repo's devDependency resolves to a newer 1.9.x.
-    npm install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
+    # this install exists solely to put the CLI on PATH. The flags are kept
+    # because the conflict is real, not legacy: the package pins the `solid-js`
+    # peer exactly (1.9.12) while this repo's devDependency resolves to a newer
+    # 1.9.x, which aborts a strict install. `--no-save` keeps package.json and
+    # bun.lock untouched, so a dev install leaves no trace in the checkout.
+    bun install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
 
     # Invoke the installed CLI by path. `bunx --no-install <name>` resolves THIS
     # repo's bin of the same name (the root package.json declares it), so it
     # would install the local dist/ and silently ignore the downloaded artifact
     # -- exactly what a dev install must not do. Called by path, the CLI
     # derives its own package root and copies the tarball's bundles.
-    local pkg_dir="$SCRIPT_DIR/node_modules/$(node -p 'require("./package.json").name')"
+    local pkg_dir="$SCRIPT_DIR/node_modules/$(bun -e 'console.log(require("./package.json").name)')"
     local bin_dir="$pkg_dir/bin"
     if [[ ! -f "$bin_dir/oc-go-usage-display-init.js" ]]; then
       echo "error: dev package was not installed at $pkg_dir" >&2

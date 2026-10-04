@@ -17,11 +17,11 @@ either host's bundle is missing.
 
 ![Go Usage sidebar and statusline](docs/screenshot.png)
 
-## Install (npm)
+## Install
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display && bunx oc-go-usage-display-init --copy` |
+| Persistent (recommended) | `bun add oc-go-usage-display && bunx oc-go-usage-display-init --copy` |
 | One-shot (bunx) | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy` |
 | Project scope | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
 
@@ -61,8 +61,8 @@ detected installs both.
 
 ## Commands
 
-After `npm install` the names below are on PATH; from a checkout use
-`node ./bin/<bin>.js`.
+After `bun add` the names below are on PATH; from a checkout use
+`bun ./bin/<bin>.js`.
 
 | Command | What it does |
 | ------- | ------------ |
@@ -338,7 +338,7 @@ footer to a commit merged to `main`.
 
 ```sh
 bunx oc-go-usage-display-remove
-npm uninstall oc-go-usage-display
+bun remove oc-go-usage-display
 ```
 
 Removes the plugin files and the server + `tui.json` entries from every
