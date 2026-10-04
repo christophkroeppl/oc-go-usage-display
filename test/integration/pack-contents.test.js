@@ -60,6 +60,8 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
       "package/dist/plugins/oc-go-usage-display.tsx",
       "package/dist/plugins/oc-go-usage-display.kilo.tsx",
       "package/bin/oc-go-usage-display-init.js",
+      "package/bin/lib.js",
+      "package/bin/cli-core.js",
       "package/src/shared.ts",
       "package/src/tui-shared.tsx",
     ]) {

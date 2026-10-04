@@ -1,15 +1,20 @@
 #!/usr/bin/env node
-// Install (or re-install) the plugin into the detected coding agent(s):
+// Install (or re-install) the plugin into the coding agent(s) you pick:
 // copies dist/plugins/* (bundled, self-contained) -> plugins/* by default
 // (--symlink is dev-only: edits apply after restart but dangle if the source
 // tree moves), then registers the server + TUI config entries (toggles
 // preserved for opencode).
 //
 // Targets: --target opencode|kilo|all, or --config-dir / --kilo-config-dir.
-// Without an explicit target the hosts are detected (binary on PATH or config
-// dir present; brew/npm/curl/source installs all count): one host installs
-// silently, two or more offer a numbered multiselect, zero defaults to all —
-// detection never fails the install.
+// Without an explicit target:
+//   - stdin+stdout are TTYs: ALWAYS ask, even when only one host is detected.
+//     Both hosts are listed; a host whose binary is not on PATH is struck
+//     through and left out of the default, but stays selectable by number (you
+//     may be pre-installing config for an app you have not installed yet).
+//   - otherwise (piped, CI, agent): every host, no prompt, no stdin read.
+// So a human never has their config rewritten without a question, and an
+// automated run never blocks on one. Unrecognized arguments are rejected
+// instead of treated as "install" — `init status` is an error, not an install.
 //
 // Supported flows:
 //   bun add oc-go-usage-display@latest && bunx oc-go-usage-display-init --copy
@@ -23,6 +28,7 @@ import {
   ensureTuiEntry,
   exitWithError,
   fail,
+  guardArgs,
   hostDirFromArgv,
   linkModeFromArgv,
   linkPluginFiles,
@@ -32,7 +38,7 @@ import {
 } from "./lib.js";
 
 try {
-  const argv = process.argv.slice(2);
+  const argv = guardArgs("init");
   const repoDir = repoDirFromArgv(argv);
   const mode = linkModeFromArgv(argv);
   const sidebar = parseOptionalToggle(argv, "--sidebar");

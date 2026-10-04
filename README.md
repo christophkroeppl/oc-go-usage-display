@@ -54,10 +54,25 @@ Kilo is a separate target: `bunx oc-go-usage-display-init --target kilo` copies
 `tui.json`. Kilo's `tui.json` rejects `sidebar`/`statusline`, so its entry is a
 plain plugin spec (both surfaces default on), and Kilo does not resolve
 `./...` against its config dir, so the entries are absolute paths to the
-installed copies. Without `--target`, hosts are detected by binary on PATH or
-config dir, so brew/npm/curl/source installs all count: one detected host
-installs silently, two or more offer a numbered multiselect, and nothing
-detected installs both.
+installed copies.
+
+### Which host(s) get installed
+
+Without `--target` / `--config-dir`, `init` never decides for you:
+
+| Run | Behaviour |
+| ---- | --------- |
+| human on a terminal | **always** asks, even when only one host is detected. Both hosts are listed; a host whose binary is not on PATH is struck through and left out of the default — but still selectable by number, so you can pre-install config for an app you have not installed yet |
+| piped, CI, an agent | installs into every host, prints no prompt, reads no stdin — it cannot hang |
+
+Detection is the binary on PATH, so a leftover config dir does not make a host
+look installed. In a terminal with nothing on PATH the default falls back to both
+hosts, so a portable/source install still gets in. Pass `--target
+opencode|kilo|all` (or `--help`) to skip the question entirely.
+
+Every command fails closed on an unrecognized argument: `init status` and
+`init --help` are errors or usage output, never a silent install into your real
+config.
 
 ## Commands
 
@@ -66,7 +81,7 @@ After `bun add` the names below are on PATH; from a checkout use
 
 | Command | What it does |
 | ------- | ------------ |
-| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: detected hosts, else all) |
+| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: ask on a TTY, else every host) |
 | `oc-go-usage-display-remove` | uninstall files + config entries (secrets untouched) |
 | `oc-go-usage-display-show` | print effective install per host; `--json` for machine output |
 | `oc-go-usage-display-status` | health check; exit 0 healthy, 1 with reasons |
@@ -75,7 +90,8 @@ After `bun add` the names below are on PATH; from a checkout use
 Flags: `--config-dir <path>` (opencode; default `$OPENCODE_CONFIG_DIR` or
 `~/.config/opencode`), `--kilo-config-dir <path>` (default `$KILO_CONFIG_DIR`
 or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
-`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show).
+`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show),
+`--help` (every command; lists exactly what it accepts).
 
 ## Display toggles
 

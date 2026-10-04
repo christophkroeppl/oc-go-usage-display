@@ -29,6 +29,7 @@ CLEAN=0
 DRY_RUN=0
 BACKUP_DIR=""
 CONFIG_DIR_ARG=""
+TARGET_ARG=""
 INIT_ARGS=()
 
 usage() {
@@ -41,6 +42,9 @@ Usage: install-dev.sh [options]
   --dir <path>           download dir (default: ./tmp-dev)
   --force, --clean       allow/replace a non-empty download dir
   --dry-run              stop after download + tarball sanity check
+  --target <host>        passthrough to oc-go-usage-display-init: opencode|kilo|all.
+                         Skips the host prompt; without it an interactive terminal
+                         is asked which host(s) to install into.
   --sidebar=0/1          passthrough to oc-go-usage-display-init
   --statusline=0/1       passthrough to oc-go-usage-display-init
   --config-dir <path>    opencode config dir (default: $OPENCODE_CONFIG_DIR or ~/.config/opencode)
@@ -90,6 +94,15 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       INIT_ARGS+=("$1=$2")
+      shift 2
+      ;;
+    --target=*) TARGET_ARG="${1#*=}"; shift ;;
+    --target)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "error: --target requires a value (opencode|kilo|all)" >&2
+        exit 1
+      fi
+      TARGET_ARG="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -227,6 +240,10 @@ CONFIG_FORWARD=()
 if [[ -n "$CONFIG_DIR_ARG" ]]; then
   CONFIG_FORWARD=(--config-dir "$CONFIG_DIR_ARG")
 fi
+TARGET_FORWARD=()
+if [[ -n "$TARGET_ARG" ]]; then
+  TARGET_FORWARD=(--target "$TARGET_ARG")
+fi
 BACKUP_FORWARD=()
 if [[ -n "$BACKUP_DIR" ]]; then
   BACKUP_FORWARD=(--backup-dir "$BACKUP_DIR")
@@ -278,7 +295,7 @@ install_dev() {
       exit 1
     fi
     echo "installing from: $pkg_dir"
-    node "$bin_dir/oc-go-usage-display-init.js" --copy ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
+    node "$bin_dir/oc-go-usage-display-init.js" --copy ${TARGET_FORWARD[@]+"${TARGET_FORWARD[@]}"} ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
     node "$bin_dir/oc-go-usage-display-show.js" --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
       || echo "warning: show --json failed (best-effort)"
     node "$bin_dir/oc-go-usage-display-status.js" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
