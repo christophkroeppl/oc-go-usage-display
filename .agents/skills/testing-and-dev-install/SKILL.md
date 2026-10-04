@@ -80,7 +80,7 @@ Tests must never read or write the developer's real config:
 ## Dev install (`install-dev.sh`)
 
 `./install-dev.sh` installs the latest successful `develop` dev tarball.
-Requires an authenticated `gh`, plus `node` and `npm`.
+Requires an authenticated `gh`, plus `bun`.
 
 Flow:
 
@@ -91,7 +91,7 @@ Flow:
 3. sanity-check the tarball (`dist/index.js` and the init bin are present),
 4. fail closed: `scripts/dev-config-snapshot.sh save` snapshots the 6 config
    paths before any mutation,
-5. `npm install --no-save file:<tgz>` then `oc-go-usage-display-init --copy`
+5. `bun install --no-save file:<tgz>` then `oc-go-usage-display-init --copy`
    (plus best-effort `show --json` and `status`),
 6. print the restore command and the published fallback.
 
