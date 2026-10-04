@@ -116,7 +116,29 @@ package with
 
 Flags: `--dry-run` (download + sanity check only), `--branch` (default
 `develop`), `--workflow` (default `dev-build.yml`), `--run-id`, `--dir`,
-`--force` / `--clean` (replace a non-empty download dir), `--sidebar=0/1`,
-`--statusline=0/1`, `--config-dir`, `--backup-dir`. The npm-init surface also
-takes `--target opencode|kilo|all` and `--kilo-config-dir` (Kilo entries are
-absolute paths: Kilo does not resolve `./...` against its config dir).
+`--force` / `--clean` (replace a non-empty download dir), `--target`,
+`--sidebar=0/1`, `--statusline=0/1`, `--config-dir`, `--backup-dir`. The npm-init
+surface also takes `--target opencode|kilo|all` and `--kilo-config-dir` (Kilo
+entries are absolute paths: Kilo does not resolve `./...` against its config dir).
+
+## The init host prompt
+
+`init` (and `update`, which shares the selection) never decides a host for a
+human: on a TTY with no `--target` / `--config-dir` it lists **both** hosts and
+asks, even when only one has a binary on PATH. A host with no binary on PATH is
+struck through (SGR 9, TTY only, `NO_COLOR` honoured) and left out of the
+default, but stays selectable by number — pre-installing config for an app you
+have not installed yet is legitimate. Enter takes the default, which falls back
+to both hosts when nothing is on PATH.
+
+Piped/CI/agent runs install into every host without prompting and without reading
+stdin, so there is no hang; `--target` / `--config-dir` take the same short-cut
+on a TTY. Unknown flags and unknown positionals are rejected (`init status` used
+to be a full install), and `--help` prints the accepted flags instead of
+installing.
+
+The pure half of this is `bin/cli-core.js` (no imports, unit-tested in
+`test/unit/init-targets.test.js`); `bin/lib.js` adds PATH/filesystem/stdin. The
+CLI-level behaviour is pinned in `test/integration/install-cli.test.js`, which
+uses a pty (`script`) for the interactive paths and a timeout for the no-hang
+guarantee.

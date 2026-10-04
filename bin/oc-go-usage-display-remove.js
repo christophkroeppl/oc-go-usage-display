@@ -9,6 +9,7 @@
 
 import {
   exitWithError,
+  guardArgs,
   hostDirFromArgv,
   removePluginFiles,
   removeServerEntry,
@@ -17,7 +18,7 @@ import {
 } from "./lib.js";
 
 try {
-  const argv = process.argv.slice(2);
+  const argv = guardArgs("remove");
   const targets = resolveRemoveTargets(argv);
 
   for (const host of targets) {

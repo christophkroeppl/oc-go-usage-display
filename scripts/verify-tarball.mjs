@@ -19,6 +19,10 @@ const REQUIRED = [
   "package/dist/tui.js",
   "package/dist/tui.kilo.js",
   "package/bin/oc-go-usage-display-init.js",
+  // The bins import these at runtime, so a tarball without them ships a CLI
+  // that cannot start.
+  "package/bin/lib.js",
+  "package/bin/cli-core.js",
 ];
 
 function fail(message) {

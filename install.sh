@@ -12,6 +12,12 @@
 #   ./install.sh --symlink        # symlink (dev-only; run `bun run build` after
 #                                 # source edits so dist/plugins/* stays current)
 #   ./install.sh --sidebar=0 --statusline=1
+#   ./install.sh --target kilo    # skip the host question below
+#
+# Without --target/--config-dir an interactive terminal is asked which host(s)
+# to install into (a host with no binary on PATH is struck through and left out
+# of the default); piped or CI runs install both hosts without prompting. Any
+# other argument is rejected by the CLI rather than forwarded.
 #
 # Secrets are never touched. Restart opencode afterwards.
 set -euo pipefail
