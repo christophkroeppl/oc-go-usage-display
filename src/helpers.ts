@@ -373,6 +373,15 @@ export type SidebarBandState = {
   providerId: string | undefined;
 };
 
+/**
+ * Whether the Models column-header row should render. The header is only
+ * meaningful when at least one model row exists beneath it; an empty group
+ * (e.g. a session with no model usage yet) must not show a bare header.
+ */
+export function shouldRenderModelsHeader(models: readonly unknown[]): boolean {
+  return models.length > 0;
+}
+
 export function ownsIntegratedBand(state: SidebarBandState): boolean {
   return (
     state.sidebarEnabled &&
