@@ -193,7 +193,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
 
     const body = () => (
-      <box flexDirection="column" gap={1} paddingTop={1} paddingLeft={2}>
+      <box flexDirection="column" paddingTop={1} paddingLeft={2}>
         <For each={rows()}>{(model) => <WeightedModelRow theme={props.theme} model={model} />}</For>
         <For each={buildGoModelFooters(weights())}>
           {(line) => (
