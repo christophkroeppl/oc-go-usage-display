@@ -114,6 +114,7 @@ import {
   statuslineRenders,
   totalGoTokens,
   usageTokenCount,
+  shouldRenderModelsHeader,
   DEFAULT_SIDEBAR_MODE,
 } from "./helpers.js";
 import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarBandState, SidebarMode } from "./helpers.js";
@@ -373,32 +374,34 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         <Show when={isGo && props.planRows.length > 0}>
           <GoPlanSection theme={props.theme} rows={props.planRows} />
         </Show>
-        <box flexDirection="row" gap={1}>
-          <box width={1} flexShrink={0} />
-          <text flexGrow={1} minWidth={0} fg={props.theme.current.textMuted} wrapMode="none">
-            Model
-          </text>
-          <box
-            width={KILO_STEPS_COLUMN_WIDTH}
-            flexDirection="row"
-            flexShrink={0}
-            justifyContent="flex-end"
-          >
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Steps
+        <Show when={shouldRenderModelsHeader(props.group.models)}>
+          <box flexDirection="row" gap={1}>
+            <box width={1} flexShrink={0} />
+            <text flexGrow={1} minWidth={0} fg={props.theme.current.textMuted} wrapMode="none">
+              Model
             </text>
+            <box
+              width={KILO_STEPS_COLUMN_WIDTH}
+              flexDirection="row"
+              flexShrink={0}
+              justifyContent="flex-end"
+            >
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                Steps
+              </text>
+            </box>
+            <box
+              width={KILO_COST_COLUMN_WIDTH}
+              flexDirection="row"
+              flexShrink={0}
+              justifyContent="flex-end"
+            >
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                Cost
+              </text>
+            </box>
           </box>
-          <box
-            width={KILO_COST_COLUMN_WIDTH}
-            flexDirection="row"
-            flexShrink={0}
-            justifyContent="flex-end"
-          >
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Cost
-            </text>
-          </box>
-        </box>
+        </Show>
         <For each={props.group.models}>
           {(model) => {
             const key = `${model.providerID}/${model.modelID}`;
