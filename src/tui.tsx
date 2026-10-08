@@ -70,8 +70,9 @@ import {
   modelDisplayName,
   shortModelName,
   weightGoModels,
-} from "./helpers.js";
-import type { GoModelWeight } from "./helpers.js";
+  isGoUsageProvider,
+} from "./tui-helpers.js";
+import type { GoModelWeight } from "./tui-helpers.js";
 import {
   aggregateModelUsageFromMessages,
   errorMessage,
@@ -87,7 +88,6 @@ import {
   MeterBar,
   createCollapseState,
   createUsageStore,
-  isGoUsageProvider,
   logUsageError,
   makeProviderResolver,
   readModelDisplayName,

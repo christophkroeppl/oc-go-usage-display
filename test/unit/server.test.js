@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatServerLine } from "../../dist/helpers.js";
+import { formatServerLine } from "../../dist/server-helpers.js";
 
 function serverSnapshot(overrides = {}) {
   return {

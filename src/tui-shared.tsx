@@ -72,7 +72,7 @@ import {
   parseBooleanFlag,
   resolveProviderId,
   surfaceSelectionFromDisplayMode,
-} from "./helpers.js";
+} from "./tui-helpers.js";
 import type {
   PlanRow,
   ProviderSource,
@@ -80,7 +80,7 @@ import type {
   SurfaceSelection,
   UsageMeterSeverity,
   UsageRow,
-} from "./helpers.js";
+} from "./tui-helpers.js";
 import {
   extractSnapshotFromApiPayload,
   hostEnv,

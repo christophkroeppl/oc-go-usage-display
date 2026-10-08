@@ -25,6 +25,8 @@ const ALLOWED_IMPORTS = new Set([
   "node:path",
   "../../dist/helpers.js",
   "../../dist/shared.js",
+  "../../dist/server-helpers.js",
+  "../../dist/tui-helpers.js",
 ]);
 
 // Test helpers the unit tier may import, with the same guarantee the dist modules

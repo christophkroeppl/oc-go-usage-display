@@ -106,18 +106,18 @@ import {
   formatUsageCount,
   goSharePercent,
   groupModelsByProvider,
-  hostUsagePanelEnabled,
   modelDisplayName,
-  parseSidebarMode,
-  providerIdFromMessages,
-  sidebarBandRenders,
-  statuslineRenders,
   totalGoTokens,
   usageTokenCount,
   shouldRenderModelsHeader,
+  parseSidebarMode,
   DEFAULT_SIDEBAR_MODE,
-} from "./helpers.js";
-import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarBandState, SidebarMode } from "./helpers.js";
+  hostUsagePanelEnabled,
+  sidebarBandRenders,
+  statuslineRenders,
+  providerIdFromMessages,
+} from "./tui-helpers.js";
+import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarBandState, SidebarMode } from "./tui-helpers.js";
 import {
   hostEnv,
   parseSessionModelUsage,
