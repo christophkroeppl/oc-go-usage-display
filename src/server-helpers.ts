@@ -1,0 +1,179 @@
+// Server-only helpers: compact one-line snapshot summary, auth cookie
+// boundary, and cookie-fetch redirect policy.
+//
+// This module is imported ONLY by src/index.ts. It is NOT imported by any
+// TUI entry (tui.tsx, tui.kilo.tsx) or shared layer (tui-shared.tsx).
+
+import * as fs from "node:fs";
+import {
+  formatResetDuration,
+  hostEnv,
+  isRecord,
+  resolveHostRoots,
+  resolveUsageHost,
+  safeJoinPath,
+  toNonEmptyString,
+} from "./shared.js";
+import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
+
+// ---------------------------------------------------------------------------
+// Server: compact one-line snapshot summary (keeps the rolling reset suffix)
+// ---------------------------------------------------------------------------
+
+function formatWindow(window: UsageWindow | null): string {
+  if (!window) return "n/a";
+  return `${window.percent}%`;
+}
+
+export function formatServerLine(snapshot: UsageSnapshot): string {
+  if (snapshot.apiUnavailable || (!snapshot.rolling && !snapshot.weekly && !snapshot.monthly)) {
+    const reason = snapshot.apiError ?? "unknown error";
+    return `Go n/a (${reason})`;
+  }
+  const rollingReset =
+    formatResetDuration(snapshot.rolling?.resetInSec ?? null) ??
+    snapshot.rolling?.resetText ??
+    null;
+  const rollingText =
+    snapshot.rolling === null
+      ? "5h n/a"
+      : `5h ${snapshot.rolling.percent}%${rollingReset ? ` (reset ${rollingReset})` : ""}`;
+  return `Go ${rollingText} | 7d ${formatWindow(snapshot.weekly)} | 30d ${formatWindow(snapshot.monthly)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Server: auth cookie boundary (malformed-cookie rejection; never logged)
+// ---------------------------------------------------------------------------
+
+export type FileConfig = { workspaceId: string | null; authCookie: string | null };
+
+export function fileConfigPath(host: UsageHost = "opencode"): string {
+  return safeJoinPath(resolveHostRoots(host).configDir, "oc-go-usage-display.json");
+}
+
+export function readFileConfig(host: UsageHost = "opencode"): FileConfig {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(fileConfigPath(host), "utf8");
+  } catch {
+    return { workspaceId: null, authCookie: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { workspaceId: null, authCookie: null };
+  }
+  if (!isRecord(parsed)) return { workspaceId: null, authCookie: null };
+  return {
+    workspaceId: toNonEmptyString(parsed.workspaceId),
+    authCookie: toNonEmptyString(parsed.authCookie),
+  };
+}
+
+export function isMalformedAuthCookie(cookie: string): boolean {
+  // Reject CR/LF (header injection), separators that confuse cookie jars,
+  // plus tab, NUL, and double-quote (never valid in a cookie value).
+  return /[\r\n;,\t\0"]/.test(cookie);
+}
+
+export function hasMalformedAuthCookie(
+  fileConfig: FileConfig = readFileConfig(),
+  host: UsageHost = resolveUsageHost(),
+): boolean {
+  const raw = toNonEmptyString(hostEnv(host, "AUTH_COOKIE")) ?? fileConfig.authCookie;
+  if (!raw) return false;
+  return isMalformedAuthCookie(raw);
+}
+
+// ---------------------------------------------------------------------------
+// Server: cookie-fetch redirect policy
+// ---------------------------------------------------------------------------
+//
+// The workspace scrape carries the user's `auth` cookie. Automatic redirect
+// following may re-send caller headers (including the cookie) to a cross-origin
+// Location, and runtime header stripping cannot be relied on to prevent that.
+// The cookie path therefore requests `redirect: "manual"` and re-sends only
+// after these helpers approve a Location on the allowlisted canonical HTTPS
+// hosts. `fetchViaApiKey` is untouched (anonymous API path).
+
+const ALLOWED_REDIRECT_HOSTS = new Set(["opencode.ai", "auth.opencode.ai"]);
+
+// Follow at most this many redirects before giving up (a redirect loop or an
+// endless login bounce becomes a clear unavailable snapshot instead of a hang).
+export const MAX_REDIRECT_HOPS = 3;
+
+export type RedirectDecision =
+  | { follow: true; url: string }
+  | { follow: false; reason: string };
+
+// Only the canonical HTTPS origins may receive the auth cookie: no explicit
+// ports, no userinfo, and an exact allowlisted hostname (so `opencode.ai.evil`
+// never matches).
+function isAllowedHttpsUrl(url: URL): boolean {
+  return (
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.port === "" &&
+    ALLOWED_REDIRECT_HOSTS.has(url.hostname)
+  );
+}
+
+// Resolve `location` against `fromUrl`; null unless BOTH the current URL and
+// the resolved target are allowed HTTPS origins.
+function resolveRedirectUrl(fromUrl: string, location: string): URL | null {
+  let base: URL;
+  try {
+    base = new URL(fromUrl);
+  } catch {
+    return null;
+  }
+  if (!isAllowedHttpsUrl(base)) return null;
+  let next: URL;
+  try {
+    next = new URL(location, base);
+  } catch {
+    return null;
+  }
+  return isAllowedHttpsUrl(next) ? next : null;
+}
+
+function redirectTargetHost(fromUrl: string, location: string): string | null {
+  try {
+    const host = new URL(location, fromUrl).host;
+    return host.length > 0 ? host : null;
+  } catch {
+    return null;
+  }
+}
+
+// True when `location` resolves to an allowed canonical HTTPS host relative to
+// an allowed `fromUrl`. Relative locations inherit the current host.
+export function isAllowedRedirect(fromUrl: string, location: string): boolean {
+  return resolveRedirectUrl(fromUrl, location) !== null;
+}
+
+// Pure redirect decision: follow (with the resolved absolute URL) or stop with
+// a user-facing reason. Never throws.
+export function resolveAllowedRedirect(
+  fromUrl: string,
+  location: string | null,
+  hopsFollowed: number,
+): RedirectDecision {
+  if (hopsFollowed >= MAX_REDIRECT_HOPS) {
+    return { follow: false, reason: `too many redirects (limit ${MAX_REDIRECT_HOPS})` };
+  }
+  if (location === null || location.trim().length === 0) {
+    return { follow: false, reason: "redirect without a Location header" };
+  }
+  const next = resolveRedirectUrl(fromUrl, location);
+  if (next === null) {
+    const host = redirectTargetHost(fromUrl, location);
+    return {
+      follow: false,
+      reason: `redirect blocked (target not allowed${host ? `: ${host}` : ""})`,
+    };
+  }
+  return { follow: true, url: next.toString() };
+}

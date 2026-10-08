@@ -359,6 +359,20 @@ export const INTEGRATED_MODELS_SECTION_LABEL = "Models";
 export const GO_PLAN_HEADING = "Go Plan";
 export const INTEGRATED_GO_SHARE_LABEL = "Go share";
 
+// The plan window label cell ("5h", "7d", "30d"): exactly the longest label the
+// plan has, so every meter starts on the same column and none of the width goes
+// to padding.
+export const PLAN_LABEL_WIDTH = 3;
+
+// The Go share's label cell, the same idea for a longer label: exactly the label
+// itself, so the share meter starts on the same column on every render.
+//
+// This is what the share row used to get wrong. Its label was `flexGrow`, so the
+// label and the meter BOTH claimed the slack and the split between them moved
+// with the reading -- the share bar was 18 cells wide at 50% and 20 at 100%, and
+// its percent slid a column with it. Only the meter may grow.
+export const GO_SHARE_LABEL_WIDTH = INTEGRATED_GO_SHARE_LABEL.length;
+
 // Wording for a model section with nothing to show. Both hosts use it (opencode's
 // mix folds its own message store, Kilo's integrated panel the host endpoint),
 // and Kilo's own load/failure wording is borrowed too, so the section reads the

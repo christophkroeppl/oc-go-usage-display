@@ -33,7 +33,7 @@ import {
   unavailableSnapshot,
   usageHostFromEnv,
 } from "../../dist/shared.js";
-import { formatServerLine } from "../../dist/helpers.js";
+import { formatServerLine } from "../../dist/server-helpers.js";
 
 // --- safeJoinPath / resolveConfigDir (module-level path construction) ---
 
