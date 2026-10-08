@@ -43,6 +43,15 @@
 // accessor. Wrapping a region that happens to be static costs nothing and
 // removes the question.
 //
+// THE SLOT BODY IS NOT ONE OF THOSE REGIONS. `@opentui/solid` invokes
+// `entry.renderer(ctx, props)` exactly once per mount, inside `AppendEntry`'s
+// one-shot body (`renderEntry` in @opentui/solid@0.5.11). A condition read
+// there -- a provider gate, a collapse flag, a mode -- is therefore evaluated
+// once and latched for the life of the band. Anything that has to react belongs
+// in a memo or a `<Show>` inside the returned tree, never in the slot function
+// body. `KiloSidebarBand` in `tui.kilo.tsx` is the worked example: it exists
+// only to move four conditions out of the body and behind memos.
+//
 // This was verified against the real host in both directions rather than
 // assumed: the collapse toggle and an async snapshot arriving after mount both
 // re-render correctly, which is the property this pattern exists to guarantee.
@@ -63,7 +72,7 @@ import {
   parseBooleanFlag,
   resolveProviderId,
   surfaceSelectionFromDisplayMode,
-} from "./helpers.js";
+} from "./tui-helpers.js";
 import type {
   PlanRow,
   ProviderSource,
@@ -71,7 +80,7 @@ import type {
   SurfaceSelection,
   UsageMeterSeverity,
   UsageRow,
-} from "./helpers.js";
+} from "./tui-helpers.js";
 import {
   extractSnapshotFromApiPayload,
   hostEnv,
@@ -314,6 +323,112 @@ export function resolveSurfaceSelection(
 }
 
 // ---------------------------------------------------------------------------
+// Commands (host keymap, palette-namespace)
+// ---------------------------------------------------------------------------
+//
+// Commands are registered on BOTH host surfaces, because they are two different
+// surfaces and neither substitutes for the other:
+//
+//   - `api.command.register`  -> the ctrl+P palette. Verified on Kilo 7.8.3 and
+//     opencode 1.18.33: this is what puts a command in the palette.
+//   - `api.keymap.registerLayer` + `slashName` -> the prompt's `/` autocomplete.
+//
+// Registering only the keymap leaves the palette empty, and registering only the
+// legacy shim leaves no slash command. Both are best-effort: either may be absent,
+// and a host that offers neither still gets a working plugin.
+export type DisplayCommand = {
+  name: string;
+  title: string;
+  desc?: string;
+  category?: string;
+  slashName?: string;
+  run: () => void;
+};
+
+export type CommandLayerApi = {
+  keymap?: {
+    registerLayer?: (layer: {
+      commands: ReadonlyArray<DisplayCommand>;
+      bindings?: ReadonlyArray<unknown>;
+      priority?: number;
+    }) => (() => void) | void;
+  };
+  // Kept for hosts that predate the keymap surface; the shim forwards to it.
+  command?: {
+    register?: (build: () => LegacyDisplayCommand[]) => (() => void) | void;
+  };
+};
+
+// The legacy shape, declared exactly as we emit it so a host's own
+// `api.command` type stays assignable to `CommandLayerApi`.
+type LegacyDisplayCommand = {
+  title: string;
+  value: string;
+  description?: string;
+  category?: string;
+  slash?: { name: string; aliases?: string[] };
+  onSelect: () => void;
+};
+
+// `PALETTE_NAMESPACE` is what puts a command in the command palette at all: a
+// command without it is bound but unlisted. Both hosts' own plugins set it.
+const PALETTE_NAMESPACE = "palette";
+
+// `build` is called on every read rather than snapshotted, so a title always
+// describes the state as it is NOW. Two different hosts read it differently: the
+// palette copies labels when it lists them, and the slash list when it builds, so
+// one of the two would otherwise show a label the other has already moved past.
+export function registerDisplayCommands(
+  api: CommandLayerApi,
+  build: () => ReadonlyArray<DisplayCommand>,
+): () => void {
+  const disposers: Array<() => void> = [];
+
+  try {
+    if (typeof api.keymap?.registerLayer === "function") {
+      const dispose = api.keymap.registerLayer({
+        commands: build().map((command) => ({ namespace: PALETTE_NAMESPACE, ...command })),
+      });
+      if (typeof dispose === "function") disposers.push(dispose);
+    }
+  } catch {
+    // The slash list is a bonus surface; losing it must not cost us the palette.
+  }
+
+  try {
+    if (typeof api.command?.register === "function") {
+      const dispose = api.command.register(() =>
+        build().map((command) => {
+          const find = (): DisplayCommand =>
+            build().find((candidate) => candidate.name === command.name) ?? command;
+          // `exactOptionalPropertyTypes`: an absent `desc` must stay absent, not
+          // become an explicit `undefined` the host's schema rejects.
+          const legacy = {
+            get title(): string {
+              return find().title;
+            },
+            value: command.name,
+            onSelect: command.run,
+          } as LegacyDisplayCommand;
+          const current = find();
+          if (current.desc !== undefined) legacy.description = current.desc;
+          if (current.category !== undefined) legacy.category = current.category;
+          if (current.slashName !== undefined) legacy.slash = { name: current.slashName };
+          return legacy;
+        }),
+      );
+      if (typeof dispose === "function") disposers.push(dispose);
+    }
+  } catch {
+    // A host with neither surface gets no commands; never throw over it.
+  }
+
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Collapse (independent per surface, persisted in `api.kv`)
 // ---------------------------------------------------------------------------
 
@@ -384,11 +499,187 @@ export function createCollapseState(api: UsagePanelApi): CollapseState {
 }
 
 // ---------------------------------------------------------------------------
+// Settings-menu entries
+// ---------------------------------------------------------------------------
+
+// The two surfaces a user folds independently, named the way the menu names them.
+export type ToggleSurface = "sidebar" | "statusline";
+
+// The label an entry carries RIGHT NOW. An entry that always reads "toggle
+// statusline" makes the user remember what state they are in; naming the effect
+// ("Go usage: hide statusline" / "Go usage: show statusline") states what pressing
+// it will do, so the menu is readable without remembering anything. Pure and
+// exported so the exact strings are pinned rather than only visible in a
+// screenshot.
+export function toggleCommandTitle(surface: ToggleSurface, collapsed: boolean): string {
+  return `Go usage: ${collapsed ? "show" : "hide"} ${surface}`;
+}
+
+export const TOGGLE_COMMAND_PREFIX = "oc-go-usage-display.toggle-";
+
+export function toggleCommandValue(surface: ToggleSurface): string {
+  return `${TOGGLE_COMMAND_PREFIX}${surface}`;
+}
+
+export const TOGGLE_COMMAND_CATEGORY = "Go";
+
+// The structural shape of a host command entry, so this layer does not have to
+// import either host's SDK to describe one. A getter satisfies a plain `string`
+// property, which is why this stays assignable to both `TuiCommand` shapes.
+export type SurfaceToggleCommand = {
+  readonly title: string;
+  readonly value: string;
+  readonly category: string;
+  onSelect: () => void;
+};
+
+// One entry per foldable surface, labelled with what selecting it will do.
+//
+// `title` is a getter, so the label is computed when the host reads it rather than
+// when the factory ran. That is necessary but NOT sufficient on its own: Kilo's
+// palette takes a copy of each entry's title as it registers it, so a folded
+// surface kept advertising "hide". `registerSurfaceToggleCommands` therefore hands
+// the entries back after every fold, which is what makes the label follow the
+// state on a host that snapshots.
+export function surfaceToggleCommands(
+  collapse: CollapseState,
+  afterToggle?: () => void,
+): SurfaceToggleCommand[] {
+  return (["sidebar", "statusline"] as const).map((surface) => {
+    const toggle = surface === "sidebar" ? collapse.toggleSidebar : collapse.toggleStatusline;
+    return {
+      get title(): string {
+        return toggleCommandTitle(
+          surface,
+          surface === "sidebar" ? collapse.isSidebarCollapsed() : collapse.isStatuslineCollapsed(),
+        );
+      },
+      value: toggleCommandValue(surface),
+      category: TOGGLE_COMMAND_CATEGORY,
+      onSelect: () => {
+        toggle();
+        afterToggle?.();
+      },
+    };
+  });
+}
+
+// The smallest `api.command` this needs. Optional on the host too: it is a
+// deprecated shim and a host may omit it entirely, in which case there is no menu
+// to keep honest and every step here degrades to a no-op.
+export type ToggleCommandHost = {
+  command?: {
+    register: (callback: () => SurfaceToggleCommand[]) => () => void;
+  };
+};
+
+// Register the menu entries, and keep their labels true.
+//
+// Two mechanisms, because a host may do either: `title` is a getter (cheap, and
+// correct if the host reads the property when it draws) and the entries are
+// re-registered after every fold (correct if the host copied the title when it
+// took the entry, which is what Kilo's palette does). Re-registering is the belt to
+// the getter's braces, and it costs one call per user-initiated fold.
+//
+// Returns the disposer for the CURRENT registration, which is what the host's
+// `onDispose` should call.
+export function registerSurfaceToggleCommands(
+  host: ToggleCommandHost,
+  collapse: CollapseState,
+  extra?: () => SurfaceToggleCommand[],
+): () => void {
+  let disposeCurrent: () => void = () => {};
+
+  const register = (): void => {
+    // Drop the previous entries first: the host accumulates registrations, and
+    // leaving them behind would show the same command twice.
+    disposeCurrent();
+    try {
+      const unregister = host.command?.register(() => [
+        ...surfaceToggleCommands(collapse, register),
+        ...(extra?.() ?? []),
+      ]);
+      disposeCurrent = typeof unregister === "function" ? unregister : () => {};
+    } catch {
+      // Legacy command registration is optional; ignore failures.
+    }
+  };
+
+  register();
+  return () => disposeCurrent();
+}
+
+// ---------------------------------------------------------------------------
 // Provider gate
 // ---------------------------------------------------------------------------
 
 export function isGoUsageProvider(providerId: string | undefined): boolean {
   return providerId === GO_PROVIDER_ID;
+}
+
+// ---------------------------------------------------------------------------
+// Retiring a host panel we take a band from
+// ---------------------------------------------------------------------------
+
+// The smallest `api.plugins` a panel switch touches. Structural, like the rest of
+// this layer: a host whose status entries narrow `active`/`enabled` still fits.
+export type HostPanelSwitchApi = UsagePanelApi & {
+  plugins: {
+    list: () => ReadonlyArray<{ id?: unknown; active?: unknown; enabled?: unknown }>;
+    activate: (id: string) => Promise<unknown>;
+    deactivate: (id: string) => Promise<unknown>;
+  };
+};
+
+// Whether a host panel is currently switched on, or null when the host does not
+// report it. Reading the state first keeps every launch from writing an unchanged
+// enable/disable entry.
+export function currentHostPanelEnabled(api: HostPanelSwitchApi, pluginId: string): boolean | null {
+  try {
+    const entry = api.plugins.list().find((status) => status.id === pluginId);
+    if (entry === undefined) return null;
+    return entry.active === true || entry.enabled === true;
+  } catch {
+    return null;
+  }
+}
+
+// Put a host panel into `wantEnabled`, which is the runtime form of the
+// `plugin_enabled` map in a `tui.json` and is what makes the switch survive a
+// restart. Returns whether the panel is now in the requested state.
+//
+// This exists only because a slot renderer runs once per mount, so the decision
+// has to be re-applied from a reactive region rather than once at load. It is here,
+// and not in the Kilo entry, for one reason: the band that owns it cannot be
+// mounted without a renderer, so a test could otherwise only reach this code by
+// booting the host. Exported, the whole ownership matrix is drivable against a stub.
+//
+// Every step is best-effort. A failure leaves both panels on screen and is logged
+// through the host, never thrown: a sidebar is not worth destabilising a session.
+export async function applyHostPanelEnabled(
+  api: HostPanelSwitchApi,
+  pluginId: string,
+  wantEnabled: boolean,
+): Promise<boolean> {
+  try {
+    const current = currentHostPanelEnabled(api, pluginId);
+    if (current === wantEnabled) return true;
+    const applied = await (wantEnabled
+      ? api.plugins.activate(pluginId)
+      : api.plugins.deactivate(pluginId));
+    if (applied === true) return true;
+    await logUsageError(
+      api,
+      `Could not ${wantEnabled ? "enable" : "disable"} the host's ${pluginId} panel`,
+    );
+    return false;
+  } catch (error) {
+    await logUsageError(
+      api,
+      `Host ${pluginId} panel switch failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
 }
 
 // Which provider is in use, read live on every render rather than latched at
@@ -617,6 +908,7 @@ export function CollapsibleSection(props: {
   onToggle: () => void;
   body: () => JSX.Element;
 }) {
+  const content = createMemo(() => (props.expanded() ? props.body() : null));
   return (
     <box flexDirection="column">
       <SectionHeader
@@ -627,7 +919,7 @@ export function CollapsibleSection(props: {
         onToggle={props.onToggle}
       />
       <box flexDirection="column" gap={1}>
-        {reactiveChild(() => (props.expanded() ? props.body() : null))}
+        {reactiveChild(content)}
       </box>
     </box>
   );

@@ -17,27 +17,28 @@ either host's bundle is missing.
 
 ![Go Usage sidebar and statusline](docs/screenshot.png)
 
-## Install (npm)
+## Install
 
 | Mode | Command |
 | ---- | ------- |
-| Persistent (recommended) | `npm install oc-go-usage-display@latest && npx oc-go-usage-display-init --copy` |
-| One-shot (npx) | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy` |
-| Project scope | `npx -p oc-go-usage-display@latest oc-go-usage-display-init --copy --config-dir .opencode` |
+| Persistent (recommended) | `bun add oc-go-usage-display && bunx oc-go-usage-display-init --copy` |
+| One-shot (bunx) | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy` |
+| Project scope | `bunx -p oc-go-usage-display oc-go-usage-display-init --copy --config-dir .opencode` |
 
 `--copy` is the default and self-contained; `--symlink` is dev-only (rebuild +
-restart). Restart opencode afterwards. `@latest` tracks the newest release; for
-reproducible installs pin an exact version such as
-`oc-go-usage-display@2.1.0`.
+restart). Restart opencode afterwards. Every command here is unversioned on
+purpose, so none of them goes stale. If you need a reproducible install, keep
+the resolved version in your own `package-lock.json` instead of pinning one
+here.
 
-Alternative — no files copied: declare the versioned package and let opencode
-resolve it at startup:
+Alternative — no files copied: declare the package and let opencode resolve it
+at startup (add `@<version>` to pin it):
 
 ```jsonc
 // opencode.jsonc — server target (go_usage tool)
-{ "plugin": ["oc-go-usage-display@latest"] }
+{ "plugin": ["oc-go-usage-display"] }
 // tui.json — TUI target (sidebar + statusline)
-{ "plugin": [["oc-go-usage-display@latest", { "sidebar": true, "statusline": true }]] }
+{ "plugin": [["oc-go-usage-display", { "sidebar": true, "statusline": true }]] }
 ```
 
 From a checkout: `./install.sh` (copy install; add `--target kilo` for Kilo),
@@ -47,25 +48,40 @@ command).
 
 ### Kilo
 
-Kilo is a separate target: `npx oc-go-usage-display-init --target kilo` copies
+Kilo is a separate target: `bunx oc-go-usage-display-init --target kilo` copies
 `oc-go-usage-display.kilo.{ts,tsx}` into `$KILO_CONFIG_DIR` /
 `$XDG_CONFIG_HOME/kilo` / `~/.config/kilo` and registers `kilo.json` +
 `tui.json`. Kilo's `tui.json` rejects `sidebar`/`statusline`, so its entry is a
 plain plugin spec (both surfaces default on), and Kilo does not resolve
 `./...` against its config dir, so the entries are absolute paths to the
-installed copies. Without `--target`, hosts are detected by binary on PATH or
-config dir, so brew/npm/curl/source installs all count: one detected host
-installs silently, two or more offer a numbered multiselect, and nothing
-detected installs both.
+installed copies.
+
+### Which host(s) get installed
+
+Without `--target` / `--config-dir`, `init` never decides for you:
+
+| Run | Behaviour |
+| ---- | --------- |
+| human on a terminal | **always** asks, even when only one host is detected. Both hosts are listed; a host whose binary is not on PATH is struck through and left out of the default — but still selectable by number, so you can pre-install config for an app you have not installed yet |
+| piped, CI, an agent | installs into every host, prints no prompt, reads no stdin — it cannot hang |
+
+Detection is the binary on PATH, so a leftover config dir does not make a host
+look installed. In a terminal with nothing on PATH the default falls back to both
+hosts, so a portable/source install still gets in. Pass `--target
+opencode|kilo|all` (or `--help`) to skip the question entirely.
+
+Every command fails closed on an unrecognized argument: `init status` and
+`init --help` are errors or usage output, never a silent install into your real
+config.
 
 ## Commands
 
-After `npm install` the names below are on PATH; from a checkout use
-`node ./bin/<bin>.js`.
+After `bun add` the names below are on PATH; from a checkout use
+`bun ./bin/<bin>.js`.
 
 | Command | What it does |
 | ------- | ------------ |
-| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: detected hosts, else all) |
+| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: ask on a TTY, else every host) |
 | `oc-go-usage-display-remove` | uninstall files + config entries (secrets untouched) |
 | `oc-go-usage-display-show` | print effective install per host; `--json` for machine output |
 | `oc-go-usage-display-status` | health check; exit 0 healthy, 1 with reasons |
@@ -74,18 +90,27 @@ After `npm install` the names below are on PATH; from a checkout use
 Flags: `--config-dir <path>` (opencode; default `$OPENCODE_CONFIG_DIR` or
 `~/.config/opencode`), `--kilo-config-dir <path>` (default `$KILO_CONFIG_DIR`
 or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
-`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show).
+`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show),
+`--help` (every command; lists exactly what it accepts).
 
 ## Display toggles
 
 Three axes, all defaulting to on/integrated. Each is a command in the palette,
-persisted per surface, and it applies to whichever sidebar mode is active:
+persisted per surface, and it applies to whichever sidebar mode is active.
+
+The two on/off axes label themselves with the effect they will have, so the entry
+always says which way it goes: `Go usage: hide statusline` becomes
+`Go usage: show statusline` once the statusline is folded.
 
 | Axis | Command | Also settable as |
 | ---- | ------- | ---------------- |
-| sidebar on/off | `Go usage: toggle sidebar` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
+| sidebar on/off | `Go usage: show sidebar panel` / `... hide sidebar panel` | `sidebar` option, `OPENCODE_OC_GO_SIDEBAR` / `KILO_OC_GO_SIDEBAR` |
 | statusline on/off | `Go usage: toggle statusline` | `statusline` option, `OPENCODE_OC_GO_STATUSLINE` / `KILO_OC_GO_STATUSLINE` |
-| display mode (Kilo) | `Go usage: toggle sidebar mode` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
+| display mode (Kilo) | `Go usage: use integrated panel` / `... use standalone panel` | `sidebar_mode` option, `KILO_OC_GO_SIDEBAR_MODE` |
+
+The palette titles name the state the command moves you to, the way Kilo's own do
+(`Show sidebar` / `Hide sidebar`), so you can read the current state off the menu
+instead of having to know it.
 
 ```json
 { "plugin": ["./plugins/oc-go-usage-display.tsx", { "sidebar": true, "statusline": true }] }
@@ -96,6 +121,10 @@ whether it is there. Environment variables and the legacy `display` option apply
 only when the `tui.json` toggles are absent. Restart the host after changing
 static config. Kilo's `tui.json` rejects the `sidebar`/`statusline` options, so
 on that host the palette and the env vars are the way to set them.
+
+Which sessions the block answers for is also the same in both modes: a session on
+an `opencode-go` model. What differs is *who else* is on screen — see
+[integrated mode](#kilo-sidebar-mode) below.
 
 ## What the sidebar shows
 
@@ -148,13 +177,43 @@ edge.
 
 **Kilo** — `sidebar_mode` picks what the block is:
 
-- **integrated** (default): the block takes over the host's own `Token Usage`
-  band, retires that panel, and renders `Session Tokens` / `Models`. The plan is
+- **integrated** (default): the host's own `Token Usage` panel is retired and
+  the block renders `Session Tokens` / `Models` in its place. The plan is
   drawn **once**, as the `Go Plan` meters inside the `OpenCode Go` group, and
   every Go model row carries its `Go share`. There is deliberately no separate
   `Go Usage` block saying the same three numbers again.
-- **standalone**: our block in a free band above the host's panel, and the host
-  panel stays.
+- **standalone**: our `Go Usage` block, and the host panel stays.
+
+Both modes sit in the same free band of Kilo's sidebar — directly below its
+`Context` panel — so switching between them applies immediately, with no
+restart.
+
+### Kilo sidebar mode
+
+One rule, and every state follows from it: **we are the only usage block in the
+sidebar exactly while we are drawing in it.**
+
+Integrated mode retires Kilo's token-usage panel, so the two are a pair — and
+that panel comes straight back whenever we stop filling the space:
+
+| session model | integrated | standalone |
+| ------------- | ---------- | ---------- |
+| `opencode-go/…` | our panel (`Session Tokens` + `Models`), Kilo's retired | our `Go Usage` block *and* Kilo's panel |
+| anything else | **Kilo's own `Token Usage` panel** | Kilo's own `Token Usage` panel |
+| hidden sidebar, or block folded away | Kilo's own `Token Usage` panel | Kilo's own `Token Usage` panel |
+
+So a session on another provider never loses its token readout, and folding the
+block away hands the band over rather than leaving a hole. It follows the model
+live: pick a different provider and the sidebar follows, with no restart.
+
+Why a non-Go session defers rather than being replaced: the integrated panel is a
+**fork** of Kilo's, not an extension of it — Kilo's panel cannot be extended from
+a plugin (its band has no sub-slots, and the slot registry is not reachable), so
+we redraw it, and our copy has no `Terminal Bench 2.0` section and no
+`Generation speed` row. Replacing a panel we cannot fully reproduce would quietly
+drop whatever a newer Kilo adds. Deferring means every section a future Kilo
+version introduces is on screen whenever we are not adding anything of our own.
+`standalone` is always available as the way to show both.
 
 ## Auth and config
 
@@ -234,14 +293,23 @@ docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/
 | Test command | Tier |
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
-| `bun run test:unit` | helper tests + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
-| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks and the per-model mix rendered against a local fake provider |
+| `bun run test:unit` | helper tests + the sidebar band matrix + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
+| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks, the per-model mix rendered against a local fake provider, and the Kilo sidebar band across Go and non-Go sessions |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
 Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects
 fs writes, tmp usage, child processes and sockets). Integration and e2e run only
 inside the container image; host-runnable tests redirect HOME/XDG and force
 `OPENCODE_OC_GO_MOCK=1`, so they never touch the real `~/.config/opencode`.
+
+**The Kilo sidebar has one decision table**, shared by three tiers so they cannot
+disagree: `test/helpers/sidebar-matrix.js` lists all 24 states (sidebar on/off ×
+folded × mode × the session's provider) and what the sidebar owes the host in
+each. The unit tier pins the table (`test/unit/sidebar-band.test.js`), the
+integration tier drives the host-panel switch for every rung against a stub, and
+the e2e boots the real TUI on the two rungs where only the rendered result counts
+(`test/e2e/tui-band-kilo.test.js`): a non-Go session must show Kilo's own panel,
+and a mixed-provider session must show ours.
 
 **The API key buys one thing:** a shape check that the live usage payload is
 still what we parse. Every TUI display test runs on the mock instead, because it
@@ -267,7 +335,7 @@ footer to a commit merged to `main`.
 
 ## Troubleshooting
 
-- **Plugin didn't load**: check `npx oc-go-usage-display-show` / `status`, then
+- **Plugin didn't load**: check `bunx oc-go-usage-display-show` / `status`, then
   restart the host (`opencode debug config` shows the resolved plugin list;
   `opencode --pure` skips plugins, so it is not a valid check).
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
@@ -276,17 +344,17 @@ footer to a commit merged to `main`.
   `opencode-go` provider in the host you are running, or configure workspace +
   cookie. Each host reads only its own `auth.json`, so a Kilo login does not
   feed the opencode plugin and vice versa.
-- **Kilo only**: `npx oc-go-usage-display-init --target kilo`; Kilo ignores
+- **Kilo only**: `bunx oc-go-usage-display-init --target kilo`; Kilo ignores
   `sidebar`/`statusline` options, so toggle surfaces with the command palette
   instead.
 - **Stale copy install**: copy installs never auto-update; re-run
-  `npx oc-go-usage-display-init --copy` and restart.
+  `bunx oc-go-usage-display-init --copy` and restart.
 
 ## Uninstall
 
 ```sh
-npx oc-go-usage-display-remove
-npm uninstall oc-go-usage-display
+bunx oc-go-usage-display-remove
+bun remove oc-go-usage-display
 ```
 
 Removes the plugin files and the server + `tui.json` entries from every

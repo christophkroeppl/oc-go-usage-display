@@ -43,8 +43,8 @@ import {
   isMalformedAuthCookie,
   readFileConfig,
   resolveAllowedRedirect,
-} from "./helpers.js";
-import type { FileConfig } from "./helpers.js";
+} from "./server-helpers.js";
+import type { FileConfig } from "./server-helpers.js";
 import {
   errorMessage,
   extractSnapshotFromApiPayload,

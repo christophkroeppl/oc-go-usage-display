@@ -25,7 +25,6 @@ import {
   hostEnvName,
   KILO_SIDEBAR_ORDERS,
   KILO_SLOT_ORDER,
-  KILO_INTEGRATED_SLOT_ORDER,
   KILO_TOKEN_USAGE_ROWS,
   KILO_USAGE_PANEL_PLUGIN_ID,
   resolveConfigDir,
@@ -34,7 +33,7 @@ import {
   unavailableSnapshot,
   usageHostFromEnv,
 } from "../../dist/shared.js";
-import { formatServerLine } from "../../dist/helpers.js";
+import { formatServerLine } from "../../dist/server-helpers.js";
 
 // --- safeJoinPath / resolveConfigDir (module-level path construction) ---
 
@@ -555,20 +554,34 @@ test("the mirrored kilo token-usage rows are the ones we render", () => {
   assert.equal(new Set(KILO_TOKEN_USAGE_ROWS).size, KILO_TOKEN_USAGE_ROWS.length, "no duplicate rows");
 });
 
-// Integrated mode deliberately ties with the host panel it retires, so the tie
-// is the contract: if the panel ever moves off this order the plugin silently
-// falls back into a free band, which is why both facts are asserted together
-// rather than letting the collision look like a bug.
-test("the integrated slot order is exactly the kilo usage panel it replaces", () => {
-  assert.equal(KILO_SIDEBAR_ORDERS[KILO_USAGE_PANEL_PLUGIN_ID], KILO_INTEGRATED_SLOT_ORDER);
-  assert.equal(
-    Object.entries(KILO_SIDEBAR_ORDERS).filter(([, order]) => order === KILO_INTEGRATED_SLOT_ORDER).length,
-    1,
-    "the integrated band must be claimed by the panel we retire, and by nothing else",
+// Our band must NOT share an order with any host panel. That collision is what
+// broke the live handover: both entries sat at the same index in the host's
+// `sidebar_content` list, so `api.plugins.deactivate` on the host panel removed
+// an entry from the list our own subtree lived in and `@opentui/solid` disposed
+// ours with it (docs/integrated-band-live-handover.md). Asserting the absence of
+// a tie is what keeps that fixed — a future Kilo release cannot reintroduce it by
+// accident, because this fails the moment our order lands on a host panel's.
+test("the sidebar band sits in a free order, tied with no host panel", () => {
+  const taken = Object.entries(KILO_SIDEBAR_ORDERS).filter(([, order]) => order === KILO_SLOT_ORDER);
+  assert.deepEqual(
+    taken,
+    [],
+    `KILO_SLOT_ORDER ${KILO_SLOT_ORDER} must be a free band; it collides with ${JSON.stringify(taken)}`,
+  );
+  // The panel integrated mode retires is at 150, so we have to be off it — and
+  // still land where the user expects the readout, between Context and it.
+  assert.notEqual(
+    KILO_SLOT_ORDER,
+    KILO_SIDEBAR_ORDERS[KILO_USAGE_PANEL_PLUGIN_ID],
+    "we must never tie with the host panel whose entry we add and remove",
   );
   assert.ok(
-    KILO_SIDEBAR_ORDERS["internal:sidebar-context"] < KILO_INTEGRATED_SLOT_ORDER,
-    "the integrated band must stay below the context panel",
+    KILO_SIDEBAR_ORDERS["internal:sidebar-context"] < KILO_SLOT_ORDER,
+    "the band must stay below the context panel",
+  );
+  assert.ok(
+    KILO_SLOT_ORDER < KILO_SIDEBAR_ORDERS[KILO_USAGE_PANEL_PLUGIN_ID],
+    "and above the token-usage panel, so it renders in the usage region of the sidebar",
   );
 });
 

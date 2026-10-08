@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install oc-go-usage-display from the latest successful develop dev-build.
 # Downloads the stable `dev-tgz` artifact, sanity-checks the tarball, snapshots
-# the 6 OpenCode config files, installs it via npm, and registers the plugin
+# the 6 OpenCode config files, installs it via bun, and registers the plugin
 # (existing toggles are preserved).
 #
 # There is no auto-restore: the snapshot path and the restore command are
@@ -29,6 +29,7 @@ CLEAN=0
 DRY_RUN=0
 BACKUP_DIR=""
 CONFIG_DIR_ARG=""
+TARGET_ARG=""
 INIT_ARGS=()
 
 usage() {
@@ -41,6 +42,9 @@ Usage: install-dev.sh [options]
   --dir <path>           download dir (default: ./tmp-dev)
   --force, --clean       allow/replace a non-empty download dir
   --dry-run              stop after download + tarball sanity check
+  --target <host>        passthrough to oc-go-usage-display-init: opencode|kilo|all.
+                         Skips the host prompt; without it an interactive terminal
+                         is asked which host(s) to install into.
   --sidebar=0/1          passthrough to oc-go-usage-display-init
   --statusline=0/1       passthrough to oc-go-usage-display-init
   --config-dir <path>    opencode config dir (default: $OPENCODE_CONFIG_DIR or ~/.config/opencode)
@@ -92,12 +96,21 @@ while [[ $# -gt 0 ]]; do
       INIT_ARGS+=("$1=$2")
       shift 2
       ;;
+    --target=*) TARGET_ARG="${1#*=}"; shift ;;
+    --target)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "error: --target requires a value (opencode|kilo|all)" >&2
+        exit 1
+      fi
+      TARGET_ARG="$2"
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown flag $1 (see --help)" >&2; exit 1 ;;
   esac
 done
 
-for cmd in gh node npm; do
+for cmd in gh bun; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "error: $cmd is required" >&2; exit 1; }
 done
 gh auth status >/dev/null 2>&1 || {
@@ -227,6 +240,10 @@ CONFIG_FORWARD=()
 if [[ -n "$CONFIG_DIR_ARG" ]]; then
   CONFIG_FORWARD=(--config-dir "$CONFIG_DIR_ARG")
 fi
+TARGET_FORWARD=()
+if [[ -n "$TARGET_ARG" ]]; then
+  TARGET_FORWARD=(--target "$TARGET_ARG")
+fi
 BACKUP_FORWARD=()
 if [[ -n "$BACKUP_DIR" ]]; then
   BACKUP_FORWARD=(--backup-dir "$BACKUP_DIR")
@@ -242,7 +259,7 @@ echo "config snapshot: $SNAPSHOT_DIR"
 
 print_reminder() {
   local restore_cmd="scripts/dev-config-snapshot.sh restore --backup-dir $SNAPSHOT_DIR"
-  local fallback_cmd="npx -y -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
+  local fallback_cmd="bunx -p oc-go-usage-display@latest oc-go-usage-display-init --copy"
   if [[ -n "$CONFIG_DIR_ARG" ]]; then
     restore_cmd+=" --config-dir $CONFIG_DIR_ARG"
     fallback_cmd+=" --config-dir $CONFIG_DIR_ARG"
@@ -259,24 +276,26 @@ install_dev() {
   (
     cd "$SCRIPT_DIR" || exit 1
     # Peer resolution is irrelevant here: `bin/*` imports only node builtins and
-    # this install exists solely to put the CLI on PATH. Plain `npm install`
-    # aborts with ERESOLVE because the package pins the `solid-js` peer exactly
-    # (1.9.12) while this repo's devDependency resolves to a newer 1.9.x.
-    npm install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
+    # this install exists solely to put the CLI on PATH. The flags are kept
+    # because the conflict is real, not legacy: the package pins the `solid-js`
+    # peer exactly (1.9.12) while this repo's devDependency resolves to a newer
+    # 1.9.x, which aborts a strict install. `--no-save` keeps package.json and
+    # bun.lock untouched, so a dev install leaves no trace in the checkout.
+    bun install --no-save --legacy-peer-deps "file:$(resolve_abs "$TARBALL")" || exit 1
 
-    # Invoke the installed CLI by path. `npx --no-install <name>` resolves THIS
+    # Invoke the installed CLI by path. `bunx --no-install <name>` resolves THIS
     # repo's bin of the same name (the root package.json declares it), so it
     # would install the local dist/ and silently ignore the downloaded artifact
     # -- exactly what a dev install must not do. Called by path, the CLI
     # derives its own package root and copies the tarball's bundles.
-    local pkg_dir="$SCRIPT_DIR/node_modules/$(node -p 'require("./package.json").name')"
+    local pkg_dir="$SCRIPT_DIR/node_modules/$(bun -e 'console.log(require("./package.json").name)')"
     local bin_dir="$pkg_dir/bin"
     if [[ ! -f "$bin_dir/oc-go-usage-display-init.js" ]]; then
       echo "error: dev package was not installed at $pkg_dir" >&2
       exit 1
     fi
     echo "installing from: $pkg_dir"
-    node "$bin_dir/oc-go-usage-display-init.js" --copy ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
+    node "$bin_dir/oc-go-usage-display-init.js" --copy ${TARGET_FORWARD[@]+"${TARGET_FORWARD[@]}"} ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} || exit 1
     node "$bin_dir/oc-go-usage-display-show.js" --json ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \
       || echo "warning: show --json failed (best-effort)"
     node "$bin_dir/oc-go-usage-display-status.js" ${CONFIG_FORWARD[@]+"${CONFIG_FORWARD[@]}"} \

@@ -1,5 +1,5 @@
 // Integration tier: `dist/tui.js` (opencode, order 50) and `dist/tui.kilo.js`
-// (Kilo, order 125 standalone / 150 integrated) registration contracts, proven
+// (Kilo, order 125 for both sidebar modes) registration contracts, proven
 // with a dependency-free stub `TuiPluginApi` (no PTY, no opencode/kilo binary,
 // no network).
 //
@@ -17,6 +17,15 @@
 // HOME/XDG are redirected into a tmp root before the imports anyway, so a future
 // mock regression cannot reach the developer's real `~/.local/share/{opencode,
 // kilo}/auth.json` now that both host entries are loaded here.
+//
+// A LIMIT worth stating up front: the stub has no renderer, so the JSX factory
+// throws and the sidebar slot can only ever return null here. Anything decided
+// INSIDE a rendered component -- the mode, the collapse state, and the Go gate --
+// is therefore invisible to this tier, which is exactly why those live in memos
+// and pure predicates (test/unit/sidebar-band.test.js) instead of being read in
+// the slot body. What this tier CAN observe is everything around them: which band
+// was registered, in what order, and -- through the exported `applyHostPanelEnabled`
+// -- what the host-panel switch does for each ownership state.
 //
 // Requires a prior `bun run build`: this tier imports the compiled dist/*.js.
 
@@ -50,6 +59,11 @@ const tuiModule = await import("../../dist/tui.js");
 const tui = tuiModule.default.tui;
 const kiloTuiModule = await import("../../dist/tui.kilo.js");
 const kiloTui = kiloTuiModule.default.tui;
+const { applyHostPanelEnabled, currentHostPanelEnabled } = await import("../../dist/tui-shared.js");
+const { hostUsagePanelEnabled, ownsIntegratedBand, sidebarBandRenders } = await import(
+  "../../dist/helpers.js"
+);
+const { bandMatrix, GO_PROVIDER, OTHER_PROVIDER } = await import("../helpers/sidebar-matrix.js");
 
 // A stub host that records registrations and disposes like the real one, but
 // depends on nothing. Only the surface the plugin actually uses is provided.
@@ -113,6 +127,13 @@ function makeStubApi({
   const kv = new Map();
   const slotRegistrations = [];
   const commandRegistrations = [];
+  const commandDisposals = [];
+  // The real hosts expose BOTH surfaces, and the plugin prefers `keymap`: on the
+  // pinned hosts a command registered through `api.command` is accepted and never
+  // listed, while one registered through `api.keymap` with a `slashName` shows up.
+  // The stub models that preference so the tests read commands the way the host
+  // actually resolves them.
+  const keymapRegistrations = [];
   const eventRegistrations = [];
   const disposers = [];
   const pluginTransitions = [];
@@ -145,10 +166,22 @@ function makeStubApi({
         return `slot-${slotRegistrations.length}`;
       },
     },
+    keymap: {
+      registerLayer(layer) {
+        keymapRegistrations.push(layer);
+        return () => {};
+      },
+    },
     command: {
       register(callback) {
         commandRegistrations.push(callback);
-        return () => {};
+        // The plugin hands its entries back after every fold (a host that copies
+        // `title` on registration would otherwise keep advertising the old
+        // label), so a registration is disposable and its disposal has to be
+        // observable -- otherwise duplicated entries would be invisible here.
+        return () => {
+          commandDisposals.push(callback);
+        };
       },
     },
     event: {
@@ -210,7 +243,15 @@ function makeStubApi({
     },
   };
 
-  return { api, kv, logs, slotRegistrations, commandRegistrations, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls, messageReads };
+  // Commands as the host would list them: whatever the keymap layer carries,
+  // falling back to the legacy shim for a host without the keymap surface.
+  const registeredCommands = () => {
+    const fromKeymap = keymapRegistrations.flatMap((layer) => layer.commands ?? []);
+    if (fromKeymap.length > 0) return fromKeymap;
+    return commandRegistrations.flatMap((build) => build());
+  };
+
+  return { api, kv, logs, slotRegistrations, commandRegistrations, commandDisposals, keymapRegistrations, registeredCommands, eventRegistrations, disposers, pluginStates, pluginTransitions, modelUsageCalls, messageReads };
 }
 
 // Slot names captured by one `slots.register` call.
@@ -263,18 +304,18 @@ test("opencode tui factory registers only sidebar_content when statusline is off
 // sidebar down -- the weights themselves are pure helpers (readonly unit tier),
 // and their rendering is the e2e's job, against a session with real usage.
 //
-// The stub has no renderer, so the slot returns null here (opentui's element
-// factory needs one) and a null return is the only thing an assertion can look
-// at. That is the fail-safe path, and it is why these tests read the store
-// instead of the output.
-test("the opencode sidebar reads the message store of the session it renders", async () => {
+// The gates now live in a FUNCTION child (`reactiveChild`), which only a renderer
+// evaluates, and this stub has none -- so what it can prove is that rendering is
+// safe, not which session's store got read. That half moved to the dynamic e2e,
+// which drives a real TUI and asserts it; here we keep the fail-safe guarantee and
+// the surface contract that the slot is registered and renders without throwing.
+test("the opencode sidebar render is safe without a renderer", async () => {
   const stub = makeStubApi();
 
   try {
     await tui(stub.api, { sidebar: true, statusline: true });
     const render = sidebarRender(stub.slotRegistrations);
     assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_stub" }));
-    assert.deepStrictEqual(stub.messageReads, ["ses_stub"], "the mix must be measured on the rendered session");
   } finally {
     for (const dispose of stub.disposers) dispose();
   }
@@ -302,23 +343,23 @@ test("a collapsed opencode sidebar reads no session store at all", async () => {
 
   try {
     await tui(stub.api, { sidebar: true, statusline: true });
-    const commands = stub.commandRegistrations.flatMap((register) => register());
-    const toggle = commands.find((command) => command.value === "oc-go-usage-display.toggle-sidebar");
+    const toggle = stub.registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar");
     assert.ok(toggle, "the sidebar toggle must be registered");
 
-    toggle.onSelect();
+    toggle.run();
     const render = sidebarRender(stub.slotRegistrations);
     assert.doesNotThrow(() => render({ theme: { current: {} } }, { session_id: "ses_stub" }));
-    assert.deepStrictEqual(stub.messageReads, [], "a collapsed block must not walk the session's messages");
   } finally {
     for (const dispose of stub.disposers) dispose();
   }
 });
 
-// Kilo registers the sidebar block in the band the resolved `sidebar_mode`
-// selects: 125 (standalone) or 150 (integrated, Kilo's own token-usage band).
-// The option path is how the tests reach both — Kilo's real tui.json cannot
-// carry it, the same way it cannot carry `sidebar`/`statusline` above.
+// Kilo registers the sidebar block in ONE free band, whichever `sidebar_mode`
+// resolves to. The mode selects what the band draws and whether the host panel
+// is retired — never where the band sits — so switching modes needs no
+// re-registration and cannot be defeated by a missing unregister API. The option
+// path is how the tests reach both: Kilo's real tui.json cannot carry it, the
+// same way it cannot carry `sidebar`/`statusline` above.
 const STANDALONE = { sidebar: true, statusline: true, sidebar_mode: "standalone" };
 
 test("kilo tui factory registers both surfaces at order 125 in standalone mode", async () => {
@@ -358,26 +399,85 @@ test("kilo tui factory registers only sidebar_content when statusline is off", a
 
 // --- sidebar_mode ---
 
-test("kilo tui factory defaults to the integrated band at order 150", async () => {
-  const { api, slotRegistrations, disposers, pluginStates } = makeStubApi();
+test("kilo tui factory defaults to integrated mode, still in the free band", async () => {
+  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
 
   try {
-    // No option, no env, no kv: the default must be the integrated band.
+    // No option, no env, no kv: the default must be integrated mode.
     await kiloTui(api, undefined);
 
     const sidebar = slotRegistrations.find((registration) =>
       registeredSlotNames(registration).includes("sidebar_content"),
     );
-    assert.equal(sidebar?.order, 150);
-    // Integrated mode takes over the host's band, so its panel has to go.
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], false);
+    assert.equal(sidebar?.order, 125, "integrated mode must not tie with the host panel it retires");
+    // Load-time the host panel is left alone. Ownership cannot be judged at load --
+    // there is no session yet -- and switching early painted the host's panel for a
+    // frame before we took the band. The band decides it, the moment it mounts.
+    assert.deepStrictEqual(pluginTransitions, [], "the plugin must not retire a host panel before it can fill it");
   } finally {
     for (const dispose of disposers) dispose();
   }
 });
 
-test("kilo tui factory registers the sidebar at 150 in integrated mode", async () => {
-  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
+test("both sidebar modes register the band at the same order", async () => {
+  const orders = {};
+  const allDisposers = [];
+
+  try {
+    for (const mode of ["standalone", "integrated"]) {
+      const { api, slotRegistrations, disposers } = makeStubApi();
+      allDisposers.push(...disposers);
+      await kiloTui(api, { sidebar: true, statusline: true, sidebar_mode: mode });
+      orders[mode] = slotRegistrations.find((registration) =>
+        registeredSlotNames(registration).includes("sidebar_content"),
+      )?.order;
+    }
+
+    // This is the fix for the mode toggle: the band does not move when the mode
+    // changes, so the toggle applies on the running TUI. If a future change
+    // re-binds the order per mode, the toggle silently starts needing a restart.
+    assert.equal(orders.standalone, 125);
+    assert.equal(orders.integrated, orders.standalone, "the mode must not move the band");
+  } finally {
+    for (const dispose of allDisposers) dispose();
+  }
+});
+
+test("the command titles name the state they move to", async () => {
+  // Asserted from the EAGER layer, once per starting state: the live title follows
+  // the signal through a re-registering effect, and an effect only flushes inside
+  // a reactive owner, which this stub deliberately does not establish. Two boots
+  // with two different persisted folds cover the same wording contract without
+  // borrowing machinery this tier does not have; the live half is the dynamic e2e.
+  for (const [collapsed, expected] of [
+    [false, "Go usage: hide sidebar panel"],
+    [true, "Go usage: show sidebar panel"],
+  ]) {
+    const { api, registeredCommands, disposers } = makeStubApi();
+    try {
+      if (collapsed) api.kv.set("collapsed_sidebar", true);
+      await kiloTui(api, { sidebar: true, statusline: true, sidebar_mode: "integrated" });
+
+      const sidebar = registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar");
+      assert.equal(sidebar?.title, expected, `collapsed=${collapsed}`);
+
+      const mode = registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar-mode");
+      assert.equal(mode?.title, "Go usage: toggle standalone panel", "integrated is current, so offer standalone");
+
+      // Every command must be reachable by slash as well as by palette: on the
+      // pinned hosts the palette never lists a plugin command, so a missing
+      // slashName would leave the toggle unreachable rather than merely hidden.
+      for (const command of registeredCommands()) {
+        assert.ok(command.slashName, `${command.name} must carry a slashName`);
+      }
+    } finally {
+      for (const dispose of disposers) dispose();
+    }
+  }
+});
+
+test("kilo tui factory registers the sidebar in the free band in integrated mode", async () => {
+  const { api, slotRegistrations, disposers } = makeStubApi();
 
   try {
     await kiloTui(api, { sidebar: true, statusline: true, sidebar_mode: "integrated" });
@@ -385,13 +485,12 @@ test("kilo tui factory registers the sidebar at 150 in integrated mode", async (
     const sidebar = slotRegistrations.find((registration) =>
       registeredSlotNames(registration).includes("sidebar_content"),
     );
-    assert.equal(sidebar?.order, 150);
+    assert.equal(sidebar?.order, 125);
     // The statusline band is independent of the sidebar mode.
     const statusline = slotRegistrations.find((registration) =>
       registeredSlotNames(registration).includes("session_prompt_right"),
     );
     assert.equal(statusline?.order, 125);
-    assert.deepStrictEqual(pluginTransitions, [{ id: "internal:kilo-sidebar-usage", enabled: false }]);
   } finally {
     for (const dispose of disposers) dispose();
   }
@@ -410,16 +509,19 @@ test("kilo tui factory leaves the host panel alone in standalone mode", async ()
   }
 });
 
-test("kilo tui factory re-enables a host panel that a previous run disabled", async () => {
-  const { api, disposers, pluginTransitions, pluginStates } = makeStubApi({
-    pluginStates: { "internal:kilo-sidebar-usage": false },
-  });
+test("kilo registers no sidebar band at all when the sidebar toggle is off", async () => {
+  const { api, slotRegistrations, disposers, pluginTransitions } = makeStubApi();
 
   try {
-    await kiloTui(api, STANDALONE);
+    await kiloTui(api, { sidebar: false, statusline: true, sidebar_mode: "integrated" });
 
-    assert.deepStrictEqual(pluginTransitions, [{ id: "internal:kilo-sidebar-usage", enabled: true }]);
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true);
+    const names = slotRegistrations.flatMap(registeredSlotNames).sort();
+    assert.deepStrictEqual(names, ["session_prompt_right"], "an unregistered band cannot own anything");
+    assert.deepStrictEqual(
+      pluginTransitions,
+      [],
+      "no band of ours means Kilo's own panel must stay: this was the second empty band",
+    );
   } finally {
     for (const dispose of disposers) dispose();
   }
@@ -472,7 +574,7 @@ test("kilo sidebar_mode ignores an unrecognized persisted value", async () => {
     const sidebar = slotRegistrations.find((registration) =>
       registeredSlotNames(registration).includes("sidebar_content"),
     );
-    assert.equal(sidebar?.order, 150, "an unknown value must fall through to the default");
+    assert.equal(sidebar?.order, 125, "an unknown value must fall through to the default");
   } finally {
     for (const dispose of disposers) dispose();
   }
@@ -500,63 +602,203 @@ test("kilo sidebar_mode option beats env and kv", async () => {
 });
 
 test("the sidebar-mode command flips the persisted value in both directions", async () => {
-  const { api, kv, commandRegistrations, disposers, pluginStates, pluginTransitions } = makeStubApi();
+  // The persisted value is the contract here; the host-panel switch that follows it
+  // is driven by the band and is covered by the ownership matrix below. This command
+  // writes the KV key and nothing else, so a screen that changes with it is the
+  // band's reactivity, not the command's.
+  const { api, kv, registeredCommands, disposers, pluginStates, pluginTransitions } = makeStubApi();
 
   try {
     await kiloTui(api, { sidebar: true, statusline: true, sidebar_mode: "integrated" });
 
-    const commands = commandRegistrations.flatMap((register) => register());
-    const toggle = commands.find((command) => command.value === "oc-go-usage-display.toggle-sidebar-mode");
+    const toggle = registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar-mode");
     assert.ok(toggle, "the sidebar-mode toggle must be registered");
-    assert.equal(toggle.title, "Go usage: toggle sidebar mode");
+    // The title names the state the command moves you TO, and the host re-runs
+    // the callback whenever it builds the palette -- so re-reading the commands
+    // here is the same thing the palette does, and the title must follow the mode.
+    assert.equal(toggle.title, "Go usage: toggle standalone panel", "integrated is current, so offer standalone");
     assert.equal(kv.get("sidebar_mode"), undefined, "the mode is only persisted once toggled");
 
-    toggle.onSelect();
+    toggle.run();
     assert.equal(kv.get("sidebar_mode"), "standalone");
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true, "switching back re-enables the host panel");
 
-    toggle.onSelect();
+    toggle.run();
     assert.equal(kv.get("sidebar_mode"), "integrated");
-    assert.equal(pluginStates["internal:kilo-sidebar-usage"], false);
 
-    assert.deepStrictEqual(pluginTransitions, [
-      { id: "internal:kilo-sidebar-usage", enabled: false },
-      { id: "internal:kilo-sidebar-usage", enabled: true },
-      { id: "internal:kilo-sidebar-usage", enabled: false },
-    ]);
+    const after = registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar-mode");
+    assert.equal(after?.title, "Go usage: toggle standalone panel", "the title follows the mode back");
+
+    assert.deepStrictEqual(
+      pluginTransitions,
+      [],
+      "the command persists a mode; it must not switch a host panel on its own",
+    );
+    assert.equal(pluginStates["internal:kilo-sidebar-usage"], true, "and it must not retire one either");
   } finally {
     for (const dispose of disposers) dispose();
   }
 });
 
-test("a host that cannot switch its own panel still initializes", async () => {
-  // Best-effort by contract: the plugin must never reject because Kilo refused
-  // the panel switch, and it must not retry on a state it cannot read.
-  const { api, slotRegistrations, disposers, logs } = makeStubApi();
-  api.plugins.list = () => {
-    throw new Error("no plugin registry");
-  };
-  api.plugins.deactivate = async () => {
-    throw new Error("deactivate refused");
-  };
-  api.client.app.log = async (entry) => {
-    logs.push(entry);
+test("the mode command still returns when the KV store refuses the write", async () => {
+  // Persistence is best-effort: the display followed the signal before the write
+  // was attempted, so a refused write must not turn a palette command into a crash.
+  const { api, registeredCommands, disposers, logs } = makeStubApi();
+  const kvSet = api.kv.set;
+  api.kv.set = (key, value) => {
+    if (key === "sidebar_mode") throw new Error("kv refused");
+    kvSet(key, value);
   };
 
   try {
     await kiloTui(api, { sidebar_mode: "integrated" });
-
-    const sidebar = slotRegistrations.find((registration) =>
-      registeredSlotNames(registration).includes("sidebar_content"),
-    );
-    assert.equal(sidebar?.order, 150, "the plugin still registers its block");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(
-      logs.some((entry) => /deactivate refused/.test(entry.message)),
-      "a failed panel switch must be reported through the host log, not thrown",
-    );
+    const toggle = registeredCommands().find((c) => c.name === "oc-go-usage-display.toggle-sidebar-mode");
+    assert.ok(toggle);
+    assert.doesNotThrow(() => toggle.run());
   } finally {
     for (const dispose of disposers) dispose();
+  }
+});
+
+// --- the ownership matrix, against a stub host ---
+//
+// The band itself cannot be mounted without a renderer, so what the band does with
+// its decision is the e2e's job. What is provable here is the other half: that
+// every rung of the shared matrix drives the host's panel switch to exactly the
+// state the sidebar owes it, and that a host which refuses the switch degrades to
+// both panels being visible rather than to a throw.
+//
+// `KILO_USAGE_PANEL_PLUGIN_ID` is imported from the built bundle rather than
+// restated, so "the panel we retire" cannot drift from the panel the plugin retires.
+const { KILO_USAGE_PANEL_PLUGIN_ID } = await import("../../dist/shared.js");
+
+const stateOfScenario = (scenario) => ({
+  sidebarEnabled: scenario.sidebar,
+  collapsed: scenario.collapsed,
+  mode: scenario.mode,
+  providerId: scenario.provider,
+});
+
+for (const scenario of bandMatrix()) {
+  test(`band ${scenario.id}: host panel ends up ${scenario.hostPanel ? "on" : "off"}`, async () => {
+    const stub = makeStubApi();
+    try {
+      const applied = await applyHostPanelEnabled(
+        stub.api,
+        KILO_USAGE_PANEL_PLUGIN_ID,
+        hostUsagePanelEnabled(stateOfScenario(scenario)),
+      );
+
+      assert.equal(applied, true, `${scenario.given}: the switch must be applied, not refused`);
+      assert.equal(
+        stub.pluginStates[KILO_USAGE_PANEL_PLUGIN_ID],
+        scenario.hostPanel,
+        `${scenario.given}: ${scenario.why}`,
+      );
+      // And the sidebar side of the same rung, so the two halves are checked in the
+      // same place: the host panel is on exactly when our band is not the only
+      // usage block in it.
+      assert.equal(
+        ownsIntegratedBand(stateOfScenario(scenario)),
+        !scenario.hostPanel,
+        `${scenario.id}: ownership must match what the host panel was told`,
+      );
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}
+
+test("the host panel is switched once, and only when it disagrees", async () => {
+  // Every launch, and every settled state, calls this. A version that wrote the
+  // enable/disable map unconditionally would churn the host's KV store on every
+  // message event.
+  const stub = makeStubApi();
+  try {
+    for (const _ of [1, 2, 3]) {
+      await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, true);
+    }
+    assert.deepStrictEqual(stub.pluginTransitions, [], "already on: nothing to write");
+
+    await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    assert.deepStrictEqual(stub.pluginTransitions, [
+      { id: KILO_USAGE_PANEL_PLUGIN_ID, enabled: false },
+    ]);
+    for (const _ of [1, 2, 3]) {
+      await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    }
+    assert.equal(stub.pluginTransitions.length, 1, "already off: nothing more to write");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("a host that refuses the panel switch leaves both panels up, and says so", async () => {
+  // The failure boundary, both ways: a registry that cannot be read and a switch
+  // that is rejected. Neither may throw, and neither may leave the plugin believing
+  // it owns the band -- which is why the result is returned rather than implied.
+  const refused = makeStubApi();
+  refused.api.plugins.deactivate = async () => {
+    throw new Error("deactivate refused");
+  };
+  refused.api.plugins.list = () => {
+    throw new Error("no plugin registry");
+  };
+
+  try {
+    const applied = await applyHostPanelEnabled(refused.api, KILO_USAGE_PANEL_PLUGIN_ID, false);
+    assert.equal(applied, false, "a refused switch must report failure");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      refused.logs.some((entry) => /deactivate refused/.test(entry.message)),
+      "the failure must reach the host log, never console",
+    );
+    assert.ok(
+      refused.logs.every((entry) => entry.service === "oc-go-usage-display" && entry.level === "error"),
+      "every log line is the plugin's own error channel",
+    );
+  } finally {
+    for (const dispose of refused.disposers) dispose();
+  }
+
+  const rejected = makeStubApi();
+  rejected.api.plugins.deactivate = async () => false;
+  try {
+    assert.equal(
+      await applyHostPanelEnabled(rejected.api, KILO_USAGE_PANEL_PLUGIN_ID, false),
+      false,
+      "a host that answers false is a failure, not a success",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      rejected.logs.some((entry) => /Could not disable/.test(entry.message)),
+      "and it must be reported",
+    );
+  } finally {
+    for (const dispose of rejected.disposers) dispose();
+  }
+});
+
+test("an unknown plugin id is not something we can switch", async () => {
+  // A host without Kilo's token-usage panel (a future rename, or the panel absent
+  // from this build) must leave the band alone rather than guess: there is nothing
+  // to retire, and claiming otherwise is how a sidebar ends up fighting a panel
+  // that was never there.
+  const stub = makeStubApi({ pluginStates: {} });
+  try {
+    assert.equal(
+      currentHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID),
+      null,
+      "a host that does not report the panel must read as 'unknown', not as 'off'",
+    );
+    assert.equal(await applyHostPanelEnabled(stub.api, KILO_USAGE_PANEL_PLUGIN_ID, false), false);
+    assert.deepStrictEqual(stub.pluginTransitions, [], "and nothing may be switched");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(
+      stub.logs.some((entry) => /Could not disable/.test(entry.message)),
+      "the band could not be taken, so the user has to be able to find out why",
+    );
+  } finally {
+    for (const dispose of stub.disposers) dispose();
   }
 });
 
@@ -634,3 +876,240 @@ test("the sidebar render function never throws into the host", async () => {
     }
   }
 });
+
+// --- the settings-menu entries -------------------------------------------------
+//
+// The two foldable surfaces are reached through the command palette, so this tier
+// owns everything about those entries except the drawing itself (which needs a
+// renderer, and lives in the e2e tier): that they exist on BOTH hosts, that their
+// labels state the effect they will have, that the label tracks the state, and
+// that selecting one folds only the surface it names.
+//
+// The label is a getter, so the interesting assertion is that the host may hold
+// the array it was given for the whole session: these tests build the entries
+// ONCE and re-read the same objects after a toggle, which is the only arrangement
+// under which a stale label would actually reach a user.
+
+const SURFACE_ENTRIES = ["oc-go-usage-display.toggle-sidebar", "oc-go-usage-display.toggle-statusline"];
+const ENTRY_SURFACE = new Map([
+  ["oc-go-usage-display.toggle-sidebar", "sidebar panel"],
+  ["oc-go-usage-display.toggle-statusline", "statusline"],
+]);
+
+function registeredCommands(stub) {
+  // The CURRENT registration, which is the last one: the plugin hands its entries
+  // back after every fold so a host that copied `title` on registration still
+  // sees the new label.
+  assert.ok(stub.commandRegistrations.length >= 1, "the menu must be registered");
+  return stub.commandRegistrations[stub.commandRegistrations.length - 1]();
+}
+
+function entryFor(commands, value) {
+  const found = commands.find((command) => command.value === value);
+  assert.ok(found, `the menu must offer ${value}`);
+  return found;
+}
+
+for (const host of ["opencode", "kilo"]) {
+  const start = host === "opencode" ? tui : kiloTui;
+  const options = host === "opencode" ? { sidebar: true, statusline: true } : STANDALONE;
+
+  test(`${host}: the menu entries name the effect they will have`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+
+      for (const value of SURFACE_ENTRIES) {
+        const surface = ENTRY_SURFACE.get(value);
+        assert.equal(entryFor(commands, value).title, `Go usage: hide ${surface}`, value);
+        assert.equal(entryFor(commands, value).category, "Go");
+      }
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: the labels follow the state, on entries built once`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+      const sidebar = entryFor(commands, SURFACE_ENTRIES[0]);
+      const statusline = entryFor(commands, SURFACE_ENTRIES[1]);
+
+      sidebar.onSelect();
+      assert.equal(sidebar.title, "Go usage: show sidebar panel", "its own entry renames");
+      assert.equal(statusline.title, "Go usage: hide statusline", "the other one does not");
+
+      statusline.onSelect();
+      assert.equal(statusline.title, "Go usage: show statusline");
+
+      sidebar.onSelect();
+      assert.equal(sidebar.title, "Go usage: hide sidebar panel");
+      assert.equal(statusline.title, "Go usage: show statusline", "unfolding one must not touch the other");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: folding the statusline persists under its own key only`, async () => {
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const statusline = entryFor(registeredCommands(stub), SURFACE_ENTRIES[1]);
+
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), false);
+      statusline.onSelect();
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), true, "the statusline fold is persisted");
+      assert.equal(
+        stub.api.kv.get("collapsed_sidebar", false),
+        false,
+        "and the sidebar's key is untouched: two axes, two keys",
+      );
+
+      statusline.onSelect();
+      assert.equal(stub.api.kv.get("collapsed_statusline", false), false, "and it comes back off");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: a persisted fold is what the menu offers to undo`, async () => {
+    const stub = makeStubApi();
+    stub.kv.set("collapsed_statusline", true);
+    stub.kv.set("collapsed_sidebar", true);
+    try {
+      await start(stub.api, options);
+      const commands = registeredCommands(stub);
+      assert.equal(entryFor(commands, SURFACE_ENTRIES[0]).title, "Go usage: show sidebar panel");
+      assert.equal(entryFor(commands, SURFACE_ENTRIES[1]).title, "Go usage: show statusline");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: the entry ids stay stable across folds`, async () => {
+    // A label may move; an id may not. The id is what a host binds a key to and
+    // dispatches on, so a label that leaked into it would break every binding.
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      const before = registeredCommands(stub).map((command) => `${command.value}::${command.title}`);
+      entryFor(registeredCommands(stub), SURFACE_ENTRIES[1]).onSelect();
+      const after = registeredCommands(stub).map((command) => `${command.value}::${command.title}`);
+
+      assert.deepStrictEqual(
+        after.map((entry) => entry.split("::")[0]),
+        before.map((entry) => entry.split("::")[0]),
+      );
+      assert.notDeepStrictEqual(after, before, "while the labels did move");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}
+
+test("both hosts offer the same two entries, with the same labels", async () => {
+  const stub = makeStubApi();
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const opencodeEntries = registeredCommands(stub).map((command) => `${command.value}::${command.category}`);
+    for (const dispose of stub.disposers) dispose();
+
+    const kiloStub = makeStubApi();
+    await kiloTui(kiloStub.api, STANDALONE);
+    const kiloEntries = registeredCommands(kiloStub)
+      .filter((command) => SURFACE_ENTRIES.includes(command.value))
+      .map((command) => `${command.value}::${command.category}`);
+
+    // A shared implementation is only a shared implementation if it produces the
+    // same menu on both hosts; Kilo's own mode entry is the one allowed extra.
+    assert.deepStrictEqual(kiloEntries, opencodeEntries);
+
+    for (const dispose of kiloStub.disposers) dispose();
+  } catch (error) {
+    for (const dispose of stub.disposers) dispose();
+    throw error;
+  }
+});
+
+test("kilo keeps its own mode entry, and it is not one of the surface pair", async () => {
+  const stub = makeStubApi();
+  try {
+    await kiloTui(stub.api, STANDALONE);
+    const commands = registeredCommands(stub);
+    const mode = entryFor(commands, "oc-go-usage-display.toggle-sidebar-mode");
+
+    // The mode entry swaps one drawing for another rather than showing or hiding
+    // anything, so it stays outside the Show/Hide pair -- but it still names the
+    // mode it moves to, so the menu never describes the state you are already in.
+    assert.equal(mode.title, "Go usage: toggle integrated panel");
+    assert.equal(SURFACE_ENTRIES.includes(mode.value), false);
+    assert.equal(commands.length, 3, "two surfaces plus the mode");
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+test("opencode registers no mode entry, because it has no sidebar_mode", async () => {
+  const stub = makeStubApi();
+  try {
+    await tui(stub.api, { sidebar: true, statusline: true });
+    const commands = registeredCommands(stub);
+    assert.deepStrictEqual(
+      commands.map((command) => command.value),
+      SURFACE_ENTRIES,
+    );
+  } finally {
+    for (const dispose of stub.disposers) dispose();
+  }
+});
+
+for (const host of ["opencode", "kilo"]) {
+  const start = host === "opencode" ? tui : kiloTui;
+  const options = host === "opencode" ? { sidebar: true, statusline: true } : STANDALONE;
+
+  test(`${host}: a fold hands the menu back, and retires the old entries`, async () => {
+    // A host that copies `title` when it registers an entry would keep
+    // advertising "hide statusline" forever otherwise -- which is exactly what
+    // Kilo's palette does, and is why the label has to be re-registered and not
+    // merely recomputed.
+    const stub = makeStubApi();
+    try {
+      await start(stub.api, options);
+      assert.equal(stub.commandRegistrations.length, 1, "one registration to begin with");
+
+      entryFor(registeredCommands(stub), "oc-go-usage-display.toggle-statusline").onSelect();
+
+      assert.equal(stub.commandRegistrations.length, 2, "a fold re-registers the entries");
+      assert.deepStrictEqual(
+        stub.commandDisposals,
+        [stub.commandRegistrations[0]],
+        "and disposes the previous ones, so the menu cannot show a command twice",
+      );
+      const after = entryFor(registeredCommands(stub), "oc-go-usage-display.toggle-statusline");
+      assert.equal(after.title, "Go usage: show statusline", "and the label followed the fold");
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+
+  test(`${host}: disposal tears down the current registration only`, async () => {
+    const stub = makeStubApi();
+    try {
+      const before = stub.disposers.length;
+      await start(stub.api, options);
+      const last = stub.commandRegistrations[stub.commandRegistrations.length - 1];
+      for (const dispose of stub.disposers.slice(before)) dispose();
+
+      assert.deepStrictEqual(
+        stub.commandDisposals,
+        [last],
+        "onDispose must retire the entries the host still holds",
+      );
+    } finally {
+      for (const dispose of stub.disposers) dispose();
+    }
+  });
+}

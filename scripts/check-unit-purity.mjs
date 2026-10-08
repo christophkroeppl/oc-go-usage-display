@@ -25,6 +25,8 @@ const ALLOWED_IMPORTS = new Set([
   "node:path",
   "../../dist/helpers.js",
   "../../dist/shared.js",
+  "../../dist/server-helpers.js",
+  "../../dist/tui-helpers.js",
 ]);
 
 // Test helpers the unit tier may import, with the same guarantee the dist modules
@@ -32,7 +34,14 @@ const ALLOWED_IMPORTS = new Set([
 // helper module would otherwise exempt everything that helper does. These are
 // therefore held to a stronger rule than the dist imports -- they must have no
 // imports at all, which leaves nothing for them to reach for.
-const PURE_HELPERS = new Set(["../helpers/ladder.js"]);
+// `bin/cli-core.js` is the same guarantee for a shipped module: the target
+// selection and prompt rendering it holds are pure, and `bin/lib.js` adds the
+// filesystem/PATH/stdin I/O around them.
+const PURE_HELPERS = new Set([
+  "../helpers/ladder.js",
+  "../helpers/sidebar-matrix.js",
+  "../../bin/cli-core.js",
+]);
 
 const FORBIDDEN_PATTERNS = [
   [/\brequire\s*\(/, "CommonJS require"],

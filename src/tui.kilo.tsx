@@ -25,17 +25,16 @@
 //    -> `api.kv` `sidebar_mode` -> default. (Kilo's tui.json schema rejects the
 //    option, so on this host the option path is only reachable in-process, the
 //    same situation the `sidebar`/`statusline` options are in.)
-//      - `standalone` -> register at KILO_SLOT_ORDER (125), Kilo's own
-//        `Token Usage` panel stays where it is.
-//      - `integrated` -> register at 150 and switch `internal:kilo-sidebar-usage`
-//        off, so one band carries the Go readout instead of two competing ones.
-//        Kilo's panel cannot be extended (the real slot registry is unreachable
-//        from a plugin), so integrated mode retires it through
-//        `api.plugins.deactivate` -- the runtime form of the `plugin_enabled`
-//        map in tui.json, and reversible via `activate`. Retiring it also means
-//        replacing what it drew, so the 150 band in integrated mode renders
-//        three sections instead of one block:
-//          Go Usage         the compact plan readout, as in standalone
+//      - `standalone` -> Kilo's own `Token Usage` panel stays where it is, and
+//        our block sits above it.
+//      - `integrated` -> switch `internal:kilo-sidebar-usage` off, so one band
+//        carries the Go readout instead of two competing ones. Kilo's panel
+//        cannot be extended (the real slot registry is unreachable from a plugin
+//        and Kilo's `View` exposes no nested sub-slots), so integrated mode
+//        retires it through `api.plugins.deactivate` -- the runtime form of the
+//        `plugin_enabled` map in tui.json, and reversible via `activate`.
+//        Retiring it also means replacing what it drew, so integrated mode
+//        renders two sections instead of one block:
 //          Session Tokens   Kilo's `Token Usage` rows, from the host endpoint.
 //                           Deliberately not titled `Token Usage`: that is the
 //                           name of the panel integrated mode retired, and a
@@ -49,10 +48,34 @@
 //                           never of the plan, and never a price.
 //        The two sections collapse like Kilo's own (local state, both expanded
 //        by default), and model rows fold per model.
-//      The mode is switched live by `oc-go-usage-display.toggle-sidebar-mode`
-//      (title `Go usage: toggle sidebar mode`); the host panel follows
-//      immediately, the slot ORDER is bound at registration and moves on the
-//      next TUI start (the SDK exposes no slot unregister).
+//
+//        BOTH MODES REGISTER IN THE SAME FREE BAND. Integrated mode used to
+//      register at 150 as well, tying with `internal:kilo-sidebar-usage`, and
+//      that tie is what broke the handover: switching the host panel off removed
+//      an entry from the same `sidebar_content` list our band lives in, and
+//      `@opentui/solid` reconciles that list by index, so our render subtree was
+//      disposed along with it and never came back. From a free band the host
+//      entry can come and go without our index shifting, so the switch is safe
+//      in both directions (docs/integrated-band-live-handover.md).
+//
+//        OWNERSHIP IS CONDITIONAL. Integrated mode fills the band only while a
+//        Go model is the session's model. On any other model it hands the band
+//        back: `applyHostUsagePanel` runs off `ownsIntegratedBand`, so Kilo's
+//        `Token Usage` panel goes back on and our slot renders nothing. That is
+//        deliberate, for two reasons. The band was taken to make one block out
+//        of two competing readouts, and there is nothing to compete with when we
+//        have no Go model to meter; and our replacement is a fork of Kilo's, not
+//        an extension of it -- it has no `Terminal Bench 2.0` section and no
+//        `Generation speed` row, so on a non-Go session replacing it would
+//        quietly drop whatever a newer Kilo added. `standalone` remains the
+//        escape hatch (our own band, host panel untouched), and on a non-Go
+//        session Kilo's own panel is exactly what the user gets.
+//
+//        The mode is switched live by `oc-go-usage-display.toggle-sidebar-mode`
+//      (title `Go usage: use integrated panel` / `... use standalone panel`,
+//      whichever is not current). It applies immediately: the mode is read inside
+//      the band, not bound at registration, so nothing has to move and no
+//      unregister is needed.
 // 3. where the per-session model split comes from: the host's own
 //    `client.kilocode.sessionModelUsage` (GET /session/{sessionID}/model-usage),
 //    refreshed on the same events Kilo's panel uses and never on a timer. The
@@ -84,12 +107,17 @@ import {
   goSharePercent,
   groupModelsByProvider,
   modelDisplayName,
-  parseSidebarMode,
   totalGoTokens,
   usageTokenCount,
+  shouldRenderModelsHeader,
+  parseSidebarMode,
   DEFAULT_SIDEBAR_MODE,
-} from "./helpers.js";
-import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarMode } from "./helpers.js";
+  hostUsagePanelEnabled,
+  sidebarBandRenders,
+  statuslineRenders,
+  providerIdFromMessages,
+} from "./tui-helpers.js";
+import type { ModelProviderGroup, PlanRow, ResetCountdown, SidebarBandState, SidebarMode } from "./tui-helpers.js";
 import {
   hostEnv,
   parseSessionModelUsage,
@@ -103,7 +131,6 @@ import {
   SIDEBAR_COLLAPSED_GLYPH,
   SIDEBAR_EXPANDED_GLYPH,
   KILO_COST_COLUMN_WIDTH,
-  KILO_INTEGRATED_SLOT_ORDER,
   KILO_SLOT_ORDER,
   KILO_STEPS_COLUMN_WIDTH,
   KILO_USAGE_PANEL_PLUGIN_ID,
@@ -117,14 +144,15 @@ import {
   GoStatusline,
   GoUsageBlock,
   LabeledValueRow,
+  applyHostPanelEnabled,
   createCollapseState,
   createUsageStore,
-  isGoUsageProvider,
   logUsageError,
   makeProviderResolver,
   readModelDisplayName,
   readProviderDisplayNames,
   reactiveChild,
+  registerDisplayCommands,
   resolveSurfaceSelection,
   EVENT_TTL_MS,
   POLL_INTERVAL_MS,
@@ -144,7 +172,6 @@ const SESSION_TREE_WALK_LIMIT = 32;
 // an opencode-prefixed name.
 const HOST = "kilo" as const;
 const SLOT_ORDER = KILO_SLOT_ORDER;
-const INTEGRATED_SLOT_ORDER = KILO_INTEGRATED_SLOT_ORDER;
 const KV_SIDEBAR_MODE_KEY = "sidebar_mode";
 
 // ---------------------------------------------------------------------------
@@ -174,50 +201,23 @@ function resolveSidebarMode(options: PluginOptions | undefined, api: TuiPluginAp
   return DEFAULT_SIDEBAR_MODE;
 }
 
-// Whether the host's own token-usage panel is currently switched on, or null
-// when the host does not report it. Reading the state first keeps every launch
-// from writing an unchanged `plugin_enabled` entry.
-function hostUsagePanelEnabled(api: TuiPluginApi): boolean | null {
-  try {
-    const entry = api.plugins?.list?.().find((status) => status.id === KILO_USAGE_PANEL_PLUGIN_ID);
-    if (entry === undefined) return null;
-    return entry.active || entry.enabled;
-  } catch {
-    return null;
-  }
-}
-
-// Integrated mode replaces Kilo's `Token Usage` band, so the host panel has to
-// go; standalone mode puts it back. The SDK's `deactivate`/`activate` are the
-// runtime form of the `plugin_enabled` map in tui.json and persist to KV, which
-// is what makes the switch survive a restart. Kilo's panel is not reachable
-// through `api.slots` (that facade only exposes `register`), so this is the
-// only supported way to take its band. Every step is best-effort: a failure
-// leaves both panels on screen and is logged, never thrown.
-async function applyHostUsagePanel(api: TuiPluginApi, mode: SidebarMode): Promise<void> {
-  const wantEnabled = mode === "standalone";
-  try {
-    const current = hostUsagePanelEnabled(api);
-    if (current === wantEnabled) return;
-    const applied = await (wantEnabled
-      ? api.plugins.activate(KILO_USAGE_PANEL_PLUGIN_ID)
-      : api.plugins.deactivate(KILO_USAGE_PANEL_PLUGIN_ID));
-    if (applied === true) return;
-    await logUsageError(
-      api,
-      `Could not ${wantEnabled ? "enable" : "disable"} Kilo's ${KILO_USAGE_PANEL_PLUGIN_ID} panel`,
-    );
-  } catch (error) {
-    await logUsageError(
-      api,
-      `Kilo ${KILO_USAGE_PANEL_PLUGIN_ID} panel switch failed: ${errorMessage(error)}`,
-    );
-  }
+// Integrated mode retires the host's token-usage panel instead of drawing beside
+// it, so that panel has to go -- and come back when we stop replacing it.
+// Standalone mode never touches it. The switch itself lives in
+// `./tui-shared.jsx` (`applyHostPanelEnabled`), which is where the e2e-free tests
+// reach it: the band that decides ownership cannot be mounted without a renderer,
+// so a test could otherwise only exercise this by booting the host.
+//
+// The argument is the desired end state, not the mode, and it comes from
+// `hostUsagePanelEnabled` -- so every path into the switch agrees by construction,
+// and none of them can retire a panel they are not filling.
+function applyHostUsagePanel(api: TuiPluginApi, wantEnabled: boolean): Promise<boolean> {
+  return applyHostPanelEnabled(api, KILO_USAGE_PANEL_PLUGIN_ID, wantEnabled);
 }
 
 // ---------------------------------------------------------------------------
-// Session model usage (the integrated panel's replacement for Kilo's own
-// token-usage band)
+// Session model usage (what the integrated panel draws instead of Kilo's own
+// token-usage panel)
 // ---------------------------------------------------------------------------
 
 // This is the same typed call Kilo's own panel makes
@@ -279,11 +279,14 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   const surfaces = resolveSurfaceSelection(options as DisplayOptions | undefined, api, HOST);
   const usageStore = createUsageStore(api, HOST);
   const collapse = createCollapseState(api);
-  // Live mode: the host panel below follows it immediately. The sidebar slot's
-  // ORDER is read once at registration, because the SDK exposes no slot
-  // unregister -- so a toggle moves the block on the next TUI start.
-  let sidebarMode = resolveSidebarMode(options, api);
-  void applyHostUsagePanel(api, sidebarMode);
+  // A signal, not a `let`: the host invokes a slot renderer exactly once per
+  // mount, so a mode read inside the slot body would stay latched for the life of
+  // the band and the toggle command would only take effect on the next start. Both
+  // surfaces follow this signal immediately — the host panel through the ownership
+  // effect below, and what the band draws through the `<Show>` in
+  // `KiloSidebarBand`. Nothing is bound at registration any more: both modes
+  // register in the same free band, so switching needs no unregister.
+  const [sidebarMode, setSidebarMode] = createSignal<SidebarMode>(resolveSidebarMode(options, api));
 
   const [activeProviderId, setActiveProviderId] = createSignal<string | undefined>(undefined);
   try {
@@ -297,16 +300,45 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
   }
   const resolveActiveProviderId = makeProviderResolver(api.state, activeProviderId);
 
+  // Which provider the session being rendered is really on. The host's own
+  // message store answers first -- it is the source that re-reads, and the one
+  // that knows which provider actually ran (see `providerIdFromMessages` for why
+  // it outranks `Session.model`, which only exists from Kilo 7.8.3). The session
+  // object and the configured model are fallbacks for a session with no messages
+  // yet; `message.updated` keeps the last of those current.
+  function resolveRenderedProviderId(sessionId: string): string | undefined {
+    if (sessionId.length === 0) return undefined;
+    try {
+      const fromMessages = providerIdFromMessages(api.state?.session?.messages?.(sessionId));
+      if (fromMessages !== undefined) return fromMessages;
+    } catch {
+      // A throwing store is not a reason to hide the panel; fall through.
+    }
+    return resolveActiveProviderId(sessionId);
+  }
+
+  // The band state every display decision is read from. One object, one memo, so
+  // the sidebar, the statusline and the host-panel switch can never disagree about
+  // which state they are in.
+  function bandState(sessionId: string, collapsed: boolean): SidebarBandState {
+    return {
+      sidebarEnabled: surfaces.sidebar,
+      collapsed,
+      mode: sidebarMode(),
+      providerId: resolveRenderedProviderId(sessionId),
+    };
+  }
+
   function toggleSidebarMode(): void {
-    const next: SidebarMode = sidebarMode === "integrated" ? "standalone" : "integrated";
-    sidebarMode = next;
-    // Fire-and-forget: the host panel switch is async and may fail, and the
-    // command must return either way.
-    void applyHostUsagePanel(api, next);
+    const next: SidebarMode = sidebarMode() === "integrated" ? "standalone" : "integrated";
+    // The signal is the switch: the band re-renders and the ownership effect
+    // re-applies the host panel from it. Setting it before persisting keeps the
+    // screen and the switch in step even if the KV write is refused.
+    setSidebarMode(next);
     try {
       api.kv.set(KV_SIDEBAR_MODE_KEY, next);
     } catch {
-      // Mode persistence is best-effort; the panel switch above still happened.
+      // Mode persistence is best-effort; the display already followed.
     }
   }
 
@@ -342,32 +374,34 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
         <Show when={isGo && props.planRows.length > 0}>
           <GoPlanSection theme={props.theme} rows={props.planRows} />
         </Show>
-        <box flexDirection="row" gap={1}>
-          <box width={1} flexShrink={0} />
-          <text flexGrow={1} minWidth={0} fg={props.theme.current.textMuted} wrapMode="none">
-            Model
-          </text>
-          <box
-            width={KILO_STEPS_COLUMN_WIDTH}
-            flexDirection="row"
-            flexShrink={0}
-            justifyContent="flex-end"
-          >
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Steps
+        <Show when={shouldRenderModelsHeader(props.group.models)}>
+          <box flexDirection="row" gap={1}>
+            <box width={1} flexShrink={0} />
+            <text flexGrow={1} minWidth={0} fg={props.theme.current.textMuted} wrapMode="none">
+              Model
             </text>
+            <box
+              width={KILO_STEPS_COLUMN_WIDTH}
+              flexDirection="row"
+              flexShrink={0}
+              justifyContent="flex-end"
+            >
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                Steps
+              </text>
+            </box>
+            <box
+              width={KILO_COST_COLUMN_WIDTH}
+              flexDirection="row"
+              flexShrink={0}
+              justifyContent="flex-end"
+            >
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                Cost
+              </text>
+            </box>
           </box>
-          <box
-            width={KILO_COST_COLUMN_WIDTH}
-            flexDirection="row"
-            flexShrink={0}
-            justifyContent="flex-end"
-          >
-            <text fg={props.theme.current.textMuted} wrapMode="none">
-              Cost
-            </text>
-          </box>
-        </box>
+        </Show>
         <For each={props.group.models}>
           {(model) => {
             const key = `${model.providerID}/${model.modelID}`;
@@ -471,7 +505,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 
     const modelCount = createMemo(() => props.usage()?.models.length ?? 0);
 
-    const body = createMemo(() => {
+    const body = () => {
       const usage = props.usage();
       const models = usage?.models ?? [];
       const providerNames = readProviderDisplayNames(api);
@@ -512,7 +546,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           </For>
         </box>
       );
-    });
+    };
 
     return (
       <CollapsibleSection
@@ -526,9 +560,9 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
-  // Integrated mode's replacement for Kilo's own 150 band: the compact Go
-  // readout, Kilo's session token totals, and Kilo's per-model table with the
-  // plan nested inside the OpenCode Go group.
+  // Integrated mode's replacement for Kilo's own `Token Usage` panel: Kilo's
+  // session token totals, and Kilo's per-model table with the plan nested inside
+  // the OpenCode Go group.
   function GoIntegratedPanel(props: { theme: TuiTheme; sessionId: string }) {
     const [usage, setUsage] = createSignal<SessionModelUsage | null>(null);
     const [loadFailed, setLoadFailed] = createSignal<boolean>(false);
@@ -602,7 +636,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       });
     });
 
-    const tokenBody = createMemo(() => {
+    const tokenBody = () => {
       const data = usage();
       if (data === null) {
         return (
@@ -618,7 +652,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           </For>
         </box>
       );
-    });
+    };
 
     return (
       // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside the
@@ -654,6 +688,65 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
+  // The sidebar band.
+  //
+  // Every condition below the slot function's own guard lives in here, not in the
+  // slot body, because the host calls a slot renderer exactly once per mount
+  // Every gate below is read INSIDE the `reactiveChild` accessor, never in the
+  // JSX this function returns. The host calls a slot renderer exactly once per
+  // mount (`renderEntry` in @opentui/solid), so this body runs once: a `<Show>`
+  // whose `when` was read while the tree was built keeps that value for the life
+  // of the band, and the band stops answering to the fold and the mode toggle.
+  // A function child is the one thing the runtime re-evaluates
+  // (`insertExpression`), so it is the only place a live condition can live.
+  function KiloSidebarBand(props: { theme: TuiTheme; sessionId: string }) {
+    const state = createMemo<SidebarBandState>(() =>
+      bandState(props.sessionId, collapse.isSidebarCollapsed()),
+    );
+    const renders = createMemo(() => sidebarBandRenders(state()));
+
+    // The only writer of the host-panel switch, and it reads the ownership
+    // decision rather than the mode: no sidebar, standalone mode, a collapsed
+    // band or a non-Go session all mean Kilo's own panel belongs on screen. It
+    // runs here rather than at init because there is no session at init to judge
+    // by, and because deferring it also removes the one-frame flash of the host
+    // panel that an init-time switch causes (internal plugins paint first).
+    //
+    // This IS a real effect rather than part of the child, so it re-runs on its
+    // own whenever `state()` changes -- which is what kept the host panel honest
+    // while the band below it failed to repaint.
+    createEffect(() => {
+      void applyHostUsagePanel(api, hostUsagePanelEnabled(state()));
+    });
+
+    return reactiveChild(() => {
+      if (api.route.current.name !== "session") return null;
+      if (!renders()) return null;
+      return sidebarMode() === "integrated" ? (
+        <GoIntegratedPanel theme={props.theme} sessionId={props.sessionId} />
+      ) : (
+        <GoSidebarPanel theme={props.theme} />
+      );
+    });
+  }
+
+  // The statusline: the plan on one line, next to the host's own context readout.
+  // Go-only in both modes (see `statuslineRenders`), and reactive for the same
+  // reason as the band -- a gate read in the slot body would never re-arm.
+  //
+  // The gate is returned as a FUNCTION CHILD, not as `<Show when={...}>`: this
+  // bundle is compiled by esbuild's automatic JSX rather than Solid's compiler, so
+  // `when={visible()}` is an ordinary value evaluated once, and folding the
+  // statusline would persist the flag and keep the line on screen -- which is
+  // exactly the regression. A function child is the one form the renderer
+  // re-evaluates (`insertExpression`), so the fold takes effect immediately.
+  function KiloStatuslineSlot(props: { sessionId: string }) {
+    const visible = createMemo(
+      () => statuslineRenders(bandState(props.sessionId, collapse.isStatuslineCollapsed())),
+    );
+    return reactiveChild(() => (visible() ? <GoStatusline snapshot={usageStore.snapshot} /> : null));
+  }
+
   if (surfaces.sidebar) {
     // Host-owned slot: `register` returns an id but the SDK exposes no
     // unregister API, so there is nothing to dispose here (the slot dies
@@ -661,22 +754,15 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     // dispose path.
     try {
       api.slots.register({
-        order: sidebarMode === "integrated" ? INTEGRATED_SLOT_ORDER : SLOT_ORDER,
+        order: SLOT_ORDER,
         slots: {
           sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
             // Individually guarded: a later render must never throw into the host.
+            // Only the guards that cannot change go here; everything that can is a
+            // reactive region inside `KiloSidebarBand`.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (api.route.current.name !== "session") return null;
-              if (collapse.isSidebarCollapsed()) return null;
-              // Read live so the mode command takes effect at once, the same way
-              // the host panel follows it; only the ORDER stays bound to
-              // registration.
-              if (sidebarMode === "integrated") {
-                return <GoIntegratedPanel theme={ctx.theme} sessionId={props.session_id} />;
-              }
-              return <GoSidebarPanel theme={ctx.theme} />;
+              return <KiloSidebarBand theme={ctx.theme} sessionId={props.session_id} />;
             } catch {
               return null;
             }
@@ -699,9 +785,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (collapse.isStatuslineCollapsed()) return null;
-              return <GoStatusline snapshot={usageStore.snapshot} />;
+              return <KiloStatuslineSlot sessionId={props.session_id} />;
             } catch {
               return null;
             }
@@ -715,37 +799,89 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
 
   // `api.command` is a deprecated legacy shim that hosts may omit; guard so
   // the plugin still initializes and disposes safely without it.
+  //
+  // Titles name the state the command moves you TO, the way Kilo's own do
+  // (`Show sidebar` / `Hide sidebar`), so the palette reads as "here is what
+  // this does now" instead of "here is a switch you have to know the state of".
+  // They cannot be computed once: the host reads a layer when it builds the
+  // palette, so the layer is re-registered whenever the state it describes moves.
+  // The layer is REGISTERED EAGERLY, then re-registered from an effect. Both
+  // halves matter: eager means the commands exist the moment the plugin finishes
+  // loading (an effect only flushes inside a reactive owner, and a host that has
+  // not established one yet would otherwise leave the user with no toggles at
+  // all), and the effect is what lets a title follow a signal.
+  const buildCommands = (
+    sidebarCollapsed: boolean,
+    statuslineCollapsed: boolean,
+    mode: SidebarMode,
+    resync: () => void,
+  ) => [
+    {
+      name: "oc-go-usage-display.toggle-sidebar",
+      slashName: "go-usage-sidebar",
+      title: sidebarCollapsed ? "Go usage: show sidebar panel" : "Go usage: hide sidebar panel",
+      desc: sidebarCollapsed ? "Show the Go usage sidebar panel" : "Hide the Go usage sidebar panel",
+      category: "Go",
+      run: () => {
+        collapse.toggleSidebar();
+        resync();
+      },
+    },
+    {
+      name: "oc-go-usage-display.toggle-statusline",
+      slashName: "go-usage-statusline",
+      title: statuslineCollapsed ? "Go usage: show statusline" : "Go usage: hide statusline",
+      desc: statuslineCollapsed ? "Show the Go usage statusline" : "Hide the Go usage statusline",
+      category: "Go",
+      run: () => {
+        collapse.toggleStatusline();
+        resync();
+      },
+    },
+    {
+      name: "oc-go-usage-display.toggle-sidebar-mode",
+      slashName: "go-usage-sidebar-mode",
+        title: mode === "integrated" ? "Go usage: toggle standalone panel" : "Go usage: toggle integrated panel",
+      desc: mode === "integrated" ? "Draw the standalone Go usage panel" : "Draw the integrated Go usage panel",
+      category: "Go",
+      run: () => {
+        toggleSidebarMode();
+        resync();
+      },
+    },
+  ];
+
   let unregisterToggleCommand: () => void = () => {};
+  const resync = (): void => {
+    unregisterToggleCommand();
+    unregisterToggleCommand = registerDisplayCommands(api, build);
+  };
+  const build = () =>
+    buildCommands(collapse.isSidebarCollapsed(), collapse.isStatuslineCollapsed(), sidebarMode(), resync);
+
+  resync();
   try {
-    const unregister = api.command?.register(() => [
-      {
-        title: "Go usage: toggle sidebar",
-        value: "oc-go-usage-display.toggle-sidebar",
-        category: "Go",
-        onSelect: () => collapse.toggleSidebar(),
-      },
-      {
-        title: "Go usage: toggle statusline",
-        value: "oc-go-usage-display.toggle-statusline",
-        category: "Go",
-        onSelect: () => collapse.toggleStatusline(),
-      },
-      {
-        title: "Go usage: toggle sidebar mode",
-        value: "oc-go-usage-display.toggle-sidebar-mode",
-        category: "Go",
-        onSelect: () => toggleSidebarMode(),
-      },
-    ]);
-    if (typeof unregister === "function") unregisterToggleCommand = unregister;
+    createEffect(() => {
+      // `registerDisplayCommands` calls `build()` synchronously, so reading the
+      // three signals here is what subscribes this effect to them: when any of
+      // them moves, the layer is handed back and rebuilt.
+      unregisterToggleCommand();
+      unregisterToggleCommand = registerDisplayCommands(api, build);
+    });
   } catch {
-    // Legacy command registration is optional; ignore failures.
+    // Command re-registration is optional; the eager layer above already works.
   }
 
   let unsubscribeSession: () => void = () => {};
   let unsubscribeMessage: () => void = () => {};
   try {
     const unsubscribe = api.event.on("session.updated", (event) => {
+      // Kilo 7.8.1's `Session` carried no `model` field, so on that host this read
+      // found nothing and the configured model was the only source. From 7.8.3 it
+      // is real data, and worth keeping: it answers "which model is this session
+      // set to" for a session too new to have any messages, which is exactly the
+      // case the store cannot cover. It stays a fallback -- see
+      // `resolveRenderedProviderId`.
       const providerId = event?.properties?.info?.model?.providerID;
       if (providerId !== undefined) setActiveProviderId(providerId);
       usageStore.refreshSafely(0);
@@ -755,7 +891,16 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     // Event subscription is additive; a failure must not abort the plugin.
   }
   try {
-    const unsubscribe = api.event.on("message.updated", () => usageStore.refreshSafely(EVENT_TTL_MS));
+    // Also the one event on the pinned host that actually names a provider: an
+    // assistant message carries a flat `providerID`, where `session.updated`
+    // carries none. This is the belt to the message-store braces -- the band
+    // re-reads the store reactively on its own, so this only keeps the fallback
+    // signal current for a session whose store read has not caught up.
+    const unsubscribe = api.event.on("message.updated", (event) => {
+      const providerId = providerIdFromMessages([event?.properties?.info]);
+      if (providerId !== undefined) setActiveProviderId(providerId);
+      usageStore.refreshSafely(EVENT_TTL_MS);
+    });
     if (typeof unsubscribe === "function") unsubscribeMessage = unsubscribe;
   } catch {
     // Event subscription is additive; a failure must not abort the plugin.
