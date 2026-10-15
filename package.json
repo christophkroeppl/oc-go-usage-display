@@ -56,7 +56,7 @@
   "license": "MIT",
   "engines": {
     "node": ">=22",
-    "opencode": "^1.18.0"
+    "opencode": "^1.19.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && bun run build:plugins && bun run verify:bundles && bun run verify:peers && bun run verify:tarball-install",

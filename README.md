@@ -11,7 +11,7 @@ OpenCode Go subscription usage for [opencode](https://opencode.ai) and Kilo:
 | server (kilo) | `dist/plugins/oc-go-usage-display.kilo.ts` | `go_usage` tool for Kilo; reads Kilo's own auth store |
 | tui (kilo) | `dist/plugins/oc-go-usage-display.kilo.tsx` | same TUI surfaces for Kilo |
 
-`shared.ts` is inlined at build time. Requires Node >= 22 and opencode >= 1.18.
+`shared.ts` is inlined at build time. Requires Node >= 22 and opencode >= 1.19.
 All four bundles ship in the one npm package and one version; the build fails if
 either host's bundle is missing.
 
