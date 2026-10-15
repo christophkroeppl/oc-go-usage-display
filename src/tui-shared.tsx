@@ -347,11 +347,13 @@ export type DisplayCommand = {
 
 export type CommandLayerApi = {
   keymap?: {
-    registerLayer?: (layer: {
-      commands: ReadonlyArray<DisplayCommand>;
-      bindings?: ReadonlyArray<unknown>;
-      priority?: number;
-    }) => (() => void) | void;
+    // Only `commands` is ever handed to the host, so the parameter is described
+    // as exactly that. A host whose own layer type carries `bindings`/`priority`
+    // still accepts this object, because every other field on its `Layer` is
+    // optional — and typing `bindings` here as a bare array stopped being
+    // assignable once the hosts started exporting the real `Bindings<T>` type
+    // (opencode 1.19.0 / Kilo 7.8.12).
+    registerLayer?: (layer: { commands: ReadonlyArray<DisplayCommand> }) => (() => void) | void;
   };
   // Kept for hosts that predate the keymap surface; the shim forwards to it.
   command?: {
