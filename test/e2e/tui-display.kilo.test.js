@@ -16,11 +16,14 @@ import { fileURLToPath } from "node:url";
 import { findKiloBinary } from "../helpers/kilo.js";
 import { makeConfigDir } from "../helpers/tmp.js";
 import {
+  assertPlanRows,
   assertSidebarOrder,
   hasTmux,
   hostVersionSkipReason,
   makeTuiEnv,
   runTuiDisplay,
+  sidebarPlanRows,
+  stripSidebarEdge,
 } from "../helpers/tui.js";
 import { KILO_TOKEN_USAGE_ROWS } from "../../dist/shared.js";
 
@@ -52,9 +55,8 @@ const MOCK_SIDEBAR = /Go Usage/;
 // trailing glyph removed, or a grid assertion silently finds nothing on a screen
 // that is showing exactly what it asked for (it did: three plan rows, zero
 // matches).
-const stripEdge = (line) => line.replace(/[\u2500-\u259f\u25a0-\u25ff]+\s*$/, "").replace(/\s+$/, "");
-const PLAN_ROW = /^\s*(?:5h|7d|30d)\s+\d+%\s*$/;
-const planRows = (screen) => screen.split("\n").map(stripEdge).filter((line) => PLAN_ROW.test(line));
+const stripEdge = stripSidebarEdge;
+const planRows = sidebarPlanRows;
 
 // The end column of the last match of `pattern` on any line. Measured on the
 // host's OWN sidebar rows (the ones with a known label and a right-aligned
@@ -124,13 +126,15 @@ const MODES = [
   },
   {
     mode: "integrated",
-    // Same reasoning: the block only reads as settled once it sits in the host
-    // panel's old band, i.e. above the panels that follow it. `Session Tokens`
+    // Same reasoning: the block only reads as settled once it sits in the usage
+    // region of the sidebar, i.e. above the panels that follow it. `Session Tokens`
     // is the first thing integrated mode renders -- there is no `Go Usage`
     // heading above it any more.
     settled: /Session Tokens[\s\S]*\bLSP\b/,
-    // KILO_INTEGRATED_SLOT_ORDER 150: the host panel's own band, so our block
-    // is below `Context` and there is no `Token Usage` header to anchor below.
+    // KILO_SLOT_ORDER 125 in BOTH modes: below `Context` (100) and above the host
+    // panel's own band (150). Integrated mode retires that panel, so there is no
+    // `Token Usage` header to anchor below -- and because the band never moves,
+    // there is nothing to re-key when the host entry comes and goes.
     // Integrated mode opens with `Session Tokens` -- there is no `Go Usage`
     // heading, because the plan is drawn once inside the Models table.
     order: { after: [/\bContext\b/], anchor: /Session Tokens/ },
@@ -155,9 +159,12 @@ for (const { mode, order, hostPanel, settled } of MODES) {
           expect: { statusline: MOCK_STATUSLINE, sidebar: settled },
         });
         assertPlanGrid(screen);
-        assert.match(screen, /^\s*5h\s+42%\s*$/m, "sidebar must render the rolling row");
-        assert.match(screen, /^\s*7d\s+15%\s*$/m, "sidebar must render the weekly row");
-        assert.match(screen, /^\s*30d\s+61%\s*$/m, "sidebar must render the monthly row");
+        // On the edge-stripped rows, for the reason assertPlanRows documents.
+        assertPlanRows(screen, [
+          ["5h", "42%"],
+          ["7d", "15%"],
+          ["30d", "61%"],
+        ]);
         if (mode === "integrated") {
           // Integrated mode draws the plan ONCE, as the `Go Plan` meters inside
           // the OpenCode Go group. A separate `Go Usage` block above it said the

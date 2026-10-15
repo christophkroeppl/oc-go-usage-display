@@ -60,7 +60,7 @@ import type {
   TuiSlotContext,
   TuiTheme,
 } from "@opencode-ai/plugin/tui";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, createEffect } from "solid-js";
 import {
   buildGoModelFooters,
   buildModelMixSummary,
@@ -70,8 +70,9 @@ import {
   modelDisplayName,
   shortModelName,
   weightGoModels,
-} from "./helpers.js";
-import type { GoModelWeight } from "./helpers.js";
+  isGoUsageProvider,
+} from "./tui-helpers.js";
+import type { GoModelWeight } from "./tui-helpers.js";
 import {
   aggregateModelUsageFromMessages,
   errorMessage,
@@ -87,11 +88,11 @@ import {
   MeterBar,
   createCollapseState,
   createUsageStore,
-  isGoUsageProvider,
   logUsageError,
   makeProviderResolver,
   readModelDisplayName,
   reactiveChild,
+  registerDisplayCommands,
   resolveSurfaceSelection,
 } from "./tui-shared.js";
 import { EVENT_TTL_MS, POLL_INTERVAL_MS } from "./tui-shared.js";
@@ -191,8 +192,8 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
       ),
     );
 
-    const body = createMemo(() => (
-      <box flexDirection="column" gap={1} paddingTop={1} paddingLeft={2}>
+    const body = () => (
+      <box flexDirection="column" paddingTop={1} paddingLeft={2}>
         <For each={rows()}>{(model) => <WeightedModelRow theme={props.theme} model={model} />}</For>
         <For each={buildGoModelFooters(weights())}>
           {(line) => (
@@ -202,7 +203,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           )}
         </For>
       </box>
-    ));
+    );
 
     // The whole section is one function child, because two rules apply here and
     // both are about the same thing: the host reuses the element it was handed,
@@ -273,6 +274,30 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     );
   }
 
+  // The gates live in a function child, not in the slot body. The host calls a
+  // slot renderer exactly once per mount, so a condition read there is decided
+  // when the band mounted and never again -- which is why the fold toggle used to
+  // persist its new value and repaint nothing. A function child is re-evaluated
+  // (`insertExpression`), so this is the only place a live condition can live.
+  function OpencodeSidebarSlot(props: { ctx: TuiSlotContext; sessionId: string }) {
+    return reactiveChild(() => {
+      if (props.sessionId.length === 0) return null;
+      if (api.route.current.name !== "session") return null;
+      if (collapse.isSidebarCollapsed()) return null;
+      if (!isGoUsageProvider(resolveActiveProviderId(props.sessionId))) return null;
+      return <GoSidebarPanel theme={props.ctx.theme} sessionId={props.sessionId} />;
+    });
+  }
+
+  function OpencodeStatuslineSlot(props: { sessionId: string }) {
+    return reactiveChild(() => {
+      if (props.sessionId.length === 0) return null;
+      if (collapse.isStatuslineCollapsed()) return null;
+      if (!isGoUsageProvider(resolveActiveProviderId(props.sessionId))) return null;
+      return <GoStatusline snapshot={usageStore.snapshot} />;
+    });
+  }
+
   if (surfaces.sidebar) {
     // Host-owned slot: `register` returns an id but the SDK exposes no
     // unregister API, so there is nothing to dispose here (the slot dies
@@ -285,11 +310,7 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
           sidebar_content(ctx: TuiSlotContext, props: { session_id: string }) {
             // Individually guarded: a later render must never throw into the host.
             try {
-              if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (api.route.current.name !== "session") return null;
-              if (collapse.isSidebarCollapsed()) return null;
-              return <GoSidebarPanel theme={ctx.theme} sessionId={props.session_id} />;
+              return <OpencodeSidebarSlot ctx={ctx} sessionId={props.session_id} />;
             } catch {
               return null;
             }
@@ -312,9 +333,11 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
             // Individually guarded: a later render must never throw into the host.
             try {
               if (props.session_id.length === 0) return null;
-              if (!isGoUsageProvider(resolveActiveProviderId(props.session_id))) return null;
-              if (collapse.isStatuslineCollapsed()) return null;
-              return <GoStatusline snapshot={usageStore.snapshot} />;
+              // The fold and the provider gate are read INSIDE the band, not here:
+              // the host calls a slot renderer once per mount, so a condition read
+              // in this body is latched for the life of the band and the toggle
+              // would only take effect on the next mount.
+              return <OpencodeStatuslineSlot sessionId={props.session_id} />;
             } catch {
               return null;
             }
@@ -326,27 +349,58 @@ async function initializeTui(api: TuiPluginApi, options: PluginOptions | undefin
     }
   }
 
-  // `api.command` is a deprecated legacy shim that hosts may omit; guard so
-  // the plugin still initializes and disposes safely without it.
+  // Same contract as the Kilo entry: commands go in through `api.keymap`, and
+  // the layer is re-registered when the state its titles describe moves, so the
+  // palette never offers a stale one.
+  // The layer is REGISTERED EAGERLY, then re-registered from an effect, for the
+  // same reason as the Kilo entry: eager means the toggles exist as soon as the
+  // plugin has loaded, and the effect is what lets a title follow a signal.
+  const buildCommands = (
+    sidebarCollapsed: boolean,
+    statuslineCollapsed: boolean,
+    resync: () => void,
+  ) => [
+    {
+      name: "oc-go-usage-display.toggle-sidebar",
+      slashName: "go-usage-sidebar",
+      title: sidebarCollapsed ? "Go usage: show sidebar panel" : "Go usage: hide sidebar panel",
+      desc: sidebarCollapsed ? "Show the Go usage sidebar panel" : "Hide the Go usage sidebar panel",
+      category: "Go",
+      run: () => {
+        collapse.toggleSidebar();
+        resync();
+      },
+    },
+    {
+      name: "oc-go-usage-display.toggle-statusline",
+      slashName: "go-usage-statusline",
+      title: statuslineCollapsed ? "Go usage: show statusline" : "Go usage: hide statusline",
+      desc: statuslineCollapsed ? "Show the Go usage statusline" : "Hide the Go usage statusline",
+      category: "Go",
+      run: () => {
+        collapse.toggleStatusline();
+        resync();
+      },
+    },
+  ];
+
   let unregisterToggleCommand: () => void = () => {};
+  const resync = (): void => {
+    unregisterToggleCommand();
+    unregisterToggleCommand = registerDisplayCommands(api, build);
+  };
+  const build = () => buildCommands(collapse.isSidebarCollapsed(), collapse.isStatuslineCollapsed(), resync);
+
+  resync();
   try {
-    const unregister = api.command?.register(() => [
-      {
-        title: "Go usage: toggle sidebar",
-        value: "oc-go-usage-display.toggle-sidebar",
-        category: "Go",
-        onSelect: () => collapse.toggleSidebar(),
-      },
-      {
-        title: "Go usage: toggle statusline",
-        value: "oc-go-usage-display.toggle-statusline",
-        category: "Go",
-        onSelect: () => collapse.toggleStatusline(),
-      },
-    ]);
-    if (typeof unregister === "function") unregisterToggleCommand = unregister;
+    createEffect(() => {
+      // See the Kilo entry: `registerDisplayCommands` calls `build()` inside this
+      // effect, which is what subscribes it to the collapse signals.
+      unregisterToggleCommand();
+      unregisterToggleCommand = registerDisplayCommands(api, build);
+    });
   } catch {
-    // Legacy command registration is optional; ignore failures.
+    // Command re-registration is optional; the eager layer above already works.
   }
 
   let unsubscribeSession: () => void = () => {};

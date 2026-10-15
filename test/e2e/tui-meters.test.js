@@ -55,8 +55,8 @@ const PLAN_LABELS = ["5h", "7d", "30d"];
 const SHARE_LABEL = "Go share";
 // The severity ladder the plugin applies, imported from the built bundle rather
 // than restated, so "80% is the warning color" here means the same thing it means
-// in src/helpers.ts.
-const { meterSeverityForPercent } = await import("../../dist/helpers.js");
+// in src/tui-helpers.ts.
+const { meterSeverityForPercent } = await import("../../dist/tui-helpers.js");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

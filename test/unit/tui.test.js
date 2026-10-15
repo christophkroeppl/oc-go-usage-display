@@ -40,7 +40,7 @@ import {
   weightGoModels,
 
   providerIdFromModel,
-  resolveProviderId,} from "../../dist/helpers.js";
+  resolveProviderId,} from "../../dist/tui-helpers.js";
 import {
   aggregateModelUsageFromMessages,
   CACHE_RATE_DECIMALS,

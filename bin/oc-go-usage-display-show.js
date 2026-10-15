@@ -9,13 +9,14 @@ import {
   describeHostInstall,
   detectHosts,
   exitWithError,
+  guardArgs,
   hostDirFromArgv,
   repoDirFromArgv,
   secretPresence,
 } from "./lib.js";
 
 try {
-  const argv = process.argv.slice(2);
+  const argv = guardArgs("show");
   const repoDir = repoDirFromArgv(argv);
   const asJson = argv.includes("--json");
   const detected = detectHosts();

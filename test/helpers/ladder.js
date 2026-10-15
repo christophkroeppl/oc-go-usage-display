@@ -71,7 +71,7 @@ export function usageLadders() {
 }
 
 // The severity a plan window's own percent should color by is NOT restated here.
-// The thresholds live in `src/helpers.ts` (75 / 90) and the tests import
+// The thresholds live in `src/tui-helpers.ts` (75 / 90) and the tests import
 // `meterSeverityForPercent` from the built bundle, so the e2e's expectation about
 // a mixed rung cannot drift from the ladder the plugin actually applies.
 

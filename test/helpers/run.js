@@ -121,7 +121,9 @@ export function isolatedEnv(root, overrides = {}, { allowSecrets = [] } = {}) {
 
 // Run a node script to completion and capture stdout/stderr/exit code.
 // `root` is required so every child is hermetic by construction.
-export function runNode(args, { root, cwd, env = {}, input, allowSecrets = [] } = {}) {
+// `timeout` (ms) turns a hang into a signal instead of a stuck suite: the
+// non-interactive no-hang assertions rely on it.
+export function runNode(args, { root, cwd, env = {}, input, allowSecrets = [], timeout } = {}) {
   if (typeof root !== "string" || root.length === 0) {
     throw new Error("runNode requires an explicit { root } tmp directory");
   }
@@ -130,6 +132,7 @@ export function runNode(args, { root, cwd, env = {}, input, allowSecrets = [] } 
     env: isolatedEnv(root, env, { allowSecrets }),
     encoding: "utf8",
     input,
+    timeout,
   });
   return {
     code: result.status,
@@ -138,3 +141,40 @@ export function runNode(args, { root, cwd, env = {}, input, allowSecrets = [] } 
     stderr: result.stderr ?? "",
   };
 }
+
+// A pty is the only way to make `isTTY` true for a child, which is what the
+// interactive init prompt keys off. `script` (util-linux) allocates one; without
+// it the caller must skip rather than assert the prompt path.
+export function scriptBinary() {
+  const which = spawnSync("sh", ["-c", "command -v script"], { encoding: "utf8" });
+  const found = (which.stdout ?? "").trim();
+  return which.status === 0 && found.length > 0 ? found : null;
+}
+
+// Single-quote one argument for /bin/sh.
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// Run a command under a pty so its stdin and stdout are both TTYs. Returns the
+// pty transcript (with \r normalised) plus the child's exit code, and honours
+// `timeout` so a prompt that never answers fails the test instead of hanging.
+export function runOnPty(command, args, { root, cwd, env = {}, input = "", timeout = 30000 } = {}) {
+  const script = scriptBinary();
+  if (script === null) return null;
+  const shellCommand = [command, ...args].map(shQuote).join(" ");
+  const result = spawnSync(script, ["-qec", shellCommand, "/dev/null"], {
+    cwd,
+    env: isolatedEnv(root, env),
+    encoding: "utf8",
+    input,
+    timeout,
+  });
+  return {
+    code: result.status,
+    signal: result.signal,
+    stdout: (result.stdout ?? "").replace(/\r\n/g, "\n"),
+    stderr: (result.stderr ?? "").replace(/\r\n/g, "\n"),
+  };
+}
+

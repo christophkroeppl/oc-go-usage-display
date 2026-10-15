@@ -12,13 +12,14 @@ import {
   checkHostInstall,
   describeHostInstall,
   exitWithError,
+  guardArgs,
   hostDirFromArgv,
   repoDirFromArgv,
   resolveStatusTargets,
 } from "./lib.js";
 
 try {
-  const argv = process.argv.slice(2);
+  const argv = guardArgs("status");
   const repoDir = repoDirFromArgv(argv);
   let targets = resolveStatusTargets(argv);
 

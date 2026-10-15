@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Update the installation: re-link plugin files, re-register config entries
 // for the selected host(s), then fast-forward the repo (only when it has a
-// remote; otherwise re-link is the update). Target selection matches init.
+// remote; otherwise re-link is the update). Target selection matches init
+// exactly, including the always-ask-an-interactive-human prompt.
 // Restart the host(s) afterwards to pick up changes.
 
 import { execFileSync } from "node:child_process";
@@ -12,6 +13,7 @@ import {
   ensureTuiEntry,
   exitWithError,
   fail,
+  guardArgs,
   hostDirFromArgv,
   linkModeFromArgv,
   linkPluginFiles,
@@ -39,7 +41,7 @@ function isClean(repoDir) {
 }
 
 try {
-  const argv = process.argv.slice(2);
+  const argv = guardArgs("update");
   const repoDir = repoDirFromArgv(argv);
   const mode = linkModeFromArgv(argv);
   const sidebar = parseOptionalToggle(argv, "--sidebar");

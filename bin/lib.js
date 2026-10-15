@@ -1,20 +1,57 @@
 // Shared helpers for the oc-go-usage-display bin commands.
 // Dependency-free (node:fs/os/path only). Secrets are never printed;
 // only their presence is reported.
+//
+// The pure decision logic (host list, flag table, target selection, prompt
+// rendering) lives in `./cli-core.js`, which imports nothing so the unit tier
+// can import it directly; this module adds the filesystem, PATH and stdin I/O.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertKnownArgs,
+  chooseTargets,
+  cliErrorMessage,
+  fail,
+  HOSTS,
+  parseTargetList,
+  planTargets,
+  usageFor,
+} from "./cli-core.js";
+
+export {
+  assertKnownArgs,
+  chooseTargets,
+  cliErrorMessage,
+  fail,
+  HOSTS,
+  parseTargetChoice,
+  parseTargetList,
+  planTargets,
+  renderTargetPrompt,
+  usageFor,
+  wantsHelp,
+} from "./cli-core.js";
 
 export const SERVER_PLUGIN_REL = "./plugins/oc-go-usage-display.ts";
 export const TUI_PLUGIN_REL = "./plugins/oc-go-usage-display.tsx";
 export const SERVER_FILE_NAME = "oc-go-usage-display.ts";
 export const TUI_FILE_NAME = "oc-go-usage-display.tsx";
 
-// Supported coding-agent hosts. Both ship the same source; the Kilo bundles are
-// separate build outputs (host-specific auth roots) with `.kilo` filenames.
-export const HOSTS = ["opencode", "kilo"];
+// Every bin calls this before it does anything else: it rejects unknown flags
+// and positionals (`init status` used to mean "install"), and prints --help
+// then exits 0. Returns the argv to work with so a bin reads as
+// `const argv = guardArgs("init")`.
+export function guardArgs(command, argv = process.argv.slice(2)) {
+  const { help } = assertKnownArgs(command, argv);
+  if (help) {
+    console.log(usageFor(command));
+    process.exit(0);
+  }
+  return argv;
+}
 
 // Per-host install layout. Kilo is a fork with its own config root
 // ($KILO_CONFIG_DIR / $XDG_CONFIG_HOME/kilo), its own bundle filenames, and a
@@ -55,35 +92,9 @@ export function pluginSpec(host, configDir, kind) {
   return kind === "server" ? layout.serverRel : layout.tuiRel;
 }
 
-export function fail(message) {
-  if (message.startsWith("oc-go-usage-display: ")) throw new Error(message);
-  throw new Error(`oc-go-usage-display: ${message}`);
-}
-
-// Format any thrown value as the single line the bin commands report, with the
-// `oc-go-usage-display: ` prefix applied exactly once. Newlines and other
-// whitespace runs collapse to single spaces so the one-line contract holds for
-// multi-line messages (e.g. a wrapped npm error). Pure and never throws.
-export function cliErrorMessage(error) {
-  let raw;
-  if (error instanceof Error) {
-    raw = error.message;
-  } else {
-    try {
-      raw = String(error);
-    } catch {
-      return "oc-go-usage-display: unknown error";
-    }
-  }
-  const message = raw.replace(/\s+/g, " ").trim();
-  if (message.length === 0) return "oc-go-usage-display: unknown error";
-  if (message.startsWith("oc-go-usage-display: ")) return message;
-  return `oc-go-usage-display: ${message}`;
-}
-
 // Top-level error boundary shared by every bin: one clean line on stderr (no
 // stack trace, no rethrow) and exit 1. The synchronous fd write keeps the
-// message from being truncated by `process.exit` when stderr is a pipe (npx).
+// message from being truncated by `process.exit` when stderr is a pipe (bunx).
 export function exitWithError(error) {
   try {
     fs.writeSync(process.stderr.fd, `${cliErrorMessage(error)}\n`);
@@ -150,67 +161,47 @@ function executableOnPath(name) {
   return false;
 }
 
-// Best-effort host detection; never fails an install. A host counts as
-// installed when its binary is on PATH or its config/data dir exists, which
+// Best-effort host detection for reporting; never throws. A host counts as
+// detected when its binary is on PATH or its config/data dir exists, which
 // covers every install flavor (brew, npm, curl, source checkout, portable).
+// `show` reports this; the install prompt uses `hostRows` instead, which tells
+// "binary found" apart from "only a config dir happens to exist".
 export function detectHosts() {
+  const rows = hostRows();
+  return Object.fromEntries(rows.map((row) => [row.host, row.onPath || row.configured]));
+}
+
+// Per host: is its binary on PATH, and does a config/data dir exist. Only
+// `onPath` marks a host as available in the prompt — a leftover config dir must
+// not look like an installed agent.
+export function hostRows() {
   try {
-    return {
-      opencode:
-        executableOnPath("opencode") ||
-        fs.existsSync(openCodeDirFromArgv([])) ||
-        fs.existsSync(hostDataDir("opencode")),
-      kilo:
-        executableOnPath("kilo") ||
-        fs.existsSync(kiloDirFromArgv([])) ||
-        fs.existsSync(hostDataDir("kilo")),
-    };
+    return HOSTS.map((host) => ({
+      host,
+      onPath: executableOnPath(host),
+      configured: fs.existsSync(hostDirFromArgv(host, [])) || fs.existsSync(hostDataDir(host)),
+    }));
   } catch {
-    return { opencode: false, kilo: false };
+    return HOSTS.map((host) => ({ host, onPath: false, configured: false }));
   }
 }
 
-export function parseTargetList(value) {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "all" || normalized === "both") return [...HOSTS];
-  const targets = normalized.split(/[\s,]+/).filter((entry) => entry.length > 0);
-  if (targets.length === 0) fail("--target requires opencode, kilo, or all");
-  for (const target of targets) {
-    if (target !== "opencode" && target !== "kilo") fail(`unknown target: ${target} (expected opencode/kilo/all)`);
-  }
-  return [...new Set(targets)];
-}
-
-// Parse a numbered multiselect answer ("1,2", "all", "" for the default).
-export function parseTargetChoice(input, choices) {
-  const trimmed = input.trim().toLowerCase();
-  if (trimmed.length === 0 || trimmed === "all" || trimmed === "both") return [...choices];
-  const selected = [];
-  for (const token of trimmed.split(/[\s,]+/).filter((entry) => entry.length > 0)) {
-    const index = Number.parseInt(token, 10);
-    if (!Number.isInteger(index) || index < 1 || index > choices.length || String(index) !== token) {
-      fail(`invalid selection "${token}" (expected ${choices.map((_, i) => i + 1).join("/")} or Enter)`);
-    }
-    selected.push(choices[index - 1]);
-  }
-  return selected.length > 0 ? [...new Set(selected)] : [...choices];
-}
-
-// Targets for init/update. Explicit --target or a per-host --config-dir wins;
-// otherwise one detected host installs silently, two or more offer the
-// multiselect, and zero (or a non-interactive shell) defaults to all — a
-// missing binary must never fail the install.
+// Targets for init/update. Explicit --target or a per-host --config-dir wins
+// and never prompts (the scriptable path an AI agent uses). Otherwise a human on
+// a TTY is ALWAYS asked, even when only one host is available: silently
+// rewriting a config is the one thing init must not do. A non-interactive run
+// (piped, CI) takes every host and never reads stdin, so it cannot hang.
 export function selectTargets(
   argv,
   { interactive = process.stdin.isTTY === true && process.stdout.isTTY === true } = {},
 ) {
   const targets = explicitTargets(argv);
   if (targets !== null) return targets;
-  const detected = detectHosts();
-  const installed = HOSTS.filter((host) => detected[host]);
-  if (installed.length === 1) return installed;
-  if (installed.length > 1 && interactive) return promptTargets(installed);
-  return [...HOSTS];
+  const rows = hostRows();
+  const plan = planTargets({ rows, interactive, color: colorEnabled() });
+  if (plan.kind === "auto") return plan.targets;
+  process.stdout.write(plan.prompt);
+  return chooseTargets(rows, readAnswer());
 }
 
 // Removal never prompts: explicit flags pick hosts, otherwise both are visited
@@ -234,20 +225,24 @@ function explicitTargets(argv) {
   return dirTargets.length > 0 ? dirTargets : null;
 }
 
-function promptTargets(installed) {
-  process.stdout.write(
-    `Detected coding agents: ${installed.map((host, index) => `${index + 1}) ${host}`).join("  ")}\n`,
-  );
-  process.stdout.write(`Install for [${installed.map((_, index) => index + 1).join(",")}] (Enter = all): `);
-  let input = "";
+// ANSI only reaches a terminal. NO_COLOR is honoured as a backstop so a piped
+// or CI run that fakes a TTY still gets plain text.
+function colorEnabled() {
+  if (process.stdout.isTTY !== true) return false;
+  return toNonEmptyString(process.env.NO_COLOR) === null;
+}
+
+// One blocking line read. Only reached on the interactive prompt path, so a
+// piped/CI invocation never blocks here; a read failure falls back to the
+// prompt's default rather than throwing mid-install.
+function readAnswer() {
   try {
     const buffer = Buffer.alloc(256);
     const bytes = fs.readSync(process.stdin.fd, buffer, 0, buffer.length, null);
-    input = buffer.toString("utf8", 0, bytes);
+    return buffer.toString("utf8", 0, bytes);
   } catch {
-    return [...installed];
+    return "";
   }
-  return parseTargetChoice(input, installed);
 }
 
 export function linkModeFromArgv(argv) {

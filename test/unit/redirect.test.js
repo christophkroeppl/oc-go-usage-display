@@ -14,7 +14,7 @@ import {
   MAX_REDIRECT_HOPS,
   isAllowedRedirect,
   resolveAllowedRedirect,
-} from "../../dist/helpers.js";
+} from "../../dist/server-helpers.js";
 
 const WORKSPACE_URL = "https://opencode.ai/workspace/ws_123/go";
 

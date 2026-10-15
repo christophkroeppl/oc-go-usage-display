@@ -44,6 +44,9 @@ on:
     # Mondays 12:30 UTC — the weekly test run starts at 06:00 and owns the
     # first half of the day.
     - cron: "30 12 * * 1"
+  push:
+    branches:
+      - develop
   workflow_dispatch:
 
 permissions:
