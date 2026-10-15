@@ -75,9 +75,10 @@
     "test:docker": "docker compose run --rm --build test"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.18.0",
-    "@kilocode/plugin": "^7.8.0",
+    "@opencode-ai/plugin": "^1.19.0",
+    "@kilocode/plugin": "^7.8.12",
     "@opentui/solid": "^0.5.11",
+    "@opentui/keymap": "^0.5.11",
     "solid-js": "^1.9.12"
   },
   "peerDependenciesMeta": {
@@ -87,14 +88,18 @@
     "@opentui/solid": {
       "optional": true
     },
+    "@opentui/keymap": {
+      "optional": true
+    },
     "solid-js": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.18.33",
-    "@kilocode/plugin": "^7.8.3",
+    "@opencode-ai/plugin": "^1.19.0",
+    "@kilocode/plugin": "^7.8.12",
     "@opentui/solid": "0.5.11",
+    "@opentui/keymap": "0.5.11",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.2",
     "solid-js": "1.9.15",
