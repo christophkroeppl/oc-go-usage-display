@@ -100,7 +100,7 @@
     "@kilocode/plugin": "^7.8.12",
     "@opentui/solid": "0.5.11",
     "@opentui/keymap": "0.5.11",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "solid-js": "1.9.15",
     "typescript": "^6.0.3"
