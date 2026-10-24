@@ -229,10 +229,46 @@ test("kilo tui.json rejects sidebar/statusline options with a clear error", () =
   });
 });
 
+test("opencode-v2 install uses the v2 `plugins` key and no tui.json", () => {
+  withTempDir((dir) => {
+    linkPluginFiles(REPO_DIR, dir, "copy", "opencode-v2");
+    const pluginsDir = path.join(dir, "plugins");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.v2.ts", "go_usage");
+    // v2 has no TUI bundle, so nothing else should be installed.
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.ts")), false);
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.tsx")), false);
+
+    const server = ensureServerEntry(dir, { host: "opencode-v2" });
+    assert.equal(server.present, true);
+    assert.equal(fs.existsSync(path.join(dir, "opencode.jsonc")), true);
+    // v2 must NOT create tui.json — there is no TUI bundle to register.
+    assert.equal(fs.existsSync(path.join(dir, "tui.json")), false);
+
+    const config = JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8"));
+                                                                 
+    assert.equal("plugin" in config, false, "v2 config must not use the v1 `plugin` key");
+    // v2 needs an absolute path: its module.ts only treats a target as a
+    // local file when `path.isAbsolute(target)` is true.
+    assert.deepStrictEqual(config.plugins, [path.join(dir, "plugins", "oc-go-usage-display.v2.ts")]);
+
+    const tui = ensureTuiEntry(dir, { host: "opencode-v2" });
+    assert.equal(tui.entry, false);
+    assert.equal(fs.existsSync(path.join(dir, "tui.json")), false);
+
+    const report = checkHostInstall("opencode-v2", dir, REPO_DIR);
+    assert.deepStrictEqual(report.problems, []);
+
+    assert.equal(removeServerEntry(dir, { host: "opencode-v2" }).changed, true);
+    const after = JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8"));
+    assert.deepStrictEqual(after.plugins, []);
+  });
+});
+
 test("parseTargetList and parseTargetChoice resolve target selections", () => {
   assert.deepStrictEqual(parseTargetList("kilo"), ["kilo"]);
-  assert.deepStrictEqual(parseTargetList("all"), ["opencode", "kilo"]);
+  assert.deepStrictEqual(parseTargetList("all"), ["opencode", "kilo", "opencode-v2"]);
   assert.deepStrictEqual(parseTargetList("kilo,opencode"), ["kilo", "opencode"]);
+  assert.deepStrictEqual(parseTargetList("opencode-v2"), ["opencode-v2"]);
   assert.throws(() => parseTargetList("vim"), /unknown target/);
   assert.deepStrictEqual(parseTargetChoice("", ["opencode", "kilo"]), ["opencode", "kilo"]);
   assert.deepStrictEqual(parseTargetChoice("2", ["opencode", "kilo"]), ["kilo"]);

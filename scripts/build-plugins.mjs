@@ -83,6 +83,7 @@ const serverOut = "dist/plugins/oc-go-usage-display.ts";
 const kiloTuiOut = "dist/plugins/oc-go-usage-display.kilo.tsx";
 const tuiOut = "dist/plugins/oc-go-usage-display.tsx";
 const kiloServerOut = "dist/plugins/oc-go-usage-display.kilo.ts";
+const v2ServerOut = "dist/plugins/oc-go-usage-display.v2.ts";
 
 await esbuild.build({
   ...base,
@@ -130,6 +131,15 @@ await esbuild.build({
 });
 assertSingleDefaultExport(kiloTuiOut);
 
+await esbuild.build({
+  ...base,
+  banner: bannerFor("opencode-v2", "server"),
+  entryPoints: ["src/v2/index.ts"],
+  outfile: v2ServerOut,
+  external: ["@opencode/plugin", "@opencode/plugin/*"],
+});
+assertSingleDefaultExport(v2ServerOut);
+
 console.log(
-  "bundled dist/plugins/oc-go-usage-display.ts + .kilo.ts + .tsx + .kilo.tsx (self-contained, default-only export)",
+  "bundled dist/plugins/oc-go-usage-display.ts + .kilo.ts + .tsx + .kilo.tsx + .v2.ts (self-contained, default-only export)",
 );

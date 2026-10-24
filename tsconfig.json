@@ -7,7 +7,7 @@
     "moduleDetection": "force",
     "verbatimModuleSyntax": true,
     "lib": ["ES2022", "DOM"],
-    "types": ["node"],
+    "types": ["node", "bun"],
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/solid",
     "strict": true,

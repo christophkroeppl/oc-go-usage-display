@@ -117,7 +117,7 @@ test("install-cli kilo target installs only the kilo layout", () => {
   }
 });
 
-test("install-cli --target all installs both hosts, remove clears both", () => {
+test("install-cli --target all installs all hosts, remove clears all", () => {
   const tmp = makeConfigDir();
   try {
     const { root, configDir } = tmp;
@@ -133,6 +133,7 @@ test("install-cli --target all installs both hosts, remove clears both", () => {
     for (const file of [
       path.join(configDir, "plugins", "oc-go-usage-display.ts"),
       path.join(configDir, "plugins", "oc-go-usage-display.tsx"),
+      path.join(configDir, "plugins", "oc-go-usage-display.v2.ts"),
       path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts"),
       path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.tsx"),
     ]) {
@@ -145,6 +146,7 @@ test("install-cli --target all installs both hosts, remove clears both", () => {
     assert.equal(remove.code, 0, remove.stderr);
     assert.equal(fs.existsSync(path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts")), false);
     assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display.v2.ts")), false);
   } finally {
     tmp.cleanup();
   }
@@ -334,6 +336,7 @@ test("install-cli non-TTY runs install every host, never prompts, and cannot han
     for (const file of [
       path.join(tmp.root, "config", "plugins", "oc-go-usage-display.ts"),
       path.join(tmp.root, "config", "plugins", "oc-go-usage-display.tsx"),
+      path.join(tmp.root, "config", "plugins", "oc-go-usage-display.v2.ts"),
       path.join(tmp.root, "xdg-config", "kilo", "plugins", "oc-go-usage-display.kilo.ts"),
       path.join(tmp.root, "xdg-config", "kilo", "plugins", "oc-go-usage-display.kilo.tsx"),
     ]) {
@@ -364,6 +367,7 @@ test("install-cli a TTY user is asked, and Enter installs only the on-PATH host"
     assert.equal(result.code, 0, result.stderr);
     assert.match(plain(result.stdout), /1\) opencode/);
     assert.match(plain(result.stdout), /2\) kilo {2}\(binary not on PATH\)/);
+    assert.match(plain(result.stdout), /3\) opencode-v2\s+\(binary not on PATH\)/);
     assert.match(plain(result.stdout), /Install for \[1\]/);
     // Enter is the default: the on-PATH host only. Kilo was offered, never
     // preselected, so nothing of kilo's was written.

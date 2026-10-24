@@ -114,7 +114,9 @@ test("legacy export enumeration finds no export that is not a plugin module", as
 // escapes to the real home and this fails loudly instead of silently touching
 // it (CONFIG_DIR and authJsonPaths are the paths dist/* actually reads).
 test("config and auth path resolution stay inside the hermetic tmp root", async () => {
-  const { CONFIG_DIR, authJsonPaths } = await import("../../dist/shared.js");
+  // Bust the module cache so CONFIG_DIR resolves against THIS test's env.
+  const mod = await import(`../../dist/shared.js?t=${Date.now()}`);
+  const { CONFIG_DIR, authJsonPaths } = mod;
   for (const candidate of [CONFIG_DIR, ...authJsonPaths()]) {
     const relative = path.relative(ROOT, candidate);
     assert.ok(

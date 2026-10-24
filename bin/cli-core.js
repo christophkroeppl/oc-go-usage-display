@@ -7,7 +7,7 @@
 
 // Supported coding-agent hosts. Both ship the same source; the Kilo bundles are
 // separate build outputs (host-specific auth roots) with `.kilo` filenames.
-export const HOSTS = ["opencode", "kilo"];
+export const HOSTS = ["opencode", "kilo", "opencode-v2"];
 
 // SGR 9 (strike-through) marks a host whose binary is not on PATH in the init
 // prompt. Emitted only for a TTY, so redirected output and test fixtures stay
@@ -26,7 +26,7 @@ export const COMMANDS = ["init", "remove", "show", "status", "update"];
 export const COMMAND_ARGS = {
   init: {
     values: {
-      "--target": "opencode|kilo|all",
+      "--target": "opencode|opencode-v2|kilo|all",
       "--config-dir": "path",
       "--kilo-config-dir": "path",
       "--repo": "path",
@@ -49,7 +49,7 @@ export const COMMAND_ARGS = {
   },
   update: {
     values: {
-      "--target": "opencode|kilo|all",
+      "--target": "opencode|opencode-v2|kilo|all",
       "--config-dir": "path",
       "--kilo-config-dir": "path",
       "--repo": "path",
@@ -90,9 +90,9 @@ export function parseTargetList(value) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "all" || normalized === "both") return [...HOSTS];
   const targets = normalized.split(/[\s,]+/).filter((entry) => entry.length > 0);
-  if (targets.length === 0) fail("--target requires opencode, kilo, or all");
+  if (targets.length === 0) fail("--target requires opencode, opencode-v2, kilo, or all");
   for (const target of targets) {
-    if (target !== "opencode" && target !== "kilo") fail(`unknown target: ${target} (expected opencode/kilo/all)`);
+    if (target !== "opencode" && target !== "opencode-v2" && target !== "kilo") fail(`unknown target: ${target} (expected opencode/opencode-v2/kilo/all)`);
   }
   return [...new Set(targets)];
 }

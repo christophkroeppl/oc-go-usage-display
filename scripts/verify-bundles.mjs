@@ -38,6 +38,11 @@ const BUNDLES = [
     banner: "oc-go-usage-display: kilo tui plugin bundle",
     marker: "sidebar_content",
   },
+  {
+    file: "dist/plugins/oc-go-usage-display.v2.ts",
+    banner: "oc-go-usage-display: opencode-v2 server plugin bundle",
+    marker: "go_usage",
+  },
 ];
 
 const TSC_ENTRIES = ["dist/index.js", "dist/tui.js", "dist/tui.kilo.js"];

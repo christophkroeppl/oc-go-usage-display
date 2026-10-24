@@ -64,6 +64,7 @@ const HOST_LAYOUTS = {
     serverRel: "./plugins/oc-go-usage-display.ts",
     tuiRel: "./plugins/oc-go-usage-display.tsx",
     serverConfigFile: "opencode.jsonc",
+    serverConfigKey: "plugin",
     tuiOptions: true,
   },
   kilo: {
@@ -72,6 +73,16 @@ const HOST_LAYOUTS = {
     serverRel: "./plugins/oc-go-usage-display.kilo.ts",
     tuiRel: "./plugins/oc-go-usage-display.kilo.tsx",
     serverConfigFile: "kilo.json",
+    serverConfigKey: "plugin",
+    tuiOptions: false,
+  },
+  "opencode-v2": {
+    serverFile: "oc-go-usage-display.v2.ts",
+    serverRel: "./plugins/oc-go-usage-display.v2.ts",
+    serverConfigFile: "opencode.jsonc",
+    // v2 renamed the key: `plugins` (array of string | {package, options}),
+    // not v1's `plugin`. Writing the v1 key is silently ignored by v2.
+    serverConfigKey: "plugins",
     tuiOptions: false,
   },
 };
@@ -88,7 +99,11 @@ export function hostLayout(host) {
 export function pluginSpec(host, configDir, kind) {
   const layout = hostLayout(host);
   const fileName = kind === "server" ? layout.serverFile : layout.tuiFile;
-  if (host === "kilo") return path.join(configDir, "plugins", fileName);
+  if (fileName === undefined) return undefined;
+  // v2's module.ts only treats a target as a local file when it is an
+  // absolute path (`path.isAbsolute(target)`); a relative spec is resolved as
+  // a package directory and finds no entrypoint. Kilo needs the same.
+  if (host === "kilo" || host === "opencode-v2") return path.join(configDir, "plugins", fileName);
   return kind === "server" ? layout.serverRel : layout.tuiRel;
 }
 
@@ -139,7 +154,8 @@ function xdgHome(key, fallbackSegments) {
 
 // Data dir the host stores auth.json in (never written here, detection only).
 function hostDataDir(host) {
-  return path.join(xdgHome("XDG_DATA_HOME", [".local", "share"]), host);
+  const dataHost = host === "opencode-v2" ? "opencode" : host;
+  return path.join(xdgHome("XDG_DATA_HOME", [".local", "share"]), dataHost);
 }
 
 // PATH lookup without spawning: covers brew/npm/curl/source installs that put
@@ -368,7 +384,9 @@ export function linkPluginFiles(repoDir, configDir, mode, host = "opencode") {
   // `bun run build` produces dist/plugins/*, which is what gets installed.
   const pairs = [
     [path.join(repoDir, "dist", "plugins", layout.serverFile), path.join(pluginsDir, layout.serverFile)],
-    [path.join(repoDir, "dist", "plugins", layout.tuiFile), path.join(pluginsDir, layout.tuiFile)],
+    ...(layout.tuiFile
+      ? [[path.join(repoDir, "dist", "plugins", layout.tuiFile), path.join(pluginsDir, layout.tuiFile)]]
+      : []),
   ];
   for (const [source, target] of pairs) {
     if (!fs.existsSync(source)) fail(`repo bundle missing: ${source} (run bun run build)`);
@@ -428,18 +446,19 @@ export function ensureServerEntry(configDir, { create = true, host = "opencode" 
   const layout = hostLayout(host);
   const spec = pluginSpec(host, configDir, "server");
   const filePath = path.join(configDir, layout.serverConfigFile);
+  const key = layout.serverConfigKey ?? "plugin";
   const { found, value } = readJsonFile(filePath);
   if (!found) {
     if (!create) return { changed: false, present: false };
-    writeJsonFile(filePath, { plugin: [spec] });
+    writeJsonFile(filePath, { [key]: [spec] });
     return { changed: true, present: true };
   }
   if (!isRecord(value)) fail(`${layout.serverConfigFile} is not an object: ${filePath}`);
-  const plugins = Array.isArray(value.plugin) ? value.plugin : [];
+  const plugins = Array.isArray(value[key]) ? value[key] : [];
   if (plugins.includes(spec)) {
     return { changed: false, present: true };
   }
-  value.plugin = [...plugins, spec];
+  value[key] = [...plugins, spec];
   writeJsonFile(filePath, value);
   return { changed: true, present: true };
 }
@@ -475,6 +494,11 @@ export function ensureTuiEntry(
   { sidebar = null, statusline = null, create = true, host = "opencode" } = {},
 ) {
   const layout = hostLayout(host);
+  // v2 has no TUI bundle (the slot surface is blocked), so there is nothing to
+  // register in tui.json and no spec to write.
+  if (layout.tuiFile === undefined) {
+    return { changed: false, entry: false, sidebar: null, statusline: null };
+  }
   if (!layout.tuiOptions && (sidebar !== null || statusline !== null)) {
     fail(`--sidebar/--statusline do not apply to ${host} (its tui.json rejects those options)`);
   }
@@ -555,7 +579,7 @@ export function removePluginFiles(configDir, host = "opencode") {
   const layout = hostLayout(host);
   const removed = [];
   const kept = [];
-  for (const fileName of [layout.serverFile, layout.tuiFile]) {
+  for (const fileName of [layout.serverFile, layout.tuiFile].filter(Boolean)) {
     const target = path.join(configDir, "plugins", fileName);
     const stat = safeLstat(target);
     if (stat === null) continue;
@@ -576,9 +600,10 @@ export function removeServerEntry(configDir, { host = "opencode" } = {}) {
   const { found, value } = readJsonFile(filePath);
   if (!found) return { changed: false, present: false };
   if (!isRecord(value)) fail(`${layout.serverConfigFile} is not an object: ${filePath}`);
-  const plugins = Array.isArray(value.plugin) ? value.plugin : [];
+  const key = layout.serverConfigKey ?? "plugin";
+  const plugins = Array.isArray(value[key]) ? value[key] : [];
   if (!plugins.includes(spec)) return { changed: false, present: false };
-  value.plugin = plugins.filter((entry) => entry !== spec);
+  value[key] = plugins.filter((entry) => entry !== spec);
   writeJsonFile(filePath, value);
   return { changed: true, present: false };
 }
@@ -609,13 +634,14 @@ export function describeHostInstall(host, configDir) {
   const tuiSpec = pluginSpec(host, configDir, "tui");
   const pluginsDir = path.join(configDir, "plugins");
   const serverLink = describeLink(path.join(pluginsDir, layout.serverFile));
-  const tuiLink = describeLink(path.join(pluginsDir, layout.tuiFile));
+  const tuiLink = layout.tuiFile ? describeLink(path.join(pluginsDir, layout.tuiFile)) : { present: false, kind: "none" };
   const serverConfig = readJsonFile(path.join(configDir, layout.serverConfigFile));
+  const serverKey = layout.serverConfigKey ?? "plugin";
   const serverEntry =
     serverConfig.found &&
     isRecord(serverConfig.value) &&
-    Array.isArray(serverConfig.value.plugin) &&
-    serverConfig.value.plugin.includes(serverSpec);
+    Array.isArray(serverConfig.value[serverKey]) &&
+    serverConfig.value[serverKey].includes(serverSpec);
   const tui = readTuiSelection(configDir, host);
   return {
     configDir,
@@ -638,9 +664,9 @@ export function checkHostInstall(host, configDir, repoDir) {
   const problems = [];
   const notes = [];
   const expectedServer = path.join(repoDir, "dist", "plugins", layout.serverFile);
-  const expectedTui = path.join(repoDir, "dist", "plugins", layout.tuiFile);
+  const expectedTui = layout.tuiFile ? path.join(repoDir, "dist", "plugins", layout.tuiFile) : null;
   const serverPath = path.join(configDir, "plugins", layout.serverFile);
-  const tuiPath = path.join(configDir, "plugins", layout.tuiFile);
+  const tuiPath = layout.tuiFile ? path.join(configDir, "plugins", layout.tuiFile) : null;
 
   // Copy installs intentionally diverge, so a stale copy stays NOTE (never
   // FAIL): users who pin a copy must not break on every repo update.
@@ -675,18 +701,21 @@ export function checkHostInstall(host, configDir, repoDir) {
   }
 
   checkPlugin("server", describeLink(serverPath), serverPath, expectedServer);
-  checkPlugin("tui", describeLink(tuiPath), tuiPath, expectedTui);
+  if (layout.tuiFile !== undefined) {
+    checkPlugin("tui", describeLink(tuiPath), tuiPath, expectedTui);
+  }
 
   const serverConfig = readJsonFile(path.join(configDir, layout.serverConfigFile));
+  const serverKey = layout.serverConfigKey ?? "plugin";
   const serverEntry =
     serverConfig.found &&
     isRecord(serverConfig.value) &&
-    Array.isArray(serverConfig.value.plugin) &&
-    serverConfig.value.plugin.includes(pluginSpec(host, configDir, "server"));
+    Array.isArray(serverConfig.value[serverKey]) &&
+    serverConfig.value[serverKey].includes(pluginSpec(host, configDir, "server"));
   if (!serverEntry) problems.push(`${layout.serverConfigFile} is missing the server plugin entry`);
 
   const tui = readTuiSelection(configDir, host);
-  if (!tui.entry) problems.push("tui.json is missing the tui plugin entry");
+  if (layout.tuiFile !== undefined && !tui.entry) problems.push("tui.json is missing the tui plugin entry");
   if (layout.tuiOptions && (tui.sidebar === null || tui.statusline === null)) {
     problems.push(`tui toggles incomplete: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
   }

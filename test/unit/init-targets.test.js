@@ -114,13 +114,13 @@ test("a non-interactive run takes every host and renders no prompt", () => {
 
 test("parseTargetList keeps its documented semantics", () => {
   assert.deepStrictEqual(parseTargetList("kilo"), ["kilo"]);
-  assert.deepStrictEqual(parseTargetList("all"), ["opencode", "kilo"]);
-  assert.deepStrictEqual(parseTargetList("both"), ["opencode", "kilo"]);
+  assert.deepStrictEqual(parseTargetList("all"), ["opencode", "kilo", "opencode-v2"]);
+  assert.deepStrictEqual(parseTargetList("both"), ["opencode", "kilo", "opencode-v2"]);
   assert.deepStrictEqual(parseTargetList("kilo,opencode"), ["kilo", "opencode"]);
   assert.deepStrictEqual(parseTargetList(" kilo  opencode "), ["kilo", "opencode"]);
   assert.deepStrictEqual(parseTargetList("kilo,kilo"), ["kilo"]);
   assert.throws(() => parseTargetList("vim"), /unknown target/);
-  assert.throws(() => parseTargetList("   "), /--target requires opencode, kilo, or all/);
+  assert.throws(() => parseTargetList("   "), /--target requires opencode, opencode-v2, kilo, or all/);
 });
 
 test("parseTargetChoice still rejects non-canonical and out-of-range answers", () => {
@@ -159,9 +159,9 @@ test("an unrecognized positional is rejected, naming the sibling command", () =>
 
 test("an unknown flag is rejected and lists the accepted flags", () => {
   assert.throws(() => assertKnownArgs("init", ["--targt", "kilo"]), /unexpected argument "--targt"/);
-  assert.throws(() => assertKnownArgs("init", ["--targt", "kilo"]), /--target <opencode\|kilo\|all>/);
+  assert.throws(() => assertKnownArgs("init", ["--targt", "kilo"]), /--target <opencode\|opencode-v2\|kilo\|all>/);
   assert.throws(() => assertKnownArgs("init", ["--copy=yes"]), /--copy takes no value/);
-  assert.throws(() => assertKnownArgs("init", ["--target"]), /missing value for --target \(expected opencode\|kilo\|all\)/);
+  assert.throws(() => assertKnownArgs("init", ["--target"]), /missing value for --target \(expected opencode\|opencode-v2\|kilo\|all\)/);
   assert.throws(() => assertKnownArgs("init", ["--target", "--copy"]), /missing value for --target/);
 });
 
@@ -186,6 +186,6 @@ test("usage text is generated from the accepted-argument table", () => {
     assert.ok(usage.includes(name), `usage must mention ${name}`);
   }
   assert.match(usage, /^usage: oc-go-usage-display-init \[flags\]/);
-  assert.match(usage, /--target <opencode\|kilo\|all>/);
+  assert.match(usage, /--target <opencode\|opencode-v2\|kilo\|all>/);
   assert.ok(!usageFor("show").includes("--target"), "show does not accept --target");
 });

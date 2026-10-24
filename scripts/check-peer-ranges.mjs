@@ -30,6 +30,10 @@ const OPTIONAL_UI_PEERS = ["@opentui/solid", "solid-js", "@opentui/keymap"];
 // These must stay caret ranges: a narrower or pinned SDK range breaks installs
 // against a host newer than the one we were built on.
 const CARET_PEERS = ["@opencode-ai/plugin", "@kilocode/plugin"];
+// Host SDK peers that are version-pinned to the container image rather than
+// caret ranges (a caret would let npm pick a newer host whose @opentui peers
+// conflict with the v1 range). Guarded for presence only.
+const HOST_SDK_PEERS = [];
 
 const ERESOLVE_NOTE =
   "an exact pin on these optional UI peers re-creates the npm ERESOLVE failure " +
@@ -57,7 +61,7 @@ if (peers === undefined || peers === null || typeof peers !== "object") {
   fail("package.json has no peerDependencies object");
 }
 
-for (const name of [...OPTIONAL_UI_PEERS, ...CARET_PEERS]) {
+for (const name of [...OPTIONAL_UI_PEERS, ...CARET_PEERS, ...HOST_SDK_PEERS]) {
   if (typeof peers[name] !== "string") fail(`peerDependencies.${name} is missing or not a string`);
 }
 
@@ -71,5 +75,11 @@ for (const name of CARET_PEERS) {
   }
 }
 
-const summary = [...OPTIONAL_UI_PEERS, ...CARET_PEERS].map((name) => `${name} ${peers[name]}`).join(", ");
+for (const name of HOST_SDK_PEERS) {
+  if (typeof peers[name] !== "string" || peers[name].trim() === "") {
+    fail(`peerDependencies.${name} is missing or not a string`);
+  }
+}
+
+const summary = [...OPTIONAL_UI_PEERS, ...CARET_PEERS, ...HOST_SDK_PEERS].map((name) => `${name} ${peers[name]}`).join(", ");
 console.log(`check-peer-ranges: OK (${summary})`);

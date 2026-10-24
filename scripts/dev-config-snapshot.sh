@@ -24,9 +24,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 log() { printf '[snapshot] %s\n' "$*" >&2; }
 
 abspath() {
-  if command -v realpath >/dev/null 2>&1; then realpath -m "$1"
-  else case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "$PWD" "$1" ;; esac
-  fi
+  case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${PWD:-$(pwd)}" "$1" ;; esac
 }
 take_arg() { [[ $# -ge 2 && "$2" != -* ]] || die "$1 requires a value"; }
 while [[ $# -gt 0 ]]; do
@@ -70,7 +68,7 @@ if [[ "$MODE" == "save" ]]; then
       continue
     fi
     mkdir -p "$SNAPSHOT/files/$(dirname "$rel")"
-    if [[ "$kind" == "link" ]]; then cp -P "$src" "$SNAPSHOT/files/$rel"
+    if [[ "$kind" == "link" ]]; then cp -a "$src" "$SNAPSHOT/files/$rel"
     else cp -p "$src" "$SNAPSHOT/files/$rel"; fi
     printf 'present\t%s\n' "$rel" >> "$SNAPSHOT/manifest"
     present=$((present + 1))
@@ -98,7 +96,7 @@ while IFS=$'\t' read -r state rel; do
     [[ -L "$payload" || -f "$payload" ]] || die "missing snapshot payload for $rel"
     replace_target "$target"
     if [[ -L "$payload" ]]; then
-      cp -P "$payload" "$target"; log "restored symlink $rel -> $(readlink "$target")"
+      cp -a "$payload" "$target"; log "restored symlink $rel -> $(readlink "$target")"
     else
       cp -p "$payload" "$target"; log "restored file $rel"
     fi

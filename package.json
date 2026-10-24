@@ -65,7 +65,9 @@
     "verify:peers": "node scripts/check-peer-ranges.mjs",
     "verify:tarball-install": "node scripts/verify-tarball-install.mjs",
     "verify:tarball": "node scripts/verify-tarball.mjs",
-    "check": "tsc --noEmit -p tsconfig.json",
+    "check": "bun check && oxlint",
+    "format": "oxfmt --write",
+    "format:check": "oxfmt --check",
     "prepublishOnly": "bun run build",
     "test": "bun run build && bun run test:unit",
     "test:unit": "bun run check-unit-purity && bun test test/unit/*.test.js",
@@ -96,12 +98,15 @@
     }
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.19.4",
-    "@kilocode/plugin": "^7.8.17",
-    "@opentui/solid": "0.5.11",
+    "@kilocode/plugin": "^7.8.12",
+    "@opencode-ai/plugin": "^1.19.0",
     "@opentui/keymap": "0.5.11",
+    "@opentui/solid": "0.5.11",
+    "@types/bun": "^1.4.3",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
+    "oxfmt": "^0.73.0",
+    "oxlint": "^1.88.0",
     "solid-js": "1.9.15",
     "typescript": "^6.0.3"
   }
