@@ -20,8 +20,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Pin global CLI versions
-ARG OPENCODE_VERSION=1.19.3
-ARG KILO_VERSION=7.8.12
+ARG OPENCODE_VERSION=1.19.4
+ARG KILO_VERSION=7.8.17
 
 # Install pinned CLI tools globally
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
