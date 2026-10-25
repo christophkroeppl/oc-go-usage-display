@@ -51,7 +51,8 @@
     "opencode-go",
     "kilocode",
     "plugin",
-    "usage"
+    "usage",
+    "opencode-plugin"
   ],
   "license": "MIT",
   "engines": {
