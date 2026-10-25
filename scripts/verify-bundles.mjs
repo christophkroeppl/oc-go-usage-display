@@ -44,7 +44,7 @@ const BUNDLES = [
     marker: "go_usage",
   },
   {
-    file: "dist/plugins/oc-go-usage-display.v2.tui.js",
+    file: "dist/plugins/oc-go-usage-display.v2.tui.ts",
     banner: "oc-go-usage-display: opencode-v2 tui plugin bundle",
     marker: "sidebar.content",
   },

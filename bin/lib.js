@@ -78,9 +78,9 @@ const HOST_LAYOUTS = {
   },
   "opencode-v2": {
     serverFile: "oc-go-usage-display.v2.ts",
-    tuiFile: "oc-go-usage-display.v2.tui.js",
+    tuiFile: "oc-go-usage-display.v2.tui.ts",
     serverRel: "./plugins/oc-go-usage-display.v2.ts",
-    tuiRel: "./plugins/oc-go-usage-display.v2.tui.js",
+    tuiRel: "./plugins/oc-go-usage-display.v2.tui.ts",
     serverConfigFile: "opencode.jsonc",
     // v2 renamed the key: `plugins` (array of string | {package, options}),
     // not v1's `plugin`. Writing the v1 key is silently ignored by v2.
