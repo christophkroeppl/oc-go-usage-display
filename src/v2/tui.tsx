@@ -241,7 +241,8 @@ export default Plugin.define({
           if (props.sessionId.length === 0) return null;
           if (collapse.isSidebarCollapsed()) return null;
           if (!isGoUsageProvider(resolveRenderedProviderId(props.sessionId))) return null;
-          return <GoSidebarPanel theme={ctx.theme as unknown as TuiTheme} sessionId={props.sessionId} />;
+          const theme = (ctx.theme ?? { current: { text: "white", textMuted: "gray", error: "red", warning: "yellow" } }) as unknown as TuiTheme;
+          return <GoSidebarPanel theme={theme} sessionId={props.sessionId} />;
         });
       }
 
