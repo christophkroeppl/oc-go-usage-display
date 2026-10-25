@@ -140,6 +140,18 @@ await esbuild.build({
 });
 assertSingleDefaultExport(v2ServerOut);
 
+const v2TuiOut = "dist/plugins/oc-go-usage-display.v2.tui.js";
+await esbuild.build({
+  ...base,
+  banner: bannerFor("opencode-v2", "tui"),
+  entryPoints: ["src/v2/tui.tsx"],
+  outfile: v2TuiOut,
+  jsx: "automatic",
+  jsxImportSource: "@opentui/solid",
+  external: ["@opencode/plugin", "@opencode/plugin/*", "solid-js", "@opentui/*"],
+});
+assertSingleDefaultExport(v2TuiOut);
+
 console.log(
-  "bundled dist/plugins/oc-go-usage-display.ts + .kilo.ts + .tsx + .kilo.tsx + .v2.ts (self-contained, default-only export)",
+  "bundled dist/plugins/oc-go-usage-display.ts + .kilo.ts + .tsx + .kilo.tsx + .v2.ts + .v2.tui.js (self-contained, default-only export)",
 );

@@ -78,11 +78,15 @@ const HOST_LAYOUTS = {
   },
   "opencode-v2": {
     serverFile: "oc-go-usage-display.v2.ts",
+    tuiFile: "oc-go-usage-display.v2.tui.js",
     serverRel: "./plugins/oc-go-usage-display.v2.ts",
+    tuiRel: "./plugins/oc-go-usage-display.v2.tui.js",
     serverConfigFile: "opencode.jsonc",
     // v2 renamed the key: `plugins` (array of string | {package, options}),
     // not v1's `plugin`. Writing the v1 key is silently ignored by v2.
     serverConfigKey: "plugins",
+    tuiConfigFile: "cli.json",
+    tuiConfigKey: "plugins",
     tuiOptions: false,
   },
 };
@@ -405,6 +409,20 @@ export function linkPluginFiles(repoDir, configDir, mode, host = "opencode") {
     fs.rmSync(target, { force: true });
     fs.symlinkSync(source, target);
   }
+  // The v2 TUI bundle keeps `solid-js`/`@opentui/*` external so the host's
+  // own instances are shared; a copied (non-symlinked) bundle in plugins/
+  // needs a node_modules tree to resolve them. In dev, link to the repo's.
+  if (host === "opencode-v2" && mode === "copy") {
+    const repoNodeModules = path.join(repoDir, "node_modules");
+    const pluginsNodeModules = path.join(pluginsDir, "node_modules");
+    if (fs.existsSync(repoNodeModules) && !fs.existsSync(pluginsNodeModules)) {
+      try {
+        fs.symlinkSync(repoNodeModules, pluginsNodeModules);
+      } catch {
+        // best-effort; a missing link just means the TUI bundle may fail to load
+      }
+    }
+  }
 }
 
 function safeLstat(target) {
@@ -463,12 +481,22 @@ export function ensureServerEntry(configDir, { create = true, host = "opencode" 
   return { changed: true, present: true };
 }
 
+export function tuiConfigFile(host = "opencode") {
+  return hostLayout(host).tuiConfigFile ?? "tui.json";
+}
+
+export function tuiConfigKey(host = "opencode") {
+  return hostLayout(host).tuiConfigKey ?? "plugin";
+}
+
 export function readTuiSelection(configDir, host = "opencode") {
   const spec = pluginSpec(host, configDir, "tui");
-  const filePath = path.join(configDir, "tui.json");
+  if (spec === undefined) return { found: false, entry: false, sidebar: null, statusline: null };
+  const filePath = path.join(configDir, tuiConfigFile(host));
   const { found, value } = readJsonFile(filePath);
   if (!found) return { found: false, entry: false, sidebar: null, statusline: null };
-  const plugins = isRecord(value) && Array.isArray(value.plugin) ? value.plugin : [];
+  const key = tuiConfigKey(host);
+  const plugins = isRecord(value) && Array.isArray(value[key]) ? value[key] : [];
   for (const entry of plugins) {
     const normalized = normalizeTuiEntry(entry);
     if (normalized === null) continue;
@@ -480,6 +508,14 @@ export function readTuiSelection(configDir, host = "opencode") {
 
 export function normalizeTuiEntry(entry) {
   if (typeof entry === "string") return { spec: entry, sidebar: null, statusline: null };
+  if (isRecord(entry) && typeof entry.package === "string") {
+    const options = isRecord(entry.options) ? entry.options : {};
+    return {
+      spec: entry.package,
+      sidebar: typeof options.sidebar === "boolean" ? options.sidebar : null,
+      statusline: typeof options.statusline === "boolean" ? options.statusline : null,
+    };
+  }
   if (!Array.isArray(entry) || typeof entry[0] !== "string") return null;
   const options = entry.length > 1 && isRecord(entry[1]) ? entry[1] : {};
   return {
@@ -503,18 +539,27 @@ export function ensureTuiEntry(
     fail(`--sidebar/--statusline do not apply to ${host} (its tui.json rejects those options)`);
   }
   const spec = pluginSpec(host, configDir, "tui");
-  const filePath = path.join(configDir, "tui.json");
+  if (spec === undefined) {
+    return { changed: false, entry: false, sidebar: null, statusline: null };
+  }
+  const configFile = tuiConfigFile(host);
+  const configKey = tuiConfigKey(host);
+  const filePath = path.join(configDir, configFile);
   const { found, value } = readJsonFile(filePath);
   const sidebarNext = sidebar ?? true;
   const statuslineNext = statusline ?? true;
-  // Kilo rejects `sidebar`/`statusline` and skips the whole file, so its entry
-  // stays a plain plugin spec without options.
+  const useObjectForm = configFile === "cli.json";
   const desiredEntry = layout.tuiOptions
-    ? [spec, { sidebar: sidebarNext, statusline: statuslineNext }]
-    : spec;
+    ? useObjectForm
+      ? { package: spec, options: { sidebar: sidebarNext, statusline: statuslineNext } }
+      : [spec, { sidebar: sidebarNext, statusline: statuslineNext }]
+    : useObjectForm
+      ? { package: spec }
+      : spec;
   if (!found) {
     if (!create) return { changed: false, entry: false, sidebar: null, statusline: null };
-    writeJsonFile(filePath, { plugin: [desiredEntry] });
+    const initial = isRecord(value) ? value : {};
+    writeJsonFile(filePath, { ...initial, [configKey]: [desiredEntry] });
     return {
       changed: true,
       entry: true,
@@ -522,8 +567,8 @@ export function ensureTuiEntry(
       statusline: layout.tuiOptions ? statuslineNext : null,
     };
   }
-  if (!isRecord(value)) fail(`tui.json is not an object: ${filePath}`);
-  const plugins = Array.isArray(value.plugin) ? value.plugin : [];
+  if (!isRecord(value)) fail(`${configFile} is not an object: ${filePath}`);
+  const plugins = Array.isArray(value[configKey]) ? value[configKey] : [];
   let changed = false;
   let seen = false;
   const next = plugins.map((entry) => {
@@ -532,29 +577,37 @@ export function ensureTuiEntry(
     if (normalized.spec !== spec) return entry;
     seen = true;
     if (!layout.tuiOptions) {
-      if (typeof entry === "string") return entry;
+      if (useObjectForm && isRecord(entry) && !("options" in entry)) return entry;
+      if (!useObjectForm && typeof entry === "string") return entry;
       changed = true;
-      return spec;
+      return desiredEntry;
     }
     const sidebarFinal = sidebar ?? normalized.sidebar ?? true;
     const statuslineFinal = statusline ?? normalized.statusline ?? true;
-    if (
-      Array.isArray(entry) &&
-      isRecord(entry[1]) &&
-      entry[1].sidebar === sidebarFinal &&
-      entry[1].statusline === statuslineFinal
-    ) {
-      return entry;
-    }
+    const matches =
+      useObjectForm
+        ? isRecord(entry) &&
+          isRecord(entry.options) &&
+          entry.options.sidebar === sidebarFinal &&
+          entry.options.statusline === statuslineFinal
+        : Array.isArray(entry) &&
+          isRecord(entry[1]) &&
+          entry[1].sidebar === sidebarFinal &&
+          entry[1].statusline === statuslineFinal;
+    if (matches) return entry;
     changed = true;
-    return [spec, { sidebar: sidebarFinal, statusline: statuslineFinal }];
+    return layout.tuiOptions
+      ? useObjectForm
+        ? { package: spec, options: { sidebar: sidebarFinal, statusline: statuslineFinal } }
+        : [spec, { sidebar: sidebarFinal, statusline: statuslineFinal }]
+      : desiredEntry;
   });
   if (!seen) {
     next.push(desiredEntry);
     changed = true;
   }
   if (changed) {
-    value.plugin = next;
+    value[configKey] = next;
     writeJsonFile(filePath, value);
   }
   const selection = readTuiSelection(configDir, host);

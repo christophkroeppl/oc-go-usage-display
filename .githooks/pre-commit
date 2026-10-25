@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pre-commit hook: typecheck + lint before any commit.
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "[pre-commit] running typecheck + lint..."
+bun run check
+
+echo "[pre-commit] all checks passed"
