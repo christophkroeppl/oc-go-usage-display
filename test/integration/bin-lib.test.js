@@ -123,11 +123,12 @@ test("ensureTuiEntry round-trips through readTuiSelection in a temp dir", () => 
 
 test("removePluginFiles removes a symlink install and reruns idempotently", () => {
   withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins", "oc-go-usage-display-v1");
     linkPluginFiles(REPO_DIR, dir, "symlink");
-    assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.ts")).isSymbolicLink(), true);
-    assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.tsx")).isSymbolicLink(), true);
-    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.ts", "go_usage");
-    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.tsx", "sidebar_content");
+    assert.equal(fs.lstatSync(path.join(pluginsDir, "oc-go-usage-display.ts")).isSymbolicLink(), true);
+    assert.equal(fs.lstatSync(path.join(pluginsDir, "oc-go-usage-display.tsx")).isSymbolicLink(), true);
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.ts", "go_usage");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.tsx", "sidebar_content");
     const first = removePluginFiles(dir);
     assert.deepStrictEqual([...first.removed].sort(), [
       "oc-go-usage-display.ts",
@@ -142,11 +143,12 @@ test("removePluginFiles removes a symlink install and reruns idempotently", () =
 
 test("removePluginFiles removes a copy (file) install and reruns idempotently", () => {
   withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins", "oc-go-usage-display-v1");
     linkPluginFiles(REPO_DIR, dir, "copy");
-    assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.ts")).isFile(), true);
-    assert.equal(fs.lstatSync(path.join(dir, "plugins", "oc-go-usage-display.tsx")).isFile(), true);
-    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.ts", "go_usage");
-    assertDeployedSelfContained(path.join(dir, "plugins"), "oc-go-usage-display.tsx", "sidebar_content");
+    assert.equal(fs.lstatSync(path.join(pluginsDir, "oc-go-usage-display.ts")).isFile(), true);
+    assert.equal(fs.lstatSync(path.join(pluginsDir, "oc-go-usage-display.tsx")).isFile(), true);
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.ts", "go_usage");
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.tsx", "sidebar_content");
     const first = removePluginFiles(dir);
     assert.deepStrictEqual([...first.removed].sort(), [
       "oc-go-usage-display.ts",
@@ -160,7 +162,7 @@ test("removePluginFiles removes a copy (file) install and reruns idempotently", 
 
 test("linkPluginFiles copy mode refuses a directory target with an actionable error", () => {
   withTempDir((dir) => {
-    const directoryTarget = path.join(dir, "plugins", "oc-go-usage-display.ts");
+    const directoryTarget = path.join(dir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.ts");
     fs.mkdirSync(directoryTarget, { recursive: true });
     assert.throws(
       () => linkPluginFiles(REPO_DIR, dir, "copy"),
@@ -173,7 +175,7 @@ test("linkPluginFiles copy mode refuses a directory target with an actionable er
 
 test("removePluginFiles keeps directories and removes only files", () => {
   withTempDir((dir) => {
-    const pluginsDir = path.join(dir, "plugins");
+    const pluginsDir = path.join(dir, "plugins", "oc-go-usage-display-v1");
     fs.mkdirSync(pluginsDir, { recursive: true });
     fs.mkdirSync(path.join(pluginsDir, "oc-go-usage-display.ts"), { recursive: true });
     fs.writeFileSync(path.join(pluginsDir, "oc-go-usage-display.tsx"), "copy\n", "utf8");
@@ -181,6 +183,72 @@ test("removePluginFiles keeps directories and removes only files", () => {
     assert.deepStrictEqual(result.removed, ["oc-go-usage-display.tsx"]);
     assert.deepStrictEqual(result.kept, ["oc-go-usage-display.ts"]);
     assert.equal(fs.statSync(path.join(pluginsDir, "oc-go-usage-display.ts")).isDirectory(), true);
+  });
+});
+
+test("opencode install migrates a flat v1 layout into its own subdirectory", () => {
+  withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.ts", "oc-go-usage-display.tsx"]) {
+      fs.writeFileSync(path.join(pluginsDir, fileName), "stale", "utf8");
+    }
+    fs.writeFileSync(
+      path.join(dir, "opencode.jsonc"),
+      JSON.stringify({ plugin: ["./plugins/oc-go-usage-display.ts", "other"] }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dir, "tui.json"),
+      JSON.stringify({ plugin: [["./plugins/oc-go-usage-display.tsx", { sidebar: false, statusline: true }], "other"] }),
+      "utf8",
+    );
+
+    linkPluginFiles(REPO_DIR, dir, "copy");
+
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.ts")), false);
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.tsx")), false);
+    assertDeployedSelfContained(
+      path.join(pluginsDir, "oc-go-usage-display-v1"),
+      "oc-go-usage-display.ts",
+      "go_usage",
+    );
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8")).plugin, [
+      "./plugins/oc-go-usage-display-v1/oc-go-usage-display.ts",
+      "other",
+    ]);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "tui.json"), "utf8")).plugin, [
+      ["./plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx", { sidebar: false, statusline: true }],
+      "other",
+    ]);
+  });
+});
+
+test("opencode-v2 install moves a legacy flat v1 install out of discovery", () => {
+  withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.ts", "oc-go-usage-display.tsx"]) {
+      fs.writeFileSync(path.join(pluginsDir, fileName), "stale", "utf8");
+    }
+    fs.writeFileSync(
+      path.join(dir, "opencode.jsonc"),
+      JSON.stringify({ plugin: ["./plugins/oc-go-usage-display.ts"] }),
+      "utf8",
+    );
+
+    linkPluginFiles(REPO_DIR, dir, "copy", "opencode-v2");
+
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.ts")), false);
+    assert.equal(
+      fs.readFileSync(path.join(pluginsDir, "oc-go-usage-display-v1", "oc-go-usage-display.ts"), "utf8"),
+      "stale",
+      "the v1 install is moved out of v2 discovery, not deleted",
+    );
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8")).plugin, [
+      "./plugins/oc-go-usage-display-v1/oc-go-usage-display.ts",
+    ]);
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display", "index.ts")), true);
   });
 });
 
@@ -229,31 +297,29 @@ test("kilo tui.json rejects sidebar/statusline options with a clear error", () =
   });
 });
 
-test("opencode-v2 install uses the v2 `plugins` key and no tui.json", () => {
+test("opencode-v2 install deploys a discovered package and registers its server entry", () => {
   withTempDir((dir) => {
     linkPluginFiles(REPO_DIR, dir, "copy", "opencode-v2");
-    const pluginsDir = path.join(dir, "plugins");
-    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.v2.ts", "go_usage");
-    // v2 has no TUI bundle, so nothing else should be installed.
-    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.ts")), false);
-    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.tsx")), false);
+    const packageDir = path.join(dir, "plugins", "oc-go-usage-display");
+    assertDeployedSelfContained(packageDir, "index.ts", "go_usage");
+    assertDeployedSelfContained(packageDir, "tui.ts", "sidebar.content");
 
     const server = ensureServerEntry(dir, { host: "opencode-v2" });
     assert.equal(server.present, true);
-    assert.equal(fs.existsSync(path.join(dir, "opencode.jsonc")), true);
-    // v2 must NOT create tui.json — there is no TUI bundle to register.
-    assert.equal(fs.existsSync(path.join(dir, "tui.json")), false);
-
+    assert.equal(server.discovered, true);
+    // A headless `serve` only loads what the config names, so discovery alone
+    // is not enough: the package directory is the server entry as well.
     const config = JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8"));
-                                                                 
     assert.equal("plugin" in config, false, "v2 config must not use the v1 `plugin` key");
-    // v2 needs an absolute path: its module.ts only treats a target as a
-    // local file when `path.isAbsolute(target)` is true.
-    assert.deepStrictEqual(config.plugins, [path.join(dir, "plugins", "oc-go-usage-display.v2.ts")]);
+    assert.deepStrictEqual(config.plugins, [packageDir]);
+    // v2 has no TUI config file; the CLI half comes from discovery.
+    assert.equal(fs.existsSync(path.join(dir, "cli.json")), false);
+    assert.equal(fs.existsSync(path.join(dir, "tui.json")), false);
 
     const tui = ensureTuiEntry(dir, { host: "opencode-v2" });
-    assert.equal(tui.entry, false);
-    assert.equal(fs.existsSync(path.join(dir, "tui.json")), false);
+    assert.equal(tui.entry, true);
+    assert.equal(tui.sidebar, null);
+    assert.throws(() => ensureTuiEntry(dir, { host: "opencode-v2", sidebar: true }), /do not apply to opencode-v2/);
 
     const report = checkHostInstall("opencode-v2", dir, REPO_DIR);
     assert.deepStrictEqual(report.problems, []);
@@ -261,6 +327,61 @@ test("opencode-v2 install uses the v2 `plugins` key and no tui.json", () => {
     assert.equal(removeServerEntry(dir, { host: "opencode-v2" }).changed, true);
     const after = JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8"));
     assert.deepStrictEqual(after.plugins, []);
+
+    const removed = removePluginFiles(dir, "opencode-v2");
+    assert.deepStrictEqual(removed.removed.sort(), ["index.ts", "tui.ts"]);
+    assert.equal(fs.existsSync(packageDir), false);
+  });
+});
+
+test("opencode-v2 install migrates flat v2 bundles and their config entries", () => {
+  withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.v2.ts", "oc-go-usage-display.v2.tui.ts"]) {
+      fs.writeFileSync(path.join(pluginsDir, fileName), "stale", "utf8");
+    }
+    const serverSpec = path.join(pluginsDir, "oc-go-usage-display.v2.ts");
+    const tuiSpec = path.join(pluginsDir, "oc-go-usage-display.v2.tui.ts");
+    fs.writeFileSync(path.join(dir, "opencode.jsonc"), JSON.stringify({ plugins: [serverSpec, "other"] }), "utf8");
+    fs.writeFileSync(path.join(dir, "cli.json"), JSON.stringify({ plugins: [{ package: tuiSpec }, "other"] }), "utf8");
+
+    linkPluginFiles(REPO_DIR, dir, "copy", "opencode-v2");
+
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.v2.ts")), false);
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display.v2.tui.ts")), false);
+    assert.equal(fs.existsSync(path.join(pluginsDir, "oc-go-usage-display", "index.ts")), true);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8")).plugins, ["other"]);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "cli.json"), "utf8")).plugins, ["other"]);
+
+    ensureServerEntry(dir, { host: "opencode-v2" });
+    const migrated = JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8")).plugins;
+    assert.deepStrictEqual(migrated, ["other", path.join(pluginsDir, "oc-go-usage-display")]);
+  });
+});
+
+test("opencode-v2 remove clears a legacy flat v2 install", () => {
+  withTempDir((dir) => {
+    const pluginsDir = path.join(dir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const fileName of ["oc-go-usage-display.v2.ts", "oc-go-usage-display.v2.tui.ts"]) {
+      fs.writeFileSync(path.join(pluginsDir, fileName), "stale", "utf8");
+    }
+    const serverSpec = path.join(pluginsDir, "oc-go-usage-display.v2.ts");
+    const tuiSpec = path.join(pluginsDir, "oc-go-usage-display.v2.tui.ts");
+    fs.writeFileSync(path.join(dir, "opencode.jsonc"), JSON.stringify({ plugins: [serverSpec] }), "utf8");
+    fs.writeFileSync(path.join(dir, "cli.json"), JSON.stringify({ plugins: [tuiSpec] }), "utf8");
+    fs.writeFileSync(path.join(dir, "tui.json"), JSON.stringify({ plugin: [tuiSpec] }), "utf8");
+
+    removePluginFiles(dir, "opencode-v2");
+    removeServerEntry(dir, { host: "opencode-v2" });
+    removeTuiEntry(dir, "opencode-v2");
+
+    assert.equal(fs.existsSync(serverSpec), false);
+    assert.equal(fs.existsSync(tuiSpec), false);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "opencode.jsonc"), "utf8")).plugins, []);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "cli.json"), "utf8")).plugins, []);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, "tui.json"), "utf8")).plugin, []);
   });
 });
 

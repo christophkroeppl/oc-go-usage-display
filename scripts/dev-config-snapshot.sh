@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Snapshot/restore the 6 OpenCode config paths mutated by a dev install.
+# Snapshot/restore the OpenCode config paths mutated by a dev install.
 # save writes <backup-dir>/<timestamp>/{manifest,files/<rel>...} and prints
 # the absolute snapshot dir (only stdout line); restore replays present (copy
 # back with original type/mode) / absent (delete if created since).
 # Default backup root: ${TMPDIR:-/tmp}/oc-go-usage-display-backup.
 set -euo pipefail
-RELS=("opencode.jsonc" "tui.json" "plugins/oc-go-usage-display.ts" "plugins/oc-go-usage-display.tsx" "oc-go-usage-display.json" "oc-go-usage-display-cache.json")
+RELS=(
+  "opencode.jsonc" "tui.json" "cli.json"
+  "plugins/oc-go-usage-display.ts" "plugins/oc-go-usage-display.tsx"
+  "plugins/oc-go-usage-display-v1/oc-go-usage-display.ts" "plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx"
+  "plugins/oc-go-usage-display/index.ts" "plugins/oc-go-usage-display/tui.ts"
+  "oc-go-usage-display.json" "oc-go-usage-display-cache.json"
+)
 MODE="${1:-}"; shift || true
 BACKUP_DIR=""; CONFIG_DIR_ARG=""
 usage() {
@@ -104,6 +110,7 @@ while IFS=$'\t' read -r state rel; do
   elif [[ "$state" == "absent" ]]; then
     if [[ -L "$target" || -f "$target" ]]; then
       rm -f "$target"
+      [[ "$rel" == plugins/*/* ]] && rmdir -- "$CONFIG_ABS/$(dirname "$rel")" 2>/dev/null || true
       [[ "$rel" == plugins/* ]] && rmdir -- "$CONFIG_ABS/plugins" 2>/dev/null || true
       log "removed created path $rel"
       removed=$((removed + 1))

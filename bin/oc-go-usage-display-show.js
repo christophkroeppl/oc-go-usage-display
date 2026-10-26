@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Show the effective installation for both hosts: link targets, config
+// Show the effective installation for every host: link targets, config
 // entries, toggles, and detection. The top-level fields stay the opencode
-// report (back-compat); `kilo` carries the Kilo report.
+// report (back-compat); `kilo` and `opencodeV2` carry their own reports.
 // Secrets are never printed; only presence (env/file) is reported.
 
 import {
@@ -29,6 +29,7 @@ try {
 
   const opencode = hosts.opencode;
   const kilo = hosts.kilo;
+  const v2 = hosts["opencode-v2"];
   const secrets = secretPresence(opencode.configDir);
   const kiloSecrets = secretPresence(kilo.configDir);
 
@@ -44,6 +45,11 @@ try {
       server: kilo.server,
       tui: kilo.tui,
       secrets: { envPresent: kiloSecrets.envPresent, filePresent: kiloSecrets.filePresent },
+    },
+    opencodeV2: {
+      configDir: v2.configDir,
+      server: v2.server,
+      tui: v2.tui,
     },
   };
 
@@ -68,6 +74,9 @@ try {
     console.log(
       `  secrets: env=${kiloSecrets.envPresent ? "set" : "unset"} file=${kiloSecrets.filePresent ? "present" : "absent"} (values never shown)`,
     );
+    console.log(`opencode-v2: ${v2.configDir} (detected: ${detected["opencode-v2"] ? "yes" : "no"})`);
+    console.log(describeLinkLine("  server", v2.server, v2.server.entry));
+    console.log(describeLinkLine("  tui", v2.tui, v2.tui.entry));
   }
 } catch (error) {
   exitWithError(error);

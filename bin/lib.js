@@ -35,10 +35,17 @@ export {
   wantsHelp,
 } from "./cli-core.js";
 
-export const SERVER_PLUGIN_REL = "./plugins/oc-go-usage-display.ts";
-export const TUI_PLUGIN_REL = "./plugins/oc-go-usage-display.tsx";
+export const SERVER_PLUGIN_REL = "./plugins/oc-go-usage-display-v1/oc-go-usage-display.ts";
+export const TUI_PLUGIN_REL = "./plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx";
 export const SERVER_FILE_NAME = "oc-go-usage-display.ts";
 export const TUI_FILE_NAME = "oc-go-usage-display.tsx";
+
+// v1 files live in their own directory because opencode v2 shares the same
+// config root and auto-discovers every immediate `.ts` file in `<config>/plugins`.
+// A flat v1 server bundle is therefore loaded by v2 and fails; a nested directory
+// without a package manifest is not a discovered package, so it is ignored.
+const V1_PACKAGE_DIR = "oc-go-usage-display-v1";
+const V2_PACKAGE_DIR = "oc-go-usage-display";
 
 // Every bin calls this before it does anything else: it rejects unknown flags
 // and positionals (`init status` used to mean "install"), and prints --help
@@ -59,10 +66,11 @@ export function guardArgs(command, argv = process.argv.slice(2)) {
 // file), so its TUI entry is registered without options.
 const HOST_LAYOUTS = {
   opencode: {
+    fileDir: V1_PACKAGE_DIR,
     serverFile: "oc-go-usage-display.ts",
     tuiFile: "oc-go-usage-display.tsx",
-    serverRel: "./plugins/oc-go-usage-display.ts",
-    tuiRel: "./plugins/oc-go-usage-display.tsx",
+    serverRel: SERVER_PLUGIN_REL,
+    tuiRel: TUI_PLUGIN_REL,
     serverConfigFile: "opencode.jsonc",
     serverConfigKey: "plugin",
     tuiOptions: true,
@@ -77,16 +85,14 @@ const HOST_LAYOUTS = {
     tuiOptions: false,
   },
   "opencode-v2": {
-    serverFile: "oc-go-usage-display.v2.ts",
-    tuiFile: "oc-go-usage-display.v2.tui.ts",
-    serverRel: "./plugins/oc-go-usage-display.v2.ts",
-    tuiRel: "./plugins/oc-go-usage-display.v2.tui.ts",
+    fileDir: V2_PACKAGE_DIR,
+    discovered: true,
+    serverFile: "index.ts",
+    tuiFile: "tui.ts",
+    serverBundle: "oc-go-usage-display.v2.ts",
+    tuiBundle: "oc-go-usage-display.v2.tui.ts",
     serverConfigFile: "opencode.jsonc",
-    // v2 renamed the key: `plugins` (array of string | {package, options}),
-    // not v1's `plugin`. Writing the v1 key is silently ignored by v2.
     serverConfigKey: "plugins",
-    tuiConfigFile: "cli.json",
-    tuiConfigKey: "plugins",
     tuiOptions: false,
   },
 };
@@ -99,16 +105,27 @@ export function hostLayout(host) {
 
 // Plugin spec written into the host config. opencode resolves `./...` against
 // its config dir (verified); Kilo does NOT (relative specs resolve against the
-// project dir), so Kilo entries are absolute paths to the installed copy.
+// project dir), so Kilo entries are absolute paths to the installed copy. v2
+// discovered plugins are named by their package directory, which is what its
+// own discovery walks.
 export function pluginSpec(host, configDir, kind) {
   const layout = hostLayout(host);
   const fileName = kind === "server" ? layout.serverFile : layout.tuiFile;
   if (fileName === undefined) return undefined;
+  if (layout.discovered) return pluginFileDir(configDir, host);
   // v2's module.ts only treats a target as a local file when it is an
   // absolute path (`path.isAbsolute(target)`); a relative spec is resolved as
   // a package directory and finds no entrypoint. Kilo needs the same.
-  if (host === "kilo" || host === "opencode-v2") return path.join(configDir, "plugins", fileName);
+  if (host === "kilo") return path.join(configDir, "plugins", fileName);
   return kind === "server" ? layout.serverRel : layout.tuiRel;
+}
+
+// Directory the host's plugin files live in. opencode v1 and v2 each own a
+// subdirectory; Kilo keeps the shared `<config>/plugins`.
+export function pluginFileDir(configDir, host) {
+  const layout = hostLayout(host);
+  if (layout.fileDir === undefined) return path.join(configDir, "plugins");
+  return path.join(configDir, "plugins", layout.fileDir);
 }
 
 // Top-level error boundary shared by every bin: one clean line on stderr (no
@@ -383,13 +400,19 @@ export function writeJsonFile(filePath, value) {
 export function linkPluginFiles(repoDir, configDir, mode, host = "opencode") {
   const layout = hostLayout(host);
   const pluginsDir = path.join(configDir, "plugins");
-  fs.mkdirSync(pluginsDir, { recursive: true });
+  const targetDir = pluginFileDir(configDir, host);
+  fs.mkdirSync(targetDir, { recursive: true });
   // Bundled self-contained outputs (no `./shared` import, no shared file):
   // `bun run build` produces dist/plugins/*, which is what gets installed.
   const pairs = [
-    [path.join(repoDir, "dist", "plugins", layout.serverFile), path.join(pluginsDir, layout.serverFile)],
+    [path.join(repoDir, "dist", "plugins", layout.serverBundle ?? layout.serverFile), path.join(targetDir, layout.serverFile)],
     ...(layout.tuiFile
-      ? [[path.join(repoDir, "dist", "plugins", layout.tuiFile), path.join(pluginsDir, layout.tuiFile)]]
+      ? [
+          [
+            path.join(repoDir, "dist", "plugins", layout.tuiBundle ?? layout.tuiFile),
+            path.join(targetDir, layout.tuiFile),
+          ],
+        ]
       : []),
   ];
   for (const [source, target] of pairs) {
@@ -409,19 +432,105 @@ export function linkPluginFiles(repoDir, configDir, mode, host = "opencode") {
     fs.rmSync(target, { force: true });
     fs.symlinkSync(source, target);
   }
-  // The v2 TUI bundle keeps `solid-js`/`@opentui/*` external so the host's
-  // own instances are shared; a copied (non-symlinked) bundle in plugins/
-  // needs a node_modules tree to resolve them. In dev, link to the repo's.
-  if (host === "opencode-v2" && mode === "copy") {
-    const repoNodeModules = path.join(repoDir, "node_modules");
-    const pluginsNodeModules = path.join(pluginsDir, "node_modules");
-    if (fs.existsSync(repoNodeModules) && !fs.existsSync(pluginsNodeModules)) {
-      try {
-        fs.symlinkSync(repoNodeModules, pluginsNodeModules);
-      } catch {
-        // best-effort; a missing link just means the TUI bundle may fail to load
-      }
-    }
+  if (host === "opencode" || host === "opencode-v2") adoptLegacyV1Files(configDir);
+  if (layout.discovered) removeLegacyFlatFiles(pluginsDir);
+}
+
+// opencode v1 installs before this layout put the two bundles flat in
+// `<config>/plugins/`. v2 auto-discovers that directory, so a flat v1 server
+// bundle is loaded by v2 and fails even when no v1 config names it. Every v1 or
+// v2 install therefore moves the flat files into v1's own subdirectory and
+// rewrites the entries that pointed at them, which keeps both hosts working.
+const LEGACY_V1_CONFIGS = ["opencode.jsonc", "opencode.json"];
+const LEGACY_TUI_CONFIGS = ["tui.json"];
+
+function adoptLegacyV1Files(configDir) {
+  const flatDir = path.join(configDir, "plugins");
+  const nestedDir = path.join(flatDir, V1_PACKAGE_DIR);
+  const replacements = new Map();
+  for (const [fileName, spec] of [
+    [SERVER_FILE_NAME, SERVER_PLUGIN_REL],
+    [TUI_FILE_NAME, TUI_PLUGIN_REL],
+  ]) {
+    const legacy = path.join(flatDir, fileName);
+    const stat = safeLstat(legacy);
+    if (stat === null || (!stat.isFile() && !stat.isSymbolicLink())) continue;
+    const target = path.join(nestedDir, fileName);
+    fs.mkdirSync(nestedDir, { recursive: true });
+    if (safeLstat(target) === null) fs.renameSync(legacy, target);
+    else fs.rmSync(legacy, { force: true });
+    replacements.set(legacy, spec);
+  }
+  if (replacements.size === 0) return;
+  for (const fileName of LEGACY_V1_CONFIGS) rewriteConfigSpecs(configDir, fileName, "plugin", replacements);
+  for (const fileName of LEGACY_TUI_CONFIGS) rewriteConfigSpecs(configDir, fileName, "plugin", replacements);
+}
+
+function rewriteConfigSpecs(configDir, fileName, key, replacements) {
+  const filePath = path.join(configDir, fileName);
+  const { found, value } = readJsonFile(filePath);
+  if (!found || !isRecord(value) || !Array.isArray(value[key])) return;
+  let changed = false;
+  const next = value[key].map((entry) => {
+    const rewritten = rewriteConfigSpec(configDir, entry, replacements);
+    if (rewritten !== entry) changed = true;
+    return rewritten;
+  });
+  if (!changed) return;
+  value[key] = next;
+  writeJsonFile(filePath, value);
+}
+
+function rewriteConfigSpec(configDir, entry, replacements) {
+  if (typeof entry === "string") {
+    return replacements.get(path.resolve(configDir, entry)) ?? entry;
+  }
+  if (Array.isArray(entry)) {
+    const [spec, options] = entry;
+    if (typeof spec !== "string") return entry;
+    const rewritten = replacements.get(path.resolve(configDir, spec));
+    return rewritten === undefined ? entry : [rewritten, options];
+  }
+  if (isRecord(entry) && typeof entry.package === "string") {
+    const rewritten = replacements.get(path.resolve(configDir, entry.package));
+    return rewritten === undefined ? entry : { ...entry, package: rewritten };
+  }
+  return entry;
+}
+
+// v2 installs before discovery existed put the two bundles flat in `plugins/`
+// and named them from `opencode.jsonc`/`cli.json`. A discovered package
+// directory replaces both, and a leftover flat bundle that is still named in a
+// config file would load alongside it (two copies of the same id), so the stale
+// files and their config entries go away with the upgrade.
+const LEGACY_V2_FILES = ["oc-go-usage-display.v2.ts", "oc-go-usage-display.v2.tui.ts"];
+const LEGACY_V2_CONFIGS = [
+  ["opencode.jsonc", "plugins"],
+  ["opencode.json", "plugins"],
+  ["cli.json", "plugins"],
+  ["tui.json", "plugin"],
+];
+
+function removeLegacyFlatFiles(pluginsDir) {
+  for (const fileName of LEGACY_V2_FILES) {
+    const target = path.join(pluginsDir, fileName);
+    const stat = safeLstat(target);
+    if (stat === null) continue;
+    if (stat.isSymbolicLink() || stat.isFile()) fs.rmSync(target, { force: true });
+  }
+  const stale = new Set(LEGACY_V2_FILES.map((fileName) => path.join(pluginsDir, fileName)));
+  for (const [fileName, key] of LEGACY_V2_CONFIGS) {
+    const filePath = path.join(pluginsDir, "..", fileName);
+    const { found, value } = readJsonFile(filePath);
+    if (!found || !isRecord(value) || !Array.isArray(value[key])) continue;
+    const next = value[key].filter((entry) => {
+      if (typeof entry === "string") return !stale.has(entry);
+      if (isRecord(entry) && typeof entry.package === "string") return !stale.has(entry.package);
+      return true;
+    });
+    if (next.length === value[key].length) continue;
+    value[key] = next;
+    writeJsonFile(filePath, value);
   }
 }
 
@@ -462,23 +571,34 @@ export function isDanglingSymlink(target) {
 
 export function ensureServerEntry(configDir, { create = true, host = "opencode" } = {}) {
   const layout = hostLayout(host);
+  if (layout.discovered) {
+    // Discovery feeds the CLI/TUI half, but a headless `serve` only loads what
+    // `opencode.jsonc` names, so the package directory is registered as the
+    // server entry too. Its `index.ts` + `tui.ts` are both entrypoints of that
+    // one package, so the server knows about the TUI component as well.
+    const packageDir = pluginFileDir(configDir, host);
+    if (safeLstat(path.join(packageDir, layout.serverFile)) === null) {
+      return { changed: false, present: false, discovered: true };
+    }
+  }
   const spec = pluginSpec(host, configDir, "server");
   const filePath = path.join(configDir, layout.serverConfigFile);
   const key = layout.serverConfigKey ?? "plugin";
   const { found, value } = readJsonFile(filePath);
+  const discovered = layout.discovered === true;
   if (!found) {
-    if (!create) return { changed: false, present: false };
+    if (!create) return { changed: false, present: false, discovered };
     writeJsonFile(filePath, { [key]: [spec] });
-    return { changed: true, present: true };
+    return { changed: true, present: true, discovered };
   }
   if (!isRecord(value)) fail(`${layout.serverConfigFile} is not an object: ${filePath}`);
   const plugins = Array.isArray(value[key]) ? value[key] : [];
   if (plugins.includes(spec)) {
-    return { changed: false, present: true };
+    return { changed: false, present: true, discovered };
   }
   value[key] = [...plugins, spec];
   writeJsonFile(filePath, value);
-  return { changed: true, present: true };
+  return { changed: true, present: true, discovered };
 }
 
 export function tuiConfigFile(host = "opencode") {
@@ -490,6 +610,11 @@ export function tuiConfigKey(host = "opencode") {
 }
 
 export function readTuiSelection(configDir, host = "opencode") {
+  const layout = hostLayout(host);
+  if (layout.discovered) {
+    const present = safeLstat(path.join(pluginFileDir(configDir, host), layout.tuiFile)) !== null;
+    return { found: true, entry: present, sidebar: null, statusline: null };
+  }
   const spec = pluginSpec(host, configDir, "tui");
   if (spec === undefined) return { found: false, entry: false, sidebar: null, statusline: null };
   const filePath = path.join(configDir, tuiConfigFile(host));
@@ -530,10 +655,17 @@ export function ensureTuiEntry(
   { sidebar = null, statusline = null, create = true, host = "opencode" } = {},
 ) {
   const layout = hostLayout(host);
-  // v2 has no TUI bundle (the slot surface is blocked), so there is nothing to
-  // register in tui.json and no spec to write.
   if (layout.tuiFile === undefined) {
     return { changed: false, entry: false, sidebar: null, statusline: null };
+  }
+  if (layout.discovered) {
+    // Discovery takes the TUI half from the package directory, so there is no
+    // config entry and no place to put per-plugin toggles.
+    if (sidebar !== null || statusline !== null) {
+      fail(`--sidebar/--statusline do not apply to ${host} (discovered plugins take no options)`);
+    }
+    const entry = safeLstat(path.join(pluginFileDir(configDir, host), layout.tuiFile)) !== null;
+    return { changed: false, entry, sidebar: null, statusline: null };
   }
   if (!layout.tuiOptions && (sidebar !== null || statusline !== null)) {
     fail(`--sidebar/--statusline do not apply to ${host} (its tui.json rejects those options)`);
@@ -630,10 +762,11 @@ export function secretPresence(configDir) {
 
 export function removePluginFiles(configDir, host = "opencode") {
   const layout = hostLayout(host);
+  const targetDir = pluginFileDir(configDir, host);
   const removed = [];
   const kept = [];
   for (const fileName of [layout.serverFile, layout.tuiFile].filter(Boolean)) {
-    const target = path.join(configDir, "plugins", fileName);
+    const target = path.join(targetDir, fileName);
     const stat = safeLstat(target);
     if (stat === null) continue;
     if (stat.isSymbolicLink() || stat.isFile()) {
@@ -643,40 +776,72 @@ export function removePluginFiles(configDir, host = "opencode") {
       kept.push(fileName);
     }
   }
+  if (layout.fileDir !== undefined && kept.length === 0) {
+    try {
+      fs.rmdirSync(targetDir);
+    } catch {
+      // A non-empty package directory keeps whatever else the user put there.
+    }
+  }
+  if (host === "opencode") {
+    for (const fileName of [SERVER_FILE_NAME, TUI_FILE_NAME]) {
+      const legacy = path.join(configDir, "plugins", fileName);
+      const stat = safeLstat(legacy);
+      if (stat === null) continue;
+      if (stat.isSymbolicLink() || stat.isFile()) fs.rmSync(legacy, { force: true });
+    }
+  }
+  if (host === "opencode-v2") removeLegacyFlatFiles(path.join(configDir, "plugins"));
   return { removed, kept };
 }
 
 export function removeServerEntry(configDir, { host = "opencode" } = {}) {
   const layout = hostLayout(host);
-  const spec = pluginSpec(host, configDir, "server");
   const filePath = path.join(configDir, layout.serverConfigFile);
   const { found, value } = readJsonFile(filePath);
   if (!found) return { changed: false, present: false };
   if (!isRecord(value)) fail(`${layout.serverConfigFile} is not an object: ${filePath}`);
   const key = layout.serverConfigKey ?? "plugin";
   const plugins = Array.isArray(value[key]) ? value[key] : [];
-  if (!plugins.includes(spec)) return { changed: false, present: false };
-  value[key] = plugins.filter((entry) => entry !== spec);
+  const next = plugins.filter((entry) => !isOwnConfigSpec(host, "server", configDir, entry));
+  if (next.length === plugins.length) return { changed: false, present: false };
+  value[key] = next;
   writeJsonFile(filePath, value);
   return { changed: true, present: false };
 }
 
 export function removeTuiEntry(configDir, host = "opencode") {
-  const spec = pluginSpec(host, configDir, "tui");
+  const layout = hostLayout(host);
+  if (layout.discovered) return { changed: false, present: false };
   const filePath = path.join(configDir, "tui.json");
   const { found, value } = readJsonFile(filePath);
   if (!found) return { changed: false, present: false };
   if (!isRecord(value)) fail(`tui.json is not an object: ${filePath}`);
   const plugins = Array.isArray(value.plugin) ? value.plugin : [];
-  const next = plugins.filter((entry) => {
-    const normalized = normalizeTuiEntry(entry);
-    if (normalized === null) return true;
-    return normalized.spec !== spec;
-  });
+  const next = plugins.filter((entry) => !isOwnConfigSpec(host, "tui", configDir, entry));
   if (next.length === plugins.length) return { changed: false, present: false };
   value.plugin = next;
   writeJsonFile(filePath, value);
   return { changed: true, present: false };
+}
+
+// True for the spec this host's installer writes today, and for the flat v1
+// spec it wrote before v1 moved into its own subdirectory. Removal has to clear
+// both, or an upgrade-then-uninstall leaves a dangling entry behind.
+function isOwnConfigSpec(host, kind, configDir, entry) {
+  const raw = Array.isArray(entry) ? entry[0] : entry;
+  const spec =
+    typeof raw === "string"
+      ? raw
+      : isRecord(raw) && typeof raw.package === "string"
+        ? raw.package
+        : null;
+  if (spec === null) return false;
+  const current = pluginSpec(host, configDir, kind);
+  if (current !== undefined && path.resolve(configDir, spec) === path.resolve(configDir, current)) return true;
+  if (host !== "opencode") return false;
+  const legacy = path.join(configDir, "plugins", kind === "server" ? SERVER_FILE_NAME : TUI_FILE_NAME);
+  return path.resolve(configDir, spec) === legacy;
 }
 
 // Effective install report for one host (show/status share this so the two
@@ -685,9 +850,9 @@ export function describeHostInstall(host, configDir) {
   const layout = hostLayout(host);
   const serverSpec = pluginSpec(host, configDir, "server");
   const tuiSpec = pluginSpec(host, configDir, "tui");
-  const pluginsDir = path.join(configDir, "plugins");
-  const serverLink = describeLink(path.join(pluginsDir, layout.serverFile));
-  const tuiLink = layout.tuiFile ? describeLink(path.join(pluginsDir, layout.tuiFile)) : { present: false, kind: "none" };
+  const targetDir = pluginFileDir(configDir, host);
+  const serverLink = describeLink(path.join(targetDir, layout.serverFile));
+  const tuiLink = layout.tuiFile ? describeLink(path.join(targetDir, layout.tuiFile)) : { present: false, kind: "none" };
   const serverConfig = readJsonFile(path.join(configDir, layout.serverConfigFile));
   const serverKey = layout.serverConfigKey ?? "plugin";
   const serverEntry =
@@ -716,10 +881,11 @@ export function checkHostInstall(host, configDir, repoDir) {
   const layout = hostLayout(host);
   const problems = [];
   const notes = [];
-  const expectedServer = path.join(repoDir, "dist", "plugins", layout.serverFile);
-  const expectedTui = layout.tuiFile ? path.join(repoDir, "dist", "plugins", layout.tuiFile) : null;
-  const serverPath = path.join(configDir, "plugins", layout.serverFile);
-  const tuiPath = layout.tuiFile ? path.join(configDir, "plugins", layout.tuiFile) : null;
+  const expectedServer = path.join(repoDir, "dist", "plugins", layout.serverBundle ?? layout.serverFile);
+  const expectedTui = layout.tuiFile ? path.join(repoDir, "dist", "plugins", layout.tuiBundle ?? layout.tuiFile) : null;
+  const targetDir = pluginFileDir(configDir, host);
+  const serverPath = path.join(targetDir, layout.serverFile);
+  const tuiPath = layout.tuiFile ? path.join(targetDir, layout.tuiFile) : null;
 
   // Copy installs intentionally diverge, so a stale copy stays NOTE (never
   // FAIL): users who pin a copy must not break on every repo update.
@@ -739,7 +905,7 @@ export function checkHostInstall(host, configDir, repoDir) {
     if (link.state === "symlink") {
       if (isDanglingSymlink(installedPath)) {
         problems.push(`${label} symlink target missing (dangling): ${link.detail ?? ""} (re-run install or build)`);
-      } else if (path.resolve(configDir, "plugins", link.detail ?? "") !== expected) {
+      } else if (path.resolve(targetDir, link.detail ?? "") !== expected) {
         problems.push(`${label} symlink points at ${link.detail ?? ""}, expected ${expected}`);
       }
     } else if (link.state === "file") {
@@ -768,7 +934,11 @@ export function checkHostInstall(host, configDir, repoDir) {
   if (!serverEntry) problems.push(`${layout.serverConfigFile} is missing the server plugin entry`);
 
   const tui = readTuiSelection(configDir, host);
-  if (layout.tuiFile !== undefined && !tui.entry) problems.push("tui.json is missing the tui plugin entry");
+  if (layout.tuiFile !== undefined && !tui.entry) {
+    problems.push(
+      layout.discovered ? `tui plugin is missing: ${tuiPath} (re-run install)` : "tui.json is missing the tui plugin entry",
+    );
+  }
   if (layout.tuiOptions && (tui.sidebar === null || tui.statusline === null)) {
     problems.push(`tui toggles incomplete: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
   }

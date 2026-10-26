@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install oc-go-usage-display from the latest successful develop dev-build.
 # Downloads the stable `dev-tgz` artifact, sanity-checks the tarball, snapshots
-# the 6 OpenCode config files, installs it via bun, and registers the plugin
+# every OpenCode config path the installer can write (v1, v2 and legacy flat
+# layouts), installs it via bun, and registers the plugin
 # (existing toggles are preserved).
 #
 # There is no auto-restore: the snapshot path and the restore command are

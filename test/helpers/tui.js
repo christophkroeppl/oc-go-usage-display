@@ -234,13 +234,13 @@ export function writeTuiHostConfig({ host, repoDir, env, model, provider }) {
     serverSpec = path.join(pluginsDir, "oc-go-usage-display.kilo.ts");
     tuiSpec = path.join(pluginsDir, "oc-go-usage-display.kilo.tsx");
   } else {
-    const pluginsDir = path.join(configDir, "plugins");
+    const pluginsDir = path.join(configDir, "plugins", "oc-go-usage-display-v1");
     fs.mkdirSync(pluginsDir, { recursive: true });
     for (const fileName of ["oc-go-usage-display.ts", "oc-go-usage-display.tsx"]) {
       fs.copyFileSync(path.join(repoDir, "dist", "plugins", fileName), path.join(pluginsDir, fileName));
     }
-    serverSpec = "./plugins/oc-go-usage-display.ts";
-    tuiSpec = "./plugins/oc-go-usage-display.tsx";
+    serverSpec = "./plugins/oc-go-usage-display-v1/oc-go-usage-display.ts";
+    tuiSpec = "./plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx";
   }
   // `provider` replaces one entry of the host's own catalog, which is how a test
   // points a REAL provider id at a local endpoint (test/helpers/fake-provider.js).

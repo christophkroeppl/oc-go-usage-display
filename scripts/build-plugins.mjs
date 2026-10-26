@@ -5,6 +5,8 @@
 //                      same source, host baked in so it reads Kilo's auth store)
 // src/tui.tsx       -> dist/plugins/oc-go-usage-display.tsx      (TUI, ESM, solid JSX)
 // src/tui.kilo.tsx  -> dist/plugins/oc-go-usage-display.kilo.tsx (TUI for Kilo Code, ESM, solid JSX)
+// src/v2/index.ts   -> dist/plugins/oc-go-usage-display.v2.ts    (opencode v2 server)
+// src/v2/tui.tsx    -> dist/plugins/oc-go-usage-display.v2.tui.ts (opencode v2 TUI)
 //
 // Both TUI bundles inline src/shared.ts, so the deployed output contains NO
 // `from "./shared` import and no shared file needs to be installed. Host
@@ -14,8 +16,9 @@
 //             server bundle only differs by its baked host define.
 //   - tui:    @opencode-ai/plugin(+/tui), solid-js, @opentui/solid (+ node builtins)
 //   - kilo:   @kilocode/plugin(+/tui), solid-js, @opentui/solid (+ node builtins)
-// Output keeps the .ts/.tsx filenames so the install layouts
-// (./plugins/oc-go-usage-display.{ts,tsx} and .kilo.{ts,tsx}) keep working; the
+//   - v2:     @opencode/plugin(+/tui), solid-js, @opentui/solid (+ node builtins)
+// Output keeps the .ts/.tsx filenames so the install layouts keep working; v2
+// renames them to index.ts/tui.ts inside its discovered package directory. The
 // content is plain ESM JavaScript, which is valid TypeScript and loads as before.
 //
 // The emitted bundle MUST have exactly one export and it MUST be the default

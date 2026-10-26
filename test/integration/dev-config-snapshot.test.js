@@ -19,8 +19,13 @@ const SNAPSHOT_SCRIPT = path.join(REPO_DIR, "scripts", "dev-config-snapshot.sh")
 const RELS = [
   "opencode.jsonc",
   "tui.json",
+  "cli.json",
   "plugins/oc-go-usage-display.ts",
   "plugins/oc-go-usage-display.tsx",
+  "plugins/oc-go-usage-display-v1/oc-go-usage-display.ts",
+  "plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx",
+  "plugins/oc-go-usage-display/index.ts",
+  "plugins/oc-go-usage-display/tui.ts",
   "oc-go-usage-display.json",
   "oc-go-usage-display-cache.json",
 ];

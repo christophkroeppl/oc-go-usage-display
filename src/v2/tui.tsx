@@ -1,65 +1,201 @@
 /** @jsxImportSource @opentui/solid */
 // OpenCode Go usage plugin for opencode v2 (TUI half).
 //
-// Registers the same sidebar block + statusline the v1 entry does, plus the
-// per-model (Top Go models) fold. Data sources are v2-native: the per-model
-// mix is folded from `ctx.data.session.message.list(sessionID)` via the shared
-// `aggregateModelUsageFromMessages`, and the Go quota snapshot is fetched by
-// the shared `createUsageStore` (which only needs a `UsagePanelApi` adapter).
+// v2 slot claims are painted exactly once: the host builds the claim's element
+// at mount and never repaints on a plugin signal write (the plugin and the host
+// run separate reactive graphs). A claim that returned `null` before a session
+// existed therefore stays `null` for the life of the TUI. Everything here is
+// built from plain values captured at paint time, and the panel repaints by
+// disposing its claim and registering a new one -- a fresh mount is a fresh
+// initial paint, which always lands.
 //
-// Slot claims follow cockpit's v2 mapping: `sidebar.content` and
-// `prompt.footer.status`.
+// The mounted slot input is the only trustworthy source of the active session:
+// `ui.router.current()` reports `home` while a session is on screen.
+//
+// Theme: `ctx.theme` is a `ResolvedTheme` (`text.base`, `text.muted`,
+// `text.feedback.error.base`, ...) holding `Color` objects rather than the v1
+// flat `TuiThemeCurrent` strings. It is adapted once into the shape the shared
+// renderers already take; OpenTUI accepts those `Color` objects directly.
 
 import { Plugin } from "@opencode/plugin/tui";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For } from "solid-js";
 import {
   createCollapseState,
   createUsageStore,
   GoStatusline,
   GoUsageBlock,
-  CollapsibleSection,
   MeterBar,
-  reactiveChild,
-  readModelDisplayName,
+  SectionHeader,
 } from "../tui-shared.js";
-import {
-  aggregateModelUsageFromMessages,
-} from "../shared.js";
+import type { UsagePanelApi, UsageStore } from "../tui-shared.js";
+import type { TuiTheme, TuiThemeCurrent } from "@opencode-ai/plugin/tui";
 import {
   modelDisplayName,
   shortModelName,
   weightGoModels,
   buildModelMixSummary,
   buildGoModelFooters,
-  relevantReset,
   formatPercentCell,
   meterSeverityForPercent,
+  isGoUsageProvider,
 } from "../tui-helpers.js";
-import type { UsagePanelApi } from "../tui-shared.js";
-import type { TuiTheme } from "@opencode-ai/plugin/tui";
-import { makeProviderResolver } from "../tui-shared.js";
+import type { GoModelWeights } from "../tui-helpers.js";
+import { relevantReset, providerIdFromMessages } from "../helpers.js";
 import {
   MODELS_EMPTY_LABEL,
   OPENCODE_MODEL_NAME_MAX_CHARS,
   TOP_GO_MODELS_LABEL,
+  aggregateModelUsageFromMessages,
 } from "../shared.js";
-import type { SessionModelUsage } from "../shared.js";
-import { providerIdFromMessages } from "../helpers.js";
-import { isGoUsageProvider } from "../tui-helpers.js";
+import type { UsageSnapshot } from "../shared.js";
 
 const HOST = "opencode" as const;
+const TICK_MS = 30_000;
+const REPAINT_DEBOUNCE_MS = 400;
+
+function adaptTheme(source: any): TuiTheme {
+  const text = source?.text ?? {};
+  const current = {
+    text: text.base,
+    textMuted: text.muted,
+    error: text.feedback?.error?.base,
+    warning: text.feedback?.warning?.base,
+    success: text.feedback?.success?.base,
+    backgroundElement: source?.background?.raised?.base ?? source?.background?.base,
+  } as unknown as TuiThemeCurrent;
+  return {
+    current,
+    selected: "",
+    has: () => false,
+    set: () => false,
+    install: async () => {},
+    mode: () => "dark",
+    ready: true,
+  };
+}
+
+function WeightedModelRow(props: { theme: TuiTheme; model: GoModelWeights["models"][number] }) {
+  const rounded = Math.round(props.model.share);
+  return (
+    <box flexDirection="row" gap={1} flexShrink={0}>
+      <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
+        {modelDisplayName(null, props.model.modelID, OPENCODE_MODEL_NAME_MAX_CHARS)}
+      </text>
+      <MeterBar
+        theme={props.theme}
+        percent={props.model.share}
+        severity={meterSeverityForPercent(rounded)}
+      />
+      <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
+        {formatPercentCell(rounded)}
+      </text>
+    </box>
+  );
+}
+
+function TopGoModelsSection(props: {
+  theme: TuiTheme;
+  weights: GoModelWeights;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  if (props.weights.goModels === 0) {
+    return (
+      <box flexDirection="column">
+        <text fg={props.theme.current.text} wrapMode="none">
+          <b>{TOP_GO_MODELS_LABEL}</b>
+        </text>
+        <text fg={props.theme.current.textMuted} wrapMode="none">
+          {MODELS_EMPTY_LABEL}
+        </text>
+      </box>
+    );
+  }
+
+  const mix = buildModelMixSummary(
+    props.weights.models.map((model) => ({
+      name: shortModelName(modelDisplayName(null, model.modelID, OPENCODE_MODEL_NAME_MAX_CHARS)),
+      share: model.share,
+    })),
+  );
+
+  return (
+    <box flexDirection="column">
+      <SectionHeader
+        theme={props.theme}
+        label={TOP_GO_MODELS_LABEL}
+        expanded={() => props.expanded}
+        count={() => props.weights.goModels}
+        onToggle={props.onToggle}
+      />
+      {props.expanded ? (
+        <box flexDirection="column" paddingTop={1} paddingLeft={2}>
+          <For each={props.weights.models}>
+            {(model) => <WeightedModelRow theme={props.theme} model={model} />}
+          </For>
+          <For each={buildGoModelFooters(props.weights)}>
+            {(line) => (
+              <text fg={props.theme.current.textMuted} wrapMode="none">
+                {line}
+              </text>
+            )}
+          </For>
+        </box>
+      ) : (
+        <text fg={props.theme.current.textMuted} wrapMode="none" paddingLeft={2}>
+          {mix}
+        </text>
+      )}
+    </box>
+  );
+}
+
+function SidebarPanel(props: {
+  api: UsagePanelApi;
+  theme: TuiTheme;
+  snapshot: UsageSnapshot | null;
+  weights: GoModelWeights;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const theme = props.theme;
+  const snapshot = props.snapshot;
+  return (
+    <box flexDirection="column" gap={1}>
+      <GoUsageBlock
+        api={props.api}
+        theme={theme}
+        snapshot={() => snapshot}
+        resetLine={() =>
+          snapshot === null || snapshot.source === "unavailable" ? null : relevantReset(snapshot)
+        }
+      />
+      <TopGoModelsSection
+        theme={theme}
+        weights={props.weights}
+        expanded={props.expanded}
+        onToggle={props.onToggle}
+      />
+    </box>
+  );
+}
 
 export default Plugin.define({
   id: "oc-go-usage-display",
   setup(ctx: any) {
+    const disposers: Array<() => void> = [];
+    const timers: Array<ReturnType<typeof setInterval>> = [];
+    let cleaned = false;
+
     try {
-      // --- adapter: v1 UsagePanelApi over the v2 context ---------------------
-      const kvStore = ctx.storage.memory("oc-go-usage-display", { initial: {} as Record<string, unknown> });
+      const kvStore = ctx.storage.memory("oc-go-usage-display", {
+        initial: {} as Record<string, unknown>,
+      });
       const kv = {
         get<Value = unknown>(key: string, fallback?: Value): Value {
           try {
-            const v = (kvStore[0] as any)?.()[key];
-            return v === undefined ? (fallback as Value) : (v as Value);
+            const value = (kvStore[0] as any)?.()[key];
+            return value === undefined ? (fallback as Value) : (value as Value);
           } catch {
             return fallback as Value;
           }
@@ -70,7 +206,7 @@ export default Plugin.define({
               draft[key] = value;
             });
           } catch {
-            // best-effort
+            // Collapse state is best-effort persistence only.
           }
         },
       };
@@ -79,236 +215,221 @@ export default Plugin.define({
         client: { app: { log: async () => undefined } },
       };
 
-      const surfaces = { sidebar: true, statusline: true };
-      const usageStore = createUsageStore(api, HOST);
+      const usageStore: UsageStore = createUsageStore(api, HOST);
       const collapse = createCollapseState(api);
+      const theme = adaptTheme(ctx.theme);
+      const surfaces = { sidebar: true, statusline: true };
 
-      const [activeProviderId, setActiveProviderId] = createSignal<string | undefined>(undefined);
-      try {
-        const modelString = ctx.options?.model;
-        if (typeof modelString === "string" && modelString.length > 0) {
-          const providerPart = modelString.split("/")[0];
-          if (providerPart && providerPart.length > 0) setActiveProviderId(providerPart);
-        }
-      } catch {
-        // fall through
-      }
-      const resolveActiveProviderId = makeProviderResolver(
-        { config: { model: ctx.options?.model }, session: { get: (id: string) => ctx.data.session.get(id) } },
-        activeProviderId,
-      );
-
-      const [stateToken, setStateToken] = createSignal(0);
+      let ready = false;
+      let expanded = false;
+      let mountedSessionId = "";
+      let paintTimer: ReturnType<typeof setTimeout> | null = null;
+      let disposeSidebar: (() => void) | null = null;
+      let disposeStatusline: (() => void) | null = null;
+      let lastSidebarKey = "";
+      let lastStatuslineKey = "";
 
       function readSessionMessages(sessionId: string): readonly unknown[] {
         if (sessionId.length === 0) return [];
         try {
-          return ctx.data.session.message.list(sessionId) ?? [];
+          return ctx.data?.session?.message?.list(sessionId) ?? [];
         } catch {
           return [];
         }
       }
 
-      function resolveRenderedProviderId(sessionId: string): string | undefined {
+      function renderedProviderId(sessionId: string): string | undefined {
         if (sessionId.length === 0) return undefined;
         try {
           const fromMessages = providerIdFromMessages(readSessionMessages(sessionId) as any);
           if (fromMessages !== undefined) return fromMessages;
         } catch {
-          // fall through
+          // Fall through to the session record.
         }
-        return resolveActiveProviderId(sessionId);
-      }
-
-      function WeightedModelRow(props: { theme: TuiTheme; model: any }) {
-        const rounded = createMemo(() => Math.round(props.model.share));
-        const name = createMemo(() =>
-          modelDisplayName(
-            readModelDisplayName(
-              { state: { provider: [] } } as any,
-              props.model.providerID,
-              props.model.modelID,
-            ),
-            props.model.modelID,
-            OPENCODE_MODEL_NAME_MAX_CHARS,
-          ),
-        );
-        return (
-          <box flexDirection="row" gap={1} flexShrink={0}>
-            <text fg={props.theme.current.text} wrapMode="none" flexShrink={0}>
-              {name()}
-            </text>
-            <MeterBar
-              theme={props.theme}
-              percent={props.model.share}
-              severity={meterSeverityForPercent(rounded())}
-            />
-            <text fg={props.theme.current.textMuted} wrapMode="none" flexShrink={0}>
-              {formatPercentCell(rounded())}
-            </text>
-          </box>
-        );
-      }
-
-      function TopGoModelsSection(props: { theme: TuiTheme; usage: () => SessionModelUsage | null }) {
-        const [isExpanded, setIsExpanded] = createSignal<boolean>(false);
-        const weights = createMemo(() => weightGoModels(props.usage()?.models ?? []));
-        const rows = (): any[] => weights().models;
-        const mix = createMemo(() =>
-          buildModelMixSummary(
-            rows().map((model: any) => ({
-              name: shortModelName(
-                modelDisplayName(null, model.modelID, OPENCODE_MODEL_NAME_MAX_CHARS),
-              ),
-              share: model.share,
-            })),
-          ),
-        );
-
-        const body = () => (
-          <box flexDirection="column" paddingTop={1} paddingLeft={2}>
-            <For each={rows()}>{(model: any) => <WeightedModelRow theme={props.theme} model={model} />}</For>
-            <For each={buildGoModelFooters(weights())}>
-              {(line: string) => (
-                <text fg={props.theme.current.textMuted} wrapMode="none">
-                  {line}
-                </text>
-              )}
-            </For>
-          </box>
-        );
-
-        const section = createMemo(() => {
-          if (weights().goModels === 0) {
-            return (
-              <box flexDirection="column">
-                <text fg={props.theme.current.text} wrapMode="none">
-                  <b>{TOP_GO_MODELS_LABEL}</b>
-                </text>
-                <text fg={props.theme.current.textMuted} wrapMode="none">
-                  {MODELS_EMPTY_LABEL}
-                </text>
-              </box>
-            );
-          }
-          return (
-            <box flexDirection="column">
-              <CollapsibleSection
-                theme={props.theme}
-                label={TOP_GO_MODELS_LABEL}
-                count={() => weights().goModels}
-                expanded={isExpanded}
-                onToggle={() => setIsExpanded((c: boolean) => !c)}
-                body={body}
-              />
-              <Show when={!isExpanded()}>
-                <text fg={props.theme.current.textMuted} wrapMode="none" paddingLeft={2}>
-                  {reactiveChild(mix)}
-                </text>
-              </Show>
-            </box>
-          );
-        });
-
-        return <box flexDirection="column">{reactiveChild(section)}</box>;
-      }
-
-      function GoSidebarPanel(props: { theme: TuiTheme; sessionId: string }) {
-        const planResetLine = createMemo(() => {
-          const snapshot = usageStore.snapshot();
-          if (snapshot === null || snapshot.source === "unavailable") return null;
-          return relevantReset(snapshot);
-        });
-        const sessionUsage = createMemo(() => {
-          stateToken();
-          return aggregateModelUsageFromMessages(readSessionMessages(props.sessionId));
-        });
-        return (
-          <box flexDirection="column" gap={1}>
-            <GoUsageBlock
-              api={api}
-              theme={props.theme}
-              snapshot={usageStore.snapshot}
-              resetLine={planResetLine}
-            />
-            <TopGoModelsSection theme={props.theme} usage={sessionUsage} />
-          </box>
-        );
-      }
-
-      function OpencodeSidebarSlot(props: { sessionId: string }) {
-        return reactiveChild(() => {
-          if (props.sessionId.length === 0) return null;
-          if (collapse.isSidebarCollapsed()) return null;
-          if (!isGoUsageProvider(resolveRenderedProviderId(props.sessionId))) return null;
-          const rawTheme = typeof ctx.theme === "function" ? (ctx.theme as () => any)() : ctx.theme;
-          const theme = (rawTheme ?? { current: { text: "white", textMuted: "gray", error: "red", warning: "yellow" } }) as unknown as TuiTheme;
-          return <GoSidebarPanel theme={theme} sessionId={props.sessionId} />;
-        });
-      }
-
-      function OpencodeStatuslineSlot(props: { sessionId: string }) {
-        return reactiveChild(() => {
-          if (props.sessionId.length === 0) return null;
-          if (collapse.isStatuslineCollapsed()) return null;
-          if (!isGoUsageProvider(resolveRenderedProviderId(props.sessionId))) return null;
-          return <GoStatusline snapshot={usageStore.snapshot} />;
-        });
-      }
-
-      // --- event wiring -----------------------------------------------------
-      try {
-        ctx.data.listen((e: any) => {
-          const ev = e?.details;
-          if (!ev) return;
-          if (ev.type === "session.message.updated" || ev.type === "message.updated" || ev.type === "session.updated") {
-            setStateToken((n: number) => n + 1);
-            usageStore.refreshSafely(15_000);
-          }
-        });
-      } catch {
-        // additive
-      }
-
-      // --- slot registration ------------------------------------------------
-      if (surfaces.sidebar) {
         try {
-          ctx.ui.slot({
+          const fromSession = ctx.data?.session?.get?.(sessionId)?.model?.providerID;
+          if (typeof fromSession === "string" && fromSession.length > 0) return fromSession;
+        } catch {
+          // Fall through to the configured model.
+        }
+        try {
+          const configured = ctx.options?.model;
+          if (typeof configured === "string" && configured.includes("/")) {
+            return configured.split("/")[0];
+          }
+        } catch {
+          // No configured model to fall back to.
+        }
+        return undefined;
+      }
+
+      function noteSession(sessionId: unknown): string {
+        if (typeof sessionId === "string" && sessionId.length > 0) mountedSessionId = sessionId;
+        return mountedSessionId;
+      }
+
+      function sidebarVisible(sessionId: string): boolean {
+        return (
+          sessionId.length > 0 &&
+          !collapse.isSidebarCollapsed() &&
+          isGoUsageProvider(renderedProviderId(sessionId))
+        );
+      }
+
+      function statuslineVisible(sessionId: string): boolean {
+        return (
+          sessionId.length > 0 &&
+          !collapse.isStatuslineCollapsed() &&
+          isGoUsageProvider(renderedProviderId(sessionId))
+        );
+      }
+
+      function weightsFor(sessionId: string): GoModelWeights {
+        return weightGoModels(
+          aggregateModelUsageFromMessages(readSessionMessages(sessionId))?.models ?? [],
+        );
+      }
+
+      function snapshotKey(snapshot: UsageSnapshot | null): unknown {
+        return snapshot === null
+          ? null
+          : [snapshot.source, snapshot.fetchedAt, snapshot.apiError ?? null];
+      }
+
+      function toggleExpanded(): void {
+        expanded = !expanded;
+        paintSidebar(true);
+      }
+
+      function paintSidebar(force = false): void {
+        if (cleaned || !surfaces.sidebar) return;
+        const sessionId = mountedSessionId;
+        const snapshot = usageStore.snapshot();
+        const key = JSON.stringify([
+          sessionId,
+          snapshotKey(snapshot),
+          expanded,
+          expanded ? null : Math.floor(Date.now() / TICK_MS),
+        ]);
+        if (!force && key === lastSidebarKey) return;
+        lastSidebarKey = key;
+
+        try {
+          disposeSidebar?.();
+        } catch {
+          // Host-owned claim teardown is best-effort.
+        }
+        disposeSidebar = null;
+
+        try {
+          disposeSidebar = ctx.ui.slot({
             append: "sidebar.content",
-            render: (p: any) => <OpencodeSidebarSlot sessionId={p?.sessionID ?? ""} />,
+            render: (input: any) => {
+              const sid = noteSession(input?.sessionID);
+              if (!sidebarVisible(sid)) return null;
+              return (
+                <SidebarPanel
+                  api={api}
+                  theme={theme}
+                  snapshot={snapshot}
+                  weights={weightsFor(sid)}
+                  expanded={expanded}
+                  onToggle={toggleExpanded}
+                />
+              );
+            },
           });
         } catch {
-          // additive
+          disposeSidebar = null;
         }
       }
-      if (surfaces.statusline) {
+
+      function paintStatusline(force = false): void {
+        if (cleaned || !surfaces.statusline) return;
+        const snapshot = usageStore.snapshot();
+        const key = JSON.stringify([mountedSessionId, snapshotKey(snapshot), Math.floor(Date.now() / TICK_MS)]);
+        if (!force && key === lastStatuslineKey) return;
+        lastStatuslineKey = key;
+
         try {
-          ctx.ui.slot({
+          disposeStatusline?.();
+        } catch {
+          // Host-owned claim teardown is best-effort.
+        }
+        disposeStatusline = null;
+
+        try {
+          disposeStatusline = ctx.ui.slot({
             append: "prompt.footer.status",
-            render: (p: any) => <OpencodeStatuslineSlot sessionId={p?.sessionID ?? ""} />,
+            render: (input: any) => {
+              const sid = noteSession(input?.sessionID);
+              if (!statuslineVisible(sid)) return null;
+              return <GoStatusline snapshot={() => snapshot} />;
+            },
           });
         } catch {
-          // additive
+          disposeStatusline = null;
         }
       }
 
-      // initial fetch
-      void usageStore.refresh().catch(() => {});
-
-      // toast on startup
-      try {
-        ctx.ui.toast.show({ message: "OC Go usage loaded", variant: "info", duration: 2000 });
-      } catch {
-        // additive
+      function paint(): void {
+        if (cleaned || !ready) return;
+        paintSidebar();
+        paintStatusline();
       }
 
-      return () => {};
-    } catch (e) {
-      try {
-        ctx?.ui?.toast?.show?.({ message: `oc-go-usage-display init failed: ${String(e)}`, variant: "error" });
-      } catch {
-        // swallow
+      function schedulePaint(): void {
+        if (cleaned) return;
+        if (paintTimer !== null) clearTimeout(paintTimer);
+        paintTimer = setTimeout(() => {
+          paintTimer = null;
+          paint();
+        }, REPAINT_DEBOUNCE_MS);
       }
+
+      timers.push(setInterval(schedulePaint, TICK_MS));
+
+      try {
+        const stop = ctx.data.listen(schedulePaint);
+        if (typeof stop === "function") disposers.push(stop);
+      } catch {
+        // Additive: without data events the panel still refreshes on its timer.
+      }
+
+      timers.push(
+        setInterval(() => {
+          usageStore.refreshSafely();
+          schedulePaint();
+        }, TICK_MS),
+      );
+
+      void usageStore
+        .refresh()
+        .catch(() => {})
+        .then(() => {
+          ready = true;
+          paint();
+        });
+
+      return () => {
+        cleaned = true;
+        if (paintTimer !== null) clearTimeout(paintTimer);
+        for (const timer of timers) clearInterval(timer);
+        for (const dispose of disposers) {
+          try {
+            dispose();
+          } catch {
+            // Teardown is best-effort.
+          }
+        }
+        try {
+          disposeSidebar?.();
+          disposeStatusline?.();
+        } catch {
+          // Host-owned claim teardown is best-effort.
+        }
+      };
+    } catch {
       return () => {};
     }
   },

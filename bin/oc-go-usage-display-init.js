@@ -59,6 +59,8 @@ try {
     console.log(`${host} server entry: ${server.present ? "present" : "missing"}`);
     if (host === "kilo") {
       console.log(`kilo tui entry: ${tui.entry ? "present" : "missing"} (no toggles: kilo rejects sidebar/statusline)`);
+    } else if (server.discovered) {
+      console.log(`tui entry: ${tui.entry ? "present" : "missing"} (discovered package, no toggles)`);
     } else {
       console.log(`tui toggles: sidebar=${tui.sidebar} statusline=${tui.statusline}`);
     }

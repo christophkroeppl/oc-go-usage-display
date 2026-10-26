@@ -113,7 +113,7 @@ export function parseTargetChoice(input, choices, defaults = choices) {
   return selected.length > 0 ? [...new Set(selected)] : [...defaults];
 }
 
-// The exact text init prints before reading stdin: both hosts, a struck-through
+// The exact text init prints before reading stdin: every host, a struck-through
 // host whose binary is not on PATH, and the default marked in the question.
 export function renderTargetPrompt(rows, { color = false } = {}) {
   const choices = rows.map((row) => row.host);

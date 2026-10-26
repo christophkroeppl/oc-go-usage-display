@@ -131,22 +131,29 @@ test("install-cli --target all installs all hosts, remove clears all", () => {
     assert.equal(init.code, 0, init.stderr);
 
     for (const file of [
-      path.join(configDir, "plugins", "oc-go-usage-display.ts"),
-      path.join(configDir, "plugins", "oc-go-usage-display.tsx"),
-      path.join(configDir, "plugins", "oc-go-usage-display.v2.ts"),
+      path.join(configDir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.ts"),
+      path.join(configDir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.tsx"),
+      path.join(configDir, "plugins", "oc-go-usage-display", "index.ts"),
+      path.join(configDir, "plugins", "oc-go-usage-display", "tui.ts"),
       path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts"),
       path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.tsx"),
     ]) {
       assert.equal(fs.existsSync(file), true, `missing ${file}`);
     }
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(configDir, "opencode.jsonc"), "utf8")).plugins,
+      [path.join(configDir, "plugins", "oc-go-usage-display")],
+    );
 
     const remove = runCli("oc-go-usage-display-remove.js", ["--target", "all"], root, {
       KILO_CONFIG_DIR: kiloConfigDir,
     });
     assert.equal(remove.code, 0, remove.stderr);
     assert.equal(fs.existsSync(path.join(kiloConfigDir, "plugins", "oc-go-usage-display.kilo.ts")), false);
-    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display.ts")), false);
-    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display.v2.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display", "index.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display", "tui.ts")), false);
+    assert.equal(fs.existsSync(path.join(configDir, "plugins", "oc-go-usage-display")), false);
   } finally {
     tmp.cleanup();
   }
@@ -157,8 +164,8 @@ for (const mode of ["copy", "symlink"]) {
     const tmp = makeConfigDir();
     try {
       const { root, configDir } = tmp;
-      const installedServer = path.join(configDir, "plugins", "oc-go-usage-display.ts");
-      const installedTui = path.join(configDir, "plugins", "oc-go-usage-display.tsx");
+      const installedServer = path.join(configDir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.ts");
+      const installedTui = path.join(configDir, "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.tsx");
 
       const init = runCli(
         "oc-go-usage-display-init.js",
@@ -334,9 +341,10 @@ test("install-cli non-TTY runs install every host, never prompts, and cannot han
     assert.equal(result.code, 0, result.stderr);
     assert.ok(!result.stdout.includes("which host(s)?"), `must not prompt without a TTY: ${result.stdout}`);
     for (const file of [
-      path.join(tmp.root, "config", "plugins", "oc-go-usage-display.ts"),
-      path.join(tmp.root, "config", "plugins", "oc-go-usage-display.tsx"),
-      path.join(tmp.root, "config", "plugins", "oc-go-usage-display.v2.ts"),
+      path.join(tmp.root, "config", "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.ts"),
+      path.join(tmp.root, "config", "plugins", "oc-go-usage-display-v1", "oc-go-usage-display.tsx"),
+      path.join(tmp.root, "config", "plugins", "oc-go-usage-display", "index.ts"),
+      path.join(tmp.root, "config", "plugins", "oc-go-usage-display", "tui.ts"),
       path.join(tmp.root, "xdg-config", "kilo", "plugins", "oc-go-usage-display.kilo.ts"),
       path.join(tmp.root, "xdg-config", "kilo", "plugins", "oc-go-usage-display.kilo.tsx"),
     ]) {

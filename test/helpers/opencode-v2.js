@@ -83,3 +83,26 @@ export async function startOpencodeV2Server({ binary, cwd, env, timeoutMs = 1500
   stop();
   throw new Error(`opencode-v2 serve did not report a listening URL within ${timeoutMs}ms:\n${output}`);
 }
+
+// `GET /api/plugin` reads the location's inventory without waiting for plugin
+// activation (packages/server/src/handlers/plugin.ts). A cold location is
+// therefore empty for the first seconds even though its plugins are loading, so
+// callers poll until the plugin under test appears -- failed plugins are in the
+// inventory too, which is what makes `state.status` assertable.
+export async function waitForPluginInventory({ url, password, match, attempts = 45, intervalMs = 1000 }) {
+  const basic = Buffer.from(`opencode:${password}`, "utf8").toString("base64");
+  let last = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetch(`${url}/api/plugin`, { headers: { Authorization: `Basic ${basic}` } });
+    const text = await response.text();
+    if (response.status !== 200) {
+      throw new Error(`GET /api/plugin failed with HTTP ${response.status}: ${text}`);
+    }
+    const body = JSON.parse(text);
+    last = Array.isArray(body?.data) ? body.data : [];
+    const found = last.filter(match);
+    if (found.length > 0) return { plugins: last, matches: found, attempts: attempt };
+    if (attempt < attempts) await sleep(intervalMs);
+  }
+  return { plugins: last, matches: [], attempts };
+}
