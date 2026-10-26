@@ -105,6 +105,7 @@ jobs:
           // together.
           const PAIRS = {
             "@opencode-ai/plugin": "OPENCODE_VERSION",
+            "@opencode/plugin": "OPENCODE_V2_VERSION",
             "@kilocode/plugin": "KILO_VERSION",
           };
 

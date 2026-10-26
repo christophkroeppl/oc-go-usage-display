@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tarball contract check: a packed tarball must ship both hosts' bundles.
+// Tarball contract check: a packed tarball must ship every host's bundles.
 //
 //   node scripts/verify-tarball.mjs <tarball.tgz> [more.tgz ...]
 //
@@ -15,6 +15,8 @@ const REQUIRED = [
   "package/dist/plugins/oc-go-usage-display.kilo.ts",
   "package/dist/plugins/oc-go-usage-display.tsx",
   "package/dist/plugins/oc-go-usage-display.kilo.tsx",
+  "package/dist/plugins/oc-go-usage-display.v2.ts",
+  "package/dist/plugins/oc-go-usage-display.v2.tui.ts",
   "package/dist/index.js",
   "package/dist/tui.js",
   "package/dist/tui.kilo.js",
@@ -45,5 +47,5 @@ for (const tarball of tarballs) {
   for (const required of REQUIRED) {
     if (!entries.has(required)) fail(`${tarball}: missing ${required}`);
   }
-  console.log(`verify-tarball: OK ${tarball} (opencode + kilo bundles present)`);
+  console.log(`verify-tarball: OK ${tarball} (opencode v1/v2 + kilo bundles present)`);
 }

@@ -59,6 +59,8 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
       "package/dist/plugins/oc-go-usage-display.kilo.ts",
       "package/dist/plugins/oc-go-usage-display.tsx",
       "package/dist/plugins/oc-go-usage-display.kilo.tsx",
+      "package/dist/plugins/oc-go-usage-display.v2.ts",
+      "package/dist/plugins/oc-go-usage-display.v2.tui.ts",
       "package/bin/oc-go-usage-display-init.js",
       "package/bin/lib.js",
       "package/bin/cli-core.js",
@@ -81,6 +83,13 @@ test("bun pm pack ships runtime bundles, bins, and sources; bundles are self-con
       "oc-go-usage-display.kilo.tsx",
       "sidebar_content",
       "kilo tui plugin bundle",
+    );
+    assertDeployedSelfContained(pluginsDir, "oc-go-usage-display.v2.ts", "go_usage", "opencode-v2 server plugin bundle");
+    assertDeployedSelfContained(
+      pluginsDir,
+      "oc-go-usage-display.v2.tui.ts",
+      "sidebar.content",
+      "opencode-v2 tui plugin bundle",
     );
   } finally {
     tmp.cleanup();

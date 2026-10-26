@@ -5,8 +5,8 @@
 // entries with esbuild (scripts/build-plugins.mjs). This script re-verifies the
 // result on disk so a partial/renamed/mis-wired bundle can never be packed or
 // published:
-//   - all four bundles exist and are non-empty
-//   - each carries its host banner (opencode/kilo + server/tui)
+//   - all six bundles exist and are non-empty
+//   - each carries its host banner (opencode v1/v2, kilo; server/tui)
 //   - each has exactly one export and it is the default export
 //   - none has a relative import left (shared helpers are inlined)
 //   - the tsc entries referenced by package.json exports exist
@@ -85,4 +85,4 @@ for (const file of TSC_ENTRIES) {
   if (!fs.existsSync(path.join(file))) fail(`missing compiled entry: ${file} (referenced by package.json exports)`);
 }
 
-console.log(`verify-bundles: OK (${BUNDLES.length} bundles, both hosts)`);
+console.log(`verify-bundles: OK (${BUNDLES.length} bundles, all hosts)`);

@@ -20,9 +20,9 @@
 #                    has already created the tag + GitHub release (with the
 #                    default GITHUB_TOKEN, which does not trigger another
 #                    workflow run), so this job verifies the packed tarball
-#                    ships BOTH hosts (opencode + kilo bundles), attaches the
-#                    tarball, the four plugin bundles and SHA256SUMS to the
-#                    release, and publishes. The npm step skips idempotently
+#                    ships all three hosts (opencode v1 + v2, kilo bundles),
+#                    attaches the tarball, the six plugin bundles and
+#                    SHA256SUMS to the release, and publishes. The npm step skips idempotently
 #                    when the version already exists; after publishing (or
 #                    skipping) the registry tarball is re-verified. Recovery is
 #                    GitHub's "Re-run failed jobs" on the same run.
@@ -121,9 +121,10 @@ jobs:
         run: bun run build
 
       - name: Pack, verify, attach to release, publish to npm
-        # One package/version carries all four bundles; the tarball contract is
+        # One package/version carries all six bundles; the tarball contract is
         # verified before anything is uploaded and again against the registry
-        # copy after publish, so a Kilo-less release can never ship silently.
+        # copy after publish, so a Kilo-less or v2-less release can never ship
+        # silently.
         # Idempotent re-runs: the npm step skips a version that is already
         # published (retried runs, or a release tag that was pushed twice).
         env:
@@ -141,7 +142,8 @@ jobs:
           (
             cd dist/plugins
             sha256sum oc-go-usage-display.ts oc-go-usage-display.tsx \
-              oc-go-usage-display.kilo.ts oc-go-usage-display.kilo.tsx
+              oc-go-usage-display.kilo.ts oc-go-usage-display.kilo.tsx \
+              oc-go-usage-display.v2.ts oc-go-usage-display.v2.tui.ts
           ) > "$RUNNER_TEMP/SHA256SUMS"
           ( cd "$RUNNER_TEMP/npm-tarball" && sha256sum *.tgz ) >> "$RUNNER_TEMP/SHA256SUMS"
           gh release upload "$TAG" "$TARBALL" \
@@ -149,6 +151,8 @@ jobs:
             dist/plugins/oc-go-usage-display.tsx \
             dist/plugins/oc-go-usage-display.kilo.ts \
             dist/plugins/oc-go-usage-display.kilo.tsx \
+            dist/plugins/oc-go-usage-display.v2.ts \
+            dist/plugins/oc-go-usage-display.v2.tui.ts \
             "$RUNNER_TEMP/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" --clobber
           NAME="$(node -p "require('./package.json').name")"
@@ -159,7 +163,7 @@ jobs:
             npm publish --provenance --access public
           fi
           # npm versions are immutable, so this proves (rather than repairs)
-          # that the registry copy ships both hosts.
+          # that the registry copy ships every host.
           #
           # The registry's write path runs ahead of its read path: v2.0.0 was
           # accepted and given a provenance statement, and `npm view` still
