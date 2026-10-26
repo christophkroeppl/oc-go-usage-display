@@ -89,15 +89,21 @@ Flow:
    --limit 1`; override with `--branch`, `--workflow`, or `--run-id`),
 2. download the `dev-tgz` artifact into `./tmp-dev` (override with `--dir`),
 3. sanity-check the tarball (`dist/index.js` and the init bin are present),
-4. fail closed: `scripts/dev-config-snapshot.sh save` snapshots the 6 config
-   paths before any mutation,
+4. fail closed: `scripts/dev-config-snapshot.sh save` snapshots every config
+   path an install can write (v1, v2 and both legacy flat layouts) before any
+   mutation,
 5. `bun install --no-save file:<tgz>` then `oc-go-usage-display-init --copy`
    (plus best-effort `show --json` and `status`),
 6. print the restore command and the published fallback.
 
 Snapshot paths (relative to the config dir): `opencode.jsonc`, `tui.json`,
-`plugins/oc-go-usage-display.ts`, `plugins/oc-go-usage-display.tsx`,
-`oc-go-usage-display.json`, `oc-go-usage-display-cache.json`.
+`cli.json`, `plugins/oc-go-usage-display.ts`, `plugins/oc-go-usage-display.tsx`,
+`plugins/oc-go-usage-display-v1/oc-go-usage-display.ts`,
+`plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx`,
+`plugins/oc-go-usage-display/index.ts`, `plugins/oc-go-usage-display/tui.ts`,
+`oc-go-usage-display.json`, `oc-go-usage-display-cache.json`. The two flat
+plugin paths are snapshot entries only: they are the pre-split v1 layout, and a
+restore still has to put them back if that is what the machine had.
 
 There is **no auto-restore** — run it yourself when done:
 

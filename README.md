@@ -2,18 +2,21 @@
 
 [![npm version](https://img.shields.io/npm/v/oc-go-usage-display.svg)](https://www.npmjs.com/package/oc-go-usage-display)
 
-OpenCode Go subscription usage for [opencode](https://opencode.ai) and Kilo:
+OpenCode Go subscription usage for [opencode](https://opencode.ai) (v1 and v2) and Kilo:
 
 | Target | Bundled entry | Surface |
 | ------ | ------------- | ------- |
 | server | `dist/plugins/oc-go-usage-display.ts` | `go_usage` tool (`Go 5h 42% (reset 3h12m) \| 7d 15% \| 30d 61%`) |
 | tui | `dist/plugins/oc-go-usage-display.tsx` | `Go Usage` sidebar + `session_prompt_right` statusline (opencode) |
+| server (v2) | `dist/plugins/oc-go-usage-display.v2.ts` | `go_usage` tool for opencode v2; reads the same auth store |
+| tui (v2) | `dist/plugins/oc-go-usage-display.v2.tui.ts` | `Go Usage` sidebar + `prompt.footer.status` statusline (opencode v2) |
 | server (kilo) | `dist/plugins/oc-go-usage-display.kilo.ts` | `go_usage` tool for Kilo; reads Kilo's own auth store |
 | tui (kilo) | `dist/plugins/oc-go-usage-display.kilo.tsx` | same TUI surfaces for Kilo |
 
-`shared.ts` is inlined at build time. Requires Node >= 22 and opencode >= 1.19.
-All four bundles ship in the one npm package and one version; the build fails if
-either host's bundle is missing.
+`shared.ts` is inlined at build time. Requires Node >= 22 and opencode >= 1.19 (or
+opencode >= 2.1 for the v2 target). All six bundles ship in the one npm package
+and one version; the build fails if any host's bundle is missing.
+
 
 ![Go Usage sidebar and statusline](docs/screenshot.png)
 
@@ -56,19 +59,45 @@ plain plugin spec (both surfaces default on), and Kilo does not resolve
 `./...` against its config dir, so the entries are absolute paths to the
 installed copies.
 
+### opencode v2
+
+`--target opencode-v2` installs one discovered plugin package into the config
+dir it shares with opencode v1:
+
+```text
+~/.config/opencode/
+├── opencode.jsonc                  # "plugins": ["/home/you/.config/opencode/plugins/oc-go-usage-display"]
+└── plugins/oc-go-usage-display/
+    ├── index.ts                    # go_usage tool
+    └── tui.ts                      # sidebar + statusline
+```
+
+v2 discovers `<config>/plugins/` on its own, but a headless `serve` only loads
+what it is told, so the installer also names the package directory in
+`opencode.jsonc` `plugins`. The path is absolute, like Kilo's, because v2
+resolves a relative spec as a package name rather than against its config dir.
+Both halves live in one directory because v2 resolves `server`/`tui` entrypoints
+from a package directory; a flat `.tsx` in `plugins/` is ignored silently, and a
+flat TUI bundle cannot resolve the host's `solid-js`/`@opentui/*`.
+
+The v2 install also removes the flat `oc-go-usage-display.v2.{ts,tui.ts}` files
+and their `opencode.jsonc`/`opencode.json`/`cli.json`/`tui.json` entries left by
+earlier builds of this target. `--sidebar`/`--statusline` do not apply: a
+discovered package takes no options.
+
 ### Which host(s) get installed
 
 Without `--target` / `--config-dir`, `init` never decides for you:
 
 | Run | Behaviour |
 | ---- | --------- |
-| human on a terminal | **always** asks, even when only one host is detected. Both hosts are listed; a host whose binary is not on PATH is struck through and left out of the default — but still selectable by number, so you can pre-install config for an app you have not installed yet |
+| human on a terminal | **always** asks, even when only one host is detected. Every host is listed; a host whose binary is not on PATH is struck through and left out of the default — but still selectable by number, so you can pre-install config for an app you have not installed yet |
 | piped, CI, an agent | installs into every host, prints no prompt, reads no stdin — it cannot hang |
 
 Detection is the binary on PATH, so a leftover config dir does not make a host
-look installed. In a terminal with nothing on PATH the default falls back to both
-hosts, so a portable/source install still gets in. Pass `--target
-opencode|kilo|all` (or `--help`) to skip the question entirely.
+look installed. In a terminal with nothing on PATH the default falls back to
+every host, so a portable/source install still gets in. Pass `--target
+opencode|opencode-v2|kilo|all` (or `--help`) to skip the question entirely.
 
 Every command fails closed on an unrecognized argument: `init status` and
 `init --help` are errors or usage output, never a silent install into your real
@@ -81,22 +110,25 @@ After `bun add` the names below are on PATH; from a checkout use
 
 | Command | What it does |
 | ------- | ------------ |
-| `oc-go-usage-display-init` | install + register; `--target opencode\|kilo\|all` (default: ask on a TTY, else every host) |
+| `oc-go-usage-display-init` | install + register; `--target opencode\|opencode-v2\|kilo\|all` (default: ask on a TTY, else every host) |
 | `oc-go-usage-display-remove` | uninstall files + config entries (secrets untouched) |
 | `oc-go-usage-display-show` | print effective install per host; `--json` for machine output |
 | `oc-go-usage-display-status` | health check; exit 0 healthy, 1 with reasons |
 | `oc-go-usage-display-update` | re-install + `git pull --ff-only` when a remote exists |
 
-Flags: `--config-dir <path>` (opencode; default `$OPENCODE_CONFIG_DIR` or
-`~/.config/opencode`), `--kilo-config-dir <path>` (default `$KILO_CONFIG_DIR`
-or `~/.config/kilo`), `--target`, `--repo <path>`, `--copy`/`--symlink`,
-`--sidebar=0/1`, `--statusline=0/1` (opencode only), `--json` (show),
-`--help` (every command; lists exactly what it accepts).
+Flags: `--config-dir <path>` (opencode and opencode-v2; default
+`$OPENCODE_CONFIG_DIR` or `~/.config/opencode`), `--kilo-config-dir <path>`
+(default `$KILO_CONFIG_DIR` or `~/.config/kilo`), `--target`, `--repo <path>`,
+`--copy`/`--symlink`, `--sidebar=0/1`, `--statusline=0/1` (opencode v1 only;
+v2's discovered package takes no options), `--json` (show), `--help` (every
+command; lists exactly what it accepts).
 
 ## Display toggles
 
 Three axes, all defaulting to on/integrated. Each is a command in the palette,
-persisted per surface, and it applies to whichever sidebar mode is active.
+persisted per surface, and it applies to whichever sidebar mode is active. The
+palette layer is opencode v1 and Kilo; the v2 entry has no commands yet, so its
+two surfaces stay on (the shared collapse state is still read).
 
 The two on/off axes label themselves with the effect they will have, so the entry
 always says which way it goes: `Go usage: hide statusline` becomes
@@ -113,7 +145,7 @@ The palette titles name the state the command moves you to, the way Kilo's own d
 instead of having to know it.
 
 ```json
-{ "plugin": ["./plugins/oc-go-usage-display.tsx", { "sidebar": true, "statusline": true }] }
+{ "plugin": [["./plugins/oc-go-usage-display-v1/oc-go-usage-display.tsx", { "sidebar": true, "statusline": true }]] }
 ```
 
 Hiding the sidebar hides it in either mode; the mode decides *what* it draws, not
@@ -274,11 +306,11 @@ the plugin entry modules.
 
 ```sh
 bun install
-bun run build     # tsc -> dist/ + esbuild -> dist/plugins/* (both hosts)
+bun run build     # tsc -> dist/ + esbuild -> dist/plugins/* (every host)
 bun run check     # typecheck only
 ```
 
-`bun run build` fails unless all four bundles exist, are self-contained and
+`bun run build` fails unless all six bundles exist, are self-contained and
 export only the default module (`scripts/verify-bundles.mjs`); packed tarballs
 can be checked with `node scripts/verify-tarball.mjs <file.tgz>`.
 
@@ -294,7 +326,7 @@ docker compose run --rm -v "$PWD":/workspaces/oc-go-usage-display -v "$PWD/tmp:/
 | ------------ | ---- |
 | `bun run test` | build + READONLY unit tier (host/CI) |
 | `bun run test:unit` | helper tests + the sidebar band matrix + the live usage **shape** check — the one place an API key is used (a single GET; skips without `OPENCODE_OC_GO_API_KEY`) |
-| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode/kilo TUI display checks, the per-model mix rendered against a local fake provider, and the Kilo sidebar band across Go and non-Go sessions |
+| `bun run test:docker` | authoritative gate: integration + e2e, incl. the real opencode (v1 and v2)/kilo TUI display checks, the v2 load inventory, the per-model mix rendered against a local fake provider, and the Kilo sidebar band across Go and non-Go sessions |
 | `bun run test:integration` / `bun run test:e2e` | container-only tiers |
 
 Unit tests are readonly by construction (`scripts/check-unit-purity.mjs` rejects
@@ -323,7 +355,7 @@ hermetic and needs no secret at all.
 | `test.yml` | push, PR, weekly (Mon 06:00 UTC) | `unit` always; `container-e2e` (Docker gate) only on `main` pushes, the schedule, and non-draft PRs |
 | `bump-deps.yml` | weekly (Mon 12:30 UTC), manual | `bun update` within the declared ranges, the Dockerfile host pins moved with the SDKs, the Docker gate on the bumped tree, then the commit — nothing is committed unless the gate is green |
 | `dev-build.yml` | push to `develop` | `dev-tgz` artifact (90 days), used by `install-dev.sh` |
-| `publish.yml` | push to `main` | gate -> release-please Release PR -> OIDC provenance publish; the release carries the tarball, all four plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish |
+| `publish.yml` | push to `main` | gate -> release-please Release PR -> OIDC provenance publish; the release carries the tarball, all six plugin bundles and `SHA256SUMS`, and the registry tarball is re-verified after publish |
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please):
 merging `develop` into `main` opens/updates a `chore(main): release X.Y.Z` PR
@@ -337,7 +369,10 @@ footer to a commit merged to `main`.
 
 - **Plugin didn't load**: check `bunx oc-go-usage-display-show` / `status`, then
   restart the host (`opencode debug config` shows the resolved plugin list;
-  `opencode --pure` skips plugins, so it is not a valid check).
+  `opencode --pure` skips plugins, so it is not a valid check). For v2,
+  `opencode-v2 serve` exposes the inventory at `GET /api/plugin`, but it is
+  empty until a location's plugins finish activating; the TUI needs a session
+  before the sidebar paints.
 - **No API key or subscription**: surfaces show `Go n/a (…)`; set
   `OPENCODE_OC_GO_API_KEY` or `KILO_OC_GO_API_KEY` for the host you are
   running, sign in through the
@@ -347,6 +382,9 @@ footer to a commit merged to `main`.
 - **Kilo only**: `bunx oc-go-usage-display-init --target kilo`; Kilo ignores
   `sidebar`/`statusline` options, so toggle surfaces with the command palette
   instead.
+- **opencode v2 only**: `bunx oc-go-usage-display-init --target opencode-v2`.
+  The installer owns `plugins/oc-go-usage-display/`; do not put the v1 flat
+  bundles back beside it, or the host will load two copies of the same id.
 - **Stale copy install**: copy installs never auto-update; re-run
   `bunx oc-go-usage-display-init --copy` and restart.
 
@@ -357,7 +395,7 @@ bunx oc-go-usage-display-remove
 bun remove oc-go-usage-display
 ```
 
-Removes the plugin files and the server + `tui.json` entries from every
-installed host (`--target` or `--config-dir`/`--kilo-config-dir` narrows it).
-Secrets are never touched: env vars, `auth.json`, and
-`oc-go-usage-display.json` stay in place.
+Removes the plugin files (including v2's discovered package directory) and the
+server + `tui.json`/`plugins` entries from every installed host (`--target` or
+`--config-dir`/`--kilo-config-dir` narrows it). Secrets are never touched: env
+vars, `auth.json`, and `oc-go-usage-display.json` stay in place.
