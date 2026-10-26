@@ -21,14 +21,12 @@
       "peerDependencies": {
         "@kilocode/plugin": "^7.8.12",
         "@opencode-ai/plugin": "^1.19.3",
-        "@opencode/plugin": "^2.1.4",
         "@opentui/keymap": "^0.5.11",
         "@opentui/solid": "^0.5.11",
         "solid-js": "^1.9.12",
       },
       "optionalPeers": [
         "@kilocode/plugin",
-        "@opencode/plugin",
         "@opentui/keymap",
         "@opentui/solid",
         "solid-js",
