@@ -79,16 +79,12 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.19.3",
-    "@opencode/plugin": "^2.1.4",
     "@kilocode/plugin": "^7.8.12",
     "@opentui/solid": "^0.5.11",
     "@opentui/keymap": "^0.5.11",
     "solid-js": "^1.9.12"
   },
   "peerDependenciesMeta": {
-    "@opencode/plugin": {
-      "optional": true
-    },
     "@kilocode/plugin": {
       "optional": true
     },

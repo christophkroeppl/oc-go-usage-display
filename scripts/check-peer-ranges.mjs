@@ -10,7 +10,7 @@
 // pinned 0.5.11). Ranges keep the resolver satisfiable while still declaring
 // the floors we build and test against.
 //
-// So: the optional UI peers must never be exact pins again, and the three
+// So: the optional UI peers must never be exact pins again, and the two
 // host SDK peers must keep caret ranges. scripts/verify-tarball-install.mjs
 // covers the same regression end to end; this is the cheap static half.
 
@@ -29,7 +29,7 @@ const EXACT_PIN = /^\d+\.\d+\.\d+$/;
 const OPTIONAL_UI_PEERS = ["@opentui/solid", "solid-js", "@opentui/keymap"];
 // These must stay caret ranges: a narrower or pinned SDK range breaks installs
 // against a host newer than the one we were built on.
-const CARET_PEERS = ["@opencode-ai/plugin", "@opencode/plugin", "@kilocode/plugin"];
+const CARET_PEERS = ["@opencode-ai/plugin", "@kilocode/plugin"];
 // Host SDK peers that are version-pinned to the container image rather than
 // caret ranges (a caret would let npm pick a newer host whose @opentui peers
 // conflict with the v1 range). Guarded for presence only.
