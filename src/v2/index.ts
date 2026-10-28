@@ -21,6 +21,7 @@ import {
 } from "../server-helpers.js";
 import type { FileConfig } from "../server-helpers.js";
 import {
+  apiKeyRejectionReason,
   extractSnapshotFromApiPayload,
   extractWindow,
   hostEnv,
@@ -35,6 +36,7 @@ import {
   toFiniteNumber,
   toNonEmptyString,
   unavailableSnapshot,
+  usageApiErrorCode,
 } from "../shared.js";
 import type { UsageHost, UsageSnapshot, UsageWindow } from "../shared.js";
 
@@ -58,9 +60,9 @@ type Credentials =
   | { kind: "mock" }
   | { kind: "none" };
 
-function resolveCredentials(fileConfig: FileConfig = readFileConfig(HOST)): Credentials {
+function resolveCredentials(hostKey: string | null, fileConfig: FileConfig = readFileConfig(HOST)): Credentials {
   if (hostEnv(HOST, "MOCK") === "1") return { kind: "mock" };
-  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY"));
+  const apiKey = toNonEmptyString(hostEnv(HOST, "API_KEY")) ?? hostKey;
   if (apiKey) return { kind: "apiKey", apiKey };
   const authJsonKey = readAuthJsonApiKey(HOST);
   if (authJsonKey) return { kind: "apiKey", apiKey: authJsonKey };
@@ -71,6 +73,20 @@ function resolveCredentials(fileConfig: FileConfig = readFileConfig(HOST)): Cred
     return { kind: "cookie", workspaceId, authCookie };
   }
   return { kind: "none" };
+}
+
+// v2 keeps credentials in the host database rather than auth.json, and exposes
+// the resolved value to server plugins through the integration domain.
+async function readHostApiKey(ctx: any): Promise<string | null> {
+  try {
+    const connection = await ctx.integration?.connection?.active?.("opencode-go");
+    if (!connection) return null;
+    const value = await ctx.integration.connection.resolve(connection);
+    if (isRecord(value) && value.type === "key") return toNonEmptyString(value.key);
+  } catch {
+    // Fall through to auth.json / env; a host without the domain still works.
+  }
+  return null;
 }
 
 let memoryCache: { at: number; snapshot: UsageSnapshot } | null = null;
@@ -140,7 +156,13 @@ async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
       { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } },
       async (response, signal) => {
         if (response.status === 401 || response.status === 403) {
-          return unavailableSnapshot("API key rejected (401/403)");
+          let body: unknown = null;
+          try {
+            body = await response.json();
+          } catch {
+            body = null;
+          }
+          return unavailableSnapshot(apiKeyRejectionReason(usageApiErrorCode(body)));
         }
         if (!response.ok) return unavailableSnapshot(`upstream returned HTTP ${response.status}`);
         let payload: unknown;
@@ -332,7 +354,7 @@ async function fetchViaCookie(workspaceId: string, authCookie: string): Promise<
   }
 }
 
-async function getUsageSnapshot(): Promise<UsageSnapshot> {
+async function getUsageSnapshot(readHostKey: () => Promise<string | null>): Promise<UsageSnapshot> {
   const now = Date.now();
   if (hostEnv(HOST, "MOCK") === "1") return mockSnapshot();
   if (memoryCache && isFresh(memoryCache.at, now)) return memoryCache.snapshot;
@@ -342,7 +364,7 @@ async function getUsageSnapshot(): Promise<UsageSnapshot> {
     return diskCached;
   }
   const fileConfig = readFileConfig(HOST);
-  const credentials = resolveCredentials(fileConfig);
+  const credentials = resolveCredentials(await readHostKey(), fileConfig);
   if (credentials.kind === "mock") return mockSnapshot();
   if (credentials.kind === "none") {
     const workspaceId = toNonEmptyString(hostEnv(HOST, "WORKSPACE_ID")) ?? fileConfig.workspaceId;
@@ -373,7 +395,9 @@ export default Plugin.define({
         input: { type: "object", properties: {}, additionalProperties: false },
         async execute() {
           try {
-            const snapshot = await getUsageSnapshot().catch(() => unavailableSnapshot("request failed"));
+            const snapshot = await getUsageSnapshot(() => readHostApiKey(ctx)).catch(() =>
+              unavailableSnapshot("request failed"),
+            );
             const line = formatServerLine(snapshot);
             return { content: `${line}\n${JSON.stringify(snapshot, null, 2)}` };
           } catch {

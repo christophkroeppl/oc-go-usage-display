@@ -82,6 +82,7 @@ import type {
   UsageRow,
 } from "./tui-helpers.js";
 import {
+  apiKeyRejectionReason,
   extractSnapshotFromApiPayload,
   hostEnv,
   isRecord,
@@ -92,6 +93,7 @@ import {
   readAuthJsonApiKey,
   toNonEmptyString,
   unavailableSnapshot,
+  usageApiErrorCode,
   GO_PLAN_HEADING,
   GO_PROVIDER_ID,
   INTEGRATED_GO_SHARE_LABEL,
@@ -140,6 +142,11 @@ export type UsagePanelApi = {
       log(entry: { service: string; level: "error"; message: string }): Promise<unknown>;
     };
   };
+  // v2 hosts keep credentials in their own store and hand them to the plugin
+  // through this resolver; v1 hosts and Kilo resolve from auth.json instead.
+  credential?: {
+    read(): Promise<string | null>;
+  };
 };
 
 export function reactiveChild(accessor: () => unknown): JSX.Element {
@@ -176,7 +183,15 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
       signal: controller.signal,
       headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
     });
-    if (response.status === 401 || response.status === 403) return { __rejected: true };
+    if (response.status === 401 || response.status === 403) {
+      let body: unknown = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      return { __rejected: true, code: usageApiErrorCode(body) };
+    }
     if (!response.ok) return null;
     try {
       return (await response.json()) as unknown;
@@ -190,7 +205,15 @@ async function fetchJsonWithTimeout(url: string, apiKey: string): Promise<unknow
   }
 }
 
-async function loadUsageSnapshot(host: UsageHost): Promise<UsageSnapshot | null> {
+async function readHostCredential(api: UsagePanelApi): Promise<string | null> {
+  try {
+    return toNonEmptyString(await api.credential?.read());
+  } catch {
+    return null;
+  }
+}
+
+async function loadUsageSnapshot(host: UsageHost, api: UsagePanelApi): Promise<UsageSnapshot | null> {
   if (hostEnv(host, "MOCK") === "1") {
     const overrides: MockSnapshotOverrides = {};
     const percents = parseMockPercents(hostEnv(host, "MOCK_PERCENTS"));
@@ -202,7 +225,10 @@ async function loadUsageSnapshot(host: UsageHost): Promise<UsageSnapshot | null>
     return mockSnapshot(overrides);
   }
 
-  const apiKey = toNonEmptyString(hostEnv(host, "API_KEY")) ?? readAuthJsonApiKey(host);
+  const apiKey =
+    toNonEmptyString(hostEnv(host, "API_KEY")) ??
+    (await readHostCredential(api)) ??
+    readAuthJsonApiKey(host);
   if (apiKey === null) return null;
 
   const payload = await fetchJsonWithTimeout(API_USAGE_URL, apiKey);
@@ -210,7 +236,7 @@ async function loadUsageSnapshot(host: UsageHost): Promise<UsageSnapshot | null>
   // Mirror the server: a rejected key is a distinct unavailable snapshot
   // (surfaced via `apiError`) rather than a silent null.
   if (isRecord(payload) && payload.__rejected === true) {
-    return unavailableSnapshot("API key rejected (401/403)");
+    return unavailableSnapshot(apiKeyRejectionReason(toNonEmptyString(payload.code)));
   }
   return extractSnapshotFromApiPayload(payload);
 }
@@ -247,7 +273,7 @@ export function createUsageStore(api: UsagePanelApi, host: UsageHost): UsageStor
     }
     refreshInFlight = true;
     try {
-      const next = await loadUsageSnapshot(host);
+      const next = await loadUsageSnapshot(host, api);
       if (next === null) {
         if (snapshot() === null) {
           await logUsageError(api, "Go usage unavailable (not configured or request failed)");

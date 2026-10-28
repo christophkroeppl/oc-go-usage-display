@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import {
+  apiKeyRejectionReason,
   authJsonPaths,
   errorMessage,
   extractSnapshotFromApiPayload,
@@ -23,6 +24,7 @@ import {
   parseMockShare,
   hostEnv,
   hostEnvName,
+  pickHostApiKey,
   KILO_SIDEBAR_ORDERS,
   KILO_SLOT_ORDER,
   KILO_TOKEN_USAGE_ROWS,
@@ -31,6 +33,7 @@ import {
   resolveHostRoots,
   safeJoinPath,
   unavailableSnapshot,
+  usageApiErrorCode,
   usageHostFromEnv,
 } from "../../dist/shared.js";
 import { formatServerLine } from "../../dist/server-helpers.js";
@@ -254,11 +257,60 @@ test("rejected api keys map to an unavailable snapshot with literal reason", () 
   const payload = { __rejected: true };
   const snapshot =
     typeof payload === "object" && payload !== null && payload.__rejected === true
-      ? unavailableSnapshot("API key rejected (401/403)")
+      ? unavailableSnapshot(apiKeyRejectionReason(null))
       : extractSnapshotFromApiPayload(payload);
   assert.equal(snapshot?.source, "unavailable");
   assert.equal(snapshot?.apiUnavailable, true);
   assert.equal(snapshot?.apiError, "API key rejected (401/403)");
+});
+
+test("the API's own error code selects the rejection reason", () => {
+  assert.equal(
+    apiKeyRejectionReason("api_key_expired"),
+    "API key expired (create a new key in OpenCode Console)",
+  );
+  assert.equal(
+    apiKeyRejectionReason("invalid_api_key"),
+    "API key invalid (check the key in OpenCode Console)",
+  );
+  assert.equal(apiKeyRejectionReason("rate_limited"), "API key rejected (401/403)");
+  assert.equal(apiKeyRejectionReason(null), "API key rejected (401/403)");
+  assert.equal(apiKeyRejectionReason(""), "API key rejected (401/403)");
+});
+
+test("usageApiErrorCode reads only a string code nested under error", () => {
+  assert.equal(
+    usageApiErrorCode({ error: { type: "authentication_error", code: "api_key_expired" } }),
+    "api_key_expired",
+  );
+  assert.equal(usageApiErrorCode({ error: { code: 401 } }), null);
+  assert.equal(usageApiErrorCode({ error: "api_key_expired" }), null);
+  assert.equal(usageApiErrorCode({ code: "api_key_expired" }), null);
+  assert.equal(usageApiErrorCode(null), null);
+  assert.equal(usageApiErrorCode([1, 2]), null);
+});
+
+test("pickHostApiKey prefers the active Go key, then any Go key, then opencode", () => {
+  const staleThenLive = [
+    { integrationID: "opencode-go", active: false, value: { type: "key", key: "stale-go" } },
+    { integrationID: "opencode-go", active: true, value: { type: "key", key: "live-go" } },
+    { integrationID: "opencode", active: true, value: { type: "oauth", refresh: "r", access: "a" } },
+  ];
+  assert.equal(pickHostApiKey(staleThenLive), "live-go");
+
+  assert.equal(
+    pickHostApiKey([{ integrationID: "opencode-go", active: false, value: { type: "key", key: "only-go" } }]),
+    "only-go",
+  );
+  assert.equal(
+    pickHostApiKey([{ integrationID: "opencode", active: true, value: { type: "key", key: "console-key" } }]),
+    "console-key",
+  );
+  assert.equal(pickHostApiKey([{ integrationID: "opencode-go", value: { type: "key", key: "   " } }]), null);
+  assert.equal(pickHostApiKey([{ integrationID: "opencode-go", value: { type: "key" } }]), null);
+  assert.equal(pickHostApiKey([]), null);
+  assert.equal(pickHostApiKey("nope"), null);
+  assert.equal(pickHostApiKey(null), null);
 });
 
 // --- extractWindow ---

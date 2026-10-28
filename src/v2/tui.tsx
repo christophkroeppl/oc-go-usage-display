@@ -46,6 +46,7 @@ import {
   OPENCODE_MODEL_NAME_MAX_CHARS,
   TOP_GO_MODELS_LABEL,
   aggregateModelUsageFromMessages,
+  pickHostApiKey,
 } from "../shared.js";
 import type { UsageSnapshot } from "../shared.js";
 
@@ -213,6 +214,15 @@ export default Plugin.define({
       const api: UsagePanelApi = {
         kv,
         client: { app: { log: async () => undefined } },
+        credential: {
+          read: async () => {
+            try {
+              return pickHostApiKey(await ctx.client?.credential?.list?.());
+            } catch {
+              return null;
+            }
+          },
+        },
       };
 
       const usageStore: UsageStore = createUsageStore(api, HOST);

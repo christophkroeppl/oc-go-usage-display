@@ -46,6 +46,7 @@ import {
 } from "./server-helpers.js";
 import type { FileConfig } from "./server-helpers.js";
 import {
+  apiKeyRejectionReason,
   errorMessage,
   extractSnapshotFromApiPayload,
   extractWindow,
@@ -61,6 +62,7 @@ import {
   toFiniteNumber,
   toNonEmptyString,
   unavailableSnapshot,
+  usageApiErrorCode,
 } from "./shared.js";
 import type { UsageHost, UsageSnapshot, UsageWindow } from "./shared.js";
 
@@ -226,7 +228,13 @@ async function fetchViaApiKey(apiKey: string): Promise<UsageSnapshot> {
       },
       async (response, signal) => {
         if (response.status === 401 || response.status === 403) {
-          return unavailableSnapshot("API key rejected (401/403)");
+          let body: unknown = null;
+          try {
+            body = await response.json();
+          } catch {
+            body = null;
+          }
+          return unavailableSnapshot(apiKeyRejectionReason(usageApiErrorCode(body)));
         }
         if (!response.ok) {
           return unavailableSnapshot(`upstream returned HTTP ${response.status}`);

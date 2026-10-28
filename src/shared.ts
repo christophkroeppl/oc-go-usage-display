@@ -434,6 +434,47 @@ export function formatResetDuration(totalSec: number | null): string | null {
 // Credentials boundary (auth.json; secrets never logged)
 // ---------------------------------------------------------------------------
 
+// opencode v2 moved credentials out of auth.json into the host database. Its
+// API returns `{ integrationID, active, value }` entries; this picks the Go key
+// with the same `opencode-go` then `opencode` precedence, preferring the active
+// connection when a store holds more than one.
+function credentialEntryKey(entry: unknown): string | null {
+  if (!isRecord(entry)) return null;
+  const value = entry.value;
+  if (!isRecord(value) || value.type !== "key") return null;
+  return toNonEmptyString(value.key);
+}
+
+function integrationCredentialKey(entries: readonly unknown[], integrationID: string): string | null {
+  let activeKey: string | null = null;
+  let anyKey: string | null = null;
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry.integrationID !== integrationID) continue;
+    const key = credentialEntryKey(entry);
+    if (key === null) continue;
+    if (entry.active === true && activeKey === null) activeKey = key;
+    if (anyKey === null) anyKey = key;
+  }
+  return activeKey ?? anyKey;
+}
+
+export function pickHostApiKey(entries: unknown): string | null {
+  if (!Array.isArray(entries)) return null;
+  return integrationCredentialKey(entries, GO_PROVIDER_ID) ?? integrationCredentialKey(entries, "opencode");
+}
+
+export function usageApiErrorCode(body: unknown): string | null {
+  if (!isRecord(body)) return null;
+  const error = body.error;
+  return isRecord(error) ? toNonEmptyString(error.code) : null;
+}
+
+export function apiKeyRejectionReason(errorCode: string | null): string {
+  if (errorCode === "api_key_expired") return "API key expired (create a new key in OpenCode Console)";
+  if (errorCode === "invalid_api_key") return "API key invalid (check the key in OpenCode Console)";
+  return "API key rejected (401/403)";
+}
+
 export function readAuthJsonApiKey(
   host: UsageHost = "opencode",
   env: NodeJS.ProcessEnv = process.env,
