@@ -2,14 +2,14 @@
 #
 # The v2 binary is copied from its release image. `COPY --from` cannot expand an
 # ARG, so the image is pinned through a named stage instead.
-ARG OPENCODE_V2_VERSION=2.1.4
+ARG OPENCODE_V2_VERSION=2.2.0
 FROM ghcr.io/anomalyco/opencode:${OPENCODE_V2_VERSION} AS opencode-v2
 
 FROM oven/bun:1.4.2-alpine
 
 RUN apk add --no-cache tmux bash
 
-ARG OPENCODE_VERSION=1.19.4
+ARG OPENCODE_VERSION=1.19.5
 ARG KILO_VERSION=7.8.18
 
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
