@@ -10,7 +10,7 @@ FROM oven/bun:1.4.2-alpine
 RUN apk add --no-cache tmux bash
 
 ARG OPENCODE_VERSION=1.19.5
-ARG KILO_VERSION=7.8.18
+ARG KILO_VERSION=7.8.27
 
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 RUN bun add -g "opencode-ai@${OPENCODE_VERSION}" "@kilocode/cli@${KILO_VERSION}"

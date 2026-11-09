@@ -99,16 +99,16 @@
     }
   },
   "devDependencies": {
-    "@kilocode/plugin": "^7.8.18",
+    "@kilocode/plugin": "^7.8.27",
     "@opencode-ai/plugin": "^1.19.5",
-    "@opencode/plugin": "^2.2.5",
+    "@opencode/plugin": "^2.2.6",
     "@opentui/keymap": "0.5.11",
     "@opentui/solid": "0.5.11",
     "@types/bun": "^1.4.4",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "oxfmt": "^0.73.0",
-    "oxlint": "^1.90.0",
+    "oxlint": "^1.93.0",
     "solid-js": "1.9.15",
     "typescript": "^6.0.3"
   }
